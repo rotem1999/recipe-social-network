@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Nx
+.nx/cache
+.nx/workspace-data
+dist/
+tmp/
+out-tsc/
+
+# Environment — NEVER commit secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Electron build output
+release/
+app-builds/
+
+# Test / coverage
+coverage/
+.vitest/
+playwright-report/
+test-results/
+
+# Editors / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+*.swp
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
