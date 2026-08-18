@@ -1,15 +1,18 @@
 # Recipe Social Network — Architecture
 
-**Status:** Draft for review · **Revision 2, 2026-08-18** · **Owner:** Rotem
+**Status:** Draft for review · **Revision 3, 2026-08-18** · **Owner:** Rotem
 
 This document is the design contract for the project. No application code has been written
 yet — the intent is to agree on boundaries, the data model, and the workflow *before*
 scaffolding, so that the scaffold is a mechanical translation of decisions already made.
 
-Revision 2 incorporates the full feature description (URL import, discover, pinning, nutrition,
-cooking mode, ratings and comments) and the research findings on the external APIs. **Several
-of the originally-specified services do not work as their marketing implies** — §5 documents
-what was verified and what changed as a result.
+Revision 2 incorporated the full feature description (URL import, discover, pinning, nutrition,
+cooking mode, ratings and comments) and the research findings on the external APIs. **Several of
+the originally-specified services do not work as their marketing implies** — §5 documents what was
+verified and what changed as a result.
+
+Revision 3 adds the weather-aware recipe recommendation (§6.11), the weather and location sources
+behind it (§5.6, §5.7), and a record of the licence obligations the stack carries (§5.8).
 
 Everything marked **Decision** is settled. Everything marked **Open** still needs a call.
 
@@ -41,6 +44,10 @@ stored in our database unless the user pins them.
 **Cooking mode** — entered from a recipe the user owns. Shows the ingredient list, then walks
 the steps one at a time, with an always-available question box wired to a model that receives
 the recipe and the user's current position automatically.
+
+**"What should I cook?"** — an opt-in suggestion drawn from the weather and season where the user
+is, choosing **only from recipes they have saved**. It never proposes something they don't
+already have. §6.11.
 
 ---
 
@@ -194,7 +201,8 @@ recipe-social-network/
 │   │   ├── contracts/              Request/response DTOs shared by API and clients
 │   │   ├── versioning/             Diff/merge algorithms. Pure. Heavily tested.
 │   │   ├── recipe-import/          schema.org JSON-LD → domain mapping. Pure.
-│   │   └── nutrition/              Unit parsing + volume→mass conversion. Pure.
+│   │   ├── nutrition/              Unit parsing + volume→mass conversion. Pure.
+│   │   └── recommendation/         Weather→recipe scoring rules. Pure.
 │   ├── api/
 │   │   ├── data-access-db/         TypeORM entities, migrations, DataSource config
 │   │   ├── feature-auth/
@@ -202,9 +210,11 @@ recipe-social-network/
 │   │   ├── feature-circles/
 │   │   ├── feature-discover/       feed composition over internal + external sources
 │   │   ├── feature-cooking/        cooking sessions + AI context assembly
+│   │   ├── feature-recommend/      weather-aware suggestion over saved recipes
 │   │   ├── feature-social/         ratings, comments
 │   │   ├── integration-mealdb/     ┐
-│   │   ├── integration-usda/       ├ anti-corruption layer — see §4.4
+│   │   ├── integration-usda/       │
+│   │   ├── integration-openmeteo/  ├ anti-corruption layer — see §4.4
 │   │   ├── integration-openrouter/ │
 │   │   └── integration-webfetch/   ┘ SSRF-guarded URL fetching
 │   └── web/
@@ -212,6 +222,7 @@ recipe-social-network/
 │       ├── feature-recipe-editor/
 │       ├── feature-discover/
 │       ├── feature-cooking/
+│       ├── feature-recommend/
 │       └── ui/                     Design system primitives
 ├── docs/
 │   ├── ARCHITECTURE.md             this file
@@ -415,6 +426,65 @@ personal stories, distinctive prose, and **photography**.
 source URL and attribution, and we **link** the source image rather than copying it into our
 storage. We do not import headnotes or narrative blocks. This keeps us on the factual side of
 the line, and the attribution is good manners regardless of what the law requires.
+
+### 5.6 Weather: Open-Meteo ✅
+
+| Property | Finding |
+|---|---|
+| API key | **None required** |
+| Rate limits | 600/min, 5,000/hour, 10,000/day |
+| Licence | **CC-BY 4.0** — attribution required, displayed in the UI |
+| **Commercial use** | **Not permitted on the free tier** — "You may only use the free API services for non-commercial purposes" |
+| Geocoding | A separate free Geocoding API resolves a city name to coordinates |
+
+**Decision:** use Open-Meteo for both forecast and geocoding. No key, generous limits, and open
+data. The non-commercial restriction is acceptable because **this app is not commercial**, and it
+is recorded in the README (§5.8) so that a future change of intent has a checklist rather than a
+surprise.
+
+### 5.7 Location: no third party at all
+
+**Electron cannot do browser geolocation for free.** `navigator.geolocation` in Chromium delegates
+to **Google Cloud Platform's geolocation web service**, which requires a `GOOGLE_API_KEY` on a
+project **with a billing account attached**. On a stack chosen to be free, that is a hard blocker
+— and it collects far more precision than deciding between soup and salad justifies.
+
+**Decision: derive a first guess from the OS timezone, and let the user correct it.**
+
+The IANA timezone the machine already reports *is* a place name — `Asia/Jerusalem`,
+`Europe/Berlin`, `America/Chicago`. Split on `/`, feed the city part to Open-Meteo's geocoder,
+and pre-fill a city field in settings. The user edits it if it's wrong.
+
+This is better than the obvious alternatives on every axis that matters here:
+
+| | OS timezone | IP lookup | GPS via Google |
+|---|---|---|---|
+| Extra third party | **none** | one, sees every user's IP | Google, plus billing |
+| Transport | **local** | free tiers are often HTTP-only¹ | HTTPS |
+| Cost | **free** | free tier, non-commercial | paid |
+| Defeated by VPN | **no** | yes | no |
+| Precision | region | city | exact address |
+| Precision *needed* | region | — | — |
+
+¹ ip-api.com, the most commonly suggested option, offers SSL only on paid plans — a plaintext
+request carrying location data was not a trade worth making.
+
+The guess is coarse, but it is a **pre-fill for an editable field**, not an answer. And for this
+feature the right location is where the user *cooks*, which is their home city — not wherever the
+laptop happens to be.
+
+### 5.8 Licence obligations, recorded
+
+Three dependencies carry conditions that constrain distribution rather than development. None
+blocks anything now; all three would need settling if the project ever became commercial or
+shipped to an app store. They belong in the README as a single checklist:
+
+| Dependency | Obligation |
+|---|---|
+| TheMealDB | Free tier bars app-store distribution → £10 lifetime premium before public release. Attribution required |
+| Open-Meteo | Free tier is **non-commercial only**. CC-BY 4.0 attribution required |
+| USDA FoodData Central | CC0 — no obligations. Attribution offered as courtesy |
+| OpenRouter | Data-policy setting governs whether providers may train on submitted prompts (§5.3) |
 
 ---
 
@@ -764,6 +834,97 @@ the environment and is never committed, never logged, and never included in an e
   drop the old column in a *later* release. This is what allows a rollback of Dev without a
   database restore, which is what makes "Dev always works" true in practice.
 
+### 6.11 Weather-aware recommendation
+
+Suggests something to cook based on the weather and season where the user is — **choosing only
+from recipes they have already saved**. It never recommends a recipe the user doesn't have, which
+is both what you specified and what makes it useful rather than another discovery feed.
+
+```
+  user taps "what should I cook?"
+        │
+        ▼
+  ① resolve location    city preference → cached coordinates (rounded)   no network
+        │
+        ▼
+  ② fetch weather       Open-Meteo, cached ~1h per rounded coordinate
+        │               unavailable → fall back to season from the date alone
+        ▼
+  ③ DETERMINISTIC SCORING          shared/recommendation — pure, free, instant
+        │  temperature band, precipitation, season, cook time,
+        │  time of day, recently-cooked penalty
+        ▼
+  ④ shortlist: top ~10 saved recipes
+        │
+        ├──────────── quota exhausted / offline / user declined AI ──────┐
+        ▼                                                               │
+  ⑤ model picks one from the shortlist and writes the reason            │
+        │  sees: weather BAND + shortlist titles/tags/times              │
+        │  never: coordinates, city name, or full recipe bodies          │
+        ▼                                                               ▼
+  ⑥ suggestion + explanation                        top-scored recipe + templated reason
+```
+
+**Step ③ is the design, and step ⑤ is the polish.** Rules do the matching — cold and wet favours
+soups, stews and braises; hot favours salads and cold dishes; a long cook time suits a free
+evening rather than a weeknight. The model's job is to choose among a handful of already-good
+candidates and say something human about why.
+
+This ordering exists because of the constraint in §5.3. With 50–1,000 model requests per day
+across the whole account, a feature that spends one on every tap would be unusable. Here, **when
+the quota is gone the feature still works** — it returns the top-scored recipe with a templated
+reason instead of a written one. Degraded, not broken. That property is worth more than the
+prose.
+
+It also bounds the prompt. Sending an entire recipe library to a model grows without limit as the
+library grows; sending ten titles does not.
+
+**What the model receives, precisely.** A weather *band* — "cold, wet, winter evening" — not a
+temperature, not coordinates, and not a place name. Plus the shortlist as titles, tags and cook
+times. Not full recipe bodies, not the ingredient lists. The model does not need to know where
+the user lives to know that it is cold there.
+
+```
+user_location_preference
+  user_id PK,
+  city_label,                     -- "Jerusalem" — what the user sees and edits
+  latitude  numeric(5,2),         -- ROUNDED to ~1km / ~10km. Never full precision.
+  longitude numeric(5,2),
+  timezone,                       -- IANA, also the source of the first guess
+  recommendations_enabled bool DEFAULT false,   -- opt-in
+  created_at, updated_at
+
+weather_cache
+  rounded_lat, rounded_lon, fetched_at,
+  payload jsonb                   -- current + daily forecast
+  PK (rounded_lat, rounded_lon)
+
+recommendation_log
+  id, user_id, recipe_id, weather_band, produced_by (rules|model),
+  created_at                      -- powers the "don't suggest this again this week" penalty
+```
+
+**Privacy posture — decisions, not preferences:**
+
+- **Opt-in.** `recommendations_enabled` defaults to `false`. Until the user turns it on, no
+  location is stored and nothing about their library leaves the server.
+- **Coordinates are rounded before storage**, never written at full precision. `numeric(5,2)`
+  makes over-precision structurally impossible rather than merely discouraged — a later
+  well-meaning change cannot quietly start storing exact positions.
+- **No location reaches the model.** Only a derived band (§ above).
+- **The consent screen says what actually happens** in plain language: which recipe titles are
+  sent, to whom, and that on the free tier the provider's own policy governs training. In BYOK
+  mode the user's own OpenRouter account setting applies — stated at the point they paste the key.
+- **The weather cache is keyed by rounded coordinate, not by user**, so it is shared between
+  users in the same area and holds no personal identifier at all.
+
+Rounding costs nothing: whether it is cold enough for soup does not change over ten kilometres.
+
+**Scope:** saved recipes only — authored, imported, forked, and pinned. Never the public
+catalogue. A pinned recipe can be *suggested* even though it cannot be cooked directly (§6.1); in
+that case the card's action is "fork to cook this", which is the same path the user would take
+anyway.
+
 ---
 
 ## 7. API design
@@ -817,11 +978,24 @@ PATCH  /api/v1/cook-sessions/:id                advance step, check ingredients
 POST   /api/v1/cook-sessions/:id/ask            { question } → model answer
 GET    /api/v1/cook-sessions/:id/messages
 
+  Recommendation
+POST   /api/v1/recommendations                  "what should I cook?" → suggestion + reason
+GET    /api/v1/geocode?q=Jerusalem              city search for the settings field
+
   Settings
 PUT    /api/v1/me/model-key                     write-only
 DELETE /api/v1/me/model-key
 GET    /api/v1/me/quota                         remaining requests today
+PUT    /api/v1/me/location                      { cityLabel, timezone } → geocoded, rounded
+DELETE /api/v1/me/location                      erases it; also disables recommendations
 ```
+
+`PUT /me/location` takes a **city label, never coordinates**. The client does not send a position
+and has no way to; the server geocodes the name and stores the rounded result (§6.11). The
+endpoint is the enforcement point for that, not a convention.
+
+`DELETE /me/location` genuinely erases the row rather than blanking a flag — a user withdrawing
+consent should leave nothing behind.
 
 Note `revert` **appends** rather than deletes. History is append-only; there is no destructive
 operation on `recipe_version` anywhere in the API.
@@ -878,6 +1052,8 @@ independent of the global throttle:
 | `POST /cook-sessions/:id/ask` | Consumes the scarcest resource in the system |
 | `POST /pins/:id/check-updates` | Trivially spammable; upstream calls per click |
 | `GET /recipes/:id/nutrition` | Cache misses become USDA calls |
+| `POST /recommendations` | Cache misses become Open-Meteo calls, and the pick consumes model quota |
+| `GET /geocode` | Proxies straight to a third party; trivially abusable as an open relay |
 
 ---
 
@@ -902,6 +1078,12 @@ validation in the main process, and no path or command arguments accepted from t
 Recipe images come from arbitrary third-party domains (§5.5 — we link rather than copy). The CSP
 `img-src` must allow that without loosening `script-src`, and remote images must never be loaded
 into a context that can execute script.
+
+**`setPermissionRequestHandler` denies everything we don't use — including `geolocation`.** We
+derive location from the timezone and a typed city instead (§5.7), so nothing in the app should
+ever raise that prompt. Denying by default means a dependency that starts asking for the camera,
+the microphone or a position gets refused rather than quietly granted, and an explicit deny is
+also what stops the renderer from reaching a Google service we deliberately declined to depend on.
 
 ### 8.2 Token storage
 
@@ -1019,6 +1201,7 @@ publishes to GitHub Releases; the API deploys from the same tag. Since auto-upda
 | `shared/versioning` | Vitest + **fast-check** | Property-based. The correctness core. |
 | `shared/recipe-import` | Vitest + **saved HTML fixtures** | Real pages from many sites, including malformed ones |
 | `shared/nutrition` | Vitest | Unit conversion, density lookup, failure reporting |
+| `shared/recommendation` | Vitest | Scoring across weather/season/time-of-day matrices |
 | `shared/domain` | Vitest | Invariants and guards |
 | API unit | Jest → Vitest at Nest 12 | Services with mocked repositories |
 | API integration | Jest + **Testcontainers** | Real Postgres, real migrations, real TypeORM |
@@ -1068,15 +1251,18 @@ Each step leaves `Dev` releasable:
 8. **`shared/nutrition` + USDA** — conversion library first with tests, then the cache table, then
    the endpoint.
 9. **Cooking mode** — sessions, step navigation, then OpenRouter with quota enforcement and BYOK.
-10. **Electron shell** — security settings from §8.1, `safeStorage` tokens, local cache, packaging,
+10. **Recommendation** — `shared/recommendation` scoring rules with tests first, then Open-Meteo
+    and the location preference, then the model pick last. The rules-only version is shippable on
+    its own, which is the point.
+11. **Electron shell** — security settings from §8.1, `safeStorage` tokens, local cache, packaging,
     updater.
-11. **Social layer** — ratings, comments, circles, change proposals, feed.
+12. **Social layer** — ratings, comments, circles, change proposals, feed.
 
 Steps 1–2 are worth taking slowly. Everything after is much cheaper if the boundaries and the
 versioning core are right.
 
-Note that steps 5, 8 and 9 each begin with a **pure library tested in isolation** before anything
-touches the network. That ordering is deliberate: it is what lets you develop the hard parts
+Note that steps 5, 8, 9 and 10 each begin with a **pure library tested in isolation** before
+anything touches the network. That ordering is deliberate: it is what lets you develop the hard parts
 without burning rate limits, and what makes their failures reproducible.
 
 ---
@@ -1096,6 +1282,10 @@ without burning rate limits, and what makes their failures reproducible.
 | Electron's 8-week cadence | Unpatched Chromium in a shipped app | Standing scheduled upgrade job |
 | Shared libs leaking Node deps into browser | Broken web build | Boundary lint rules + zero-dependency `shared/*` |
 | External API outage failing a page | App looks broken | Integration libs degrade, never throw to the route (§4.4) |
+| **Storing users' home locations** | Sensitive personal data; a breach is materially worse | Opt-in, `numeric(5,2)` makes over-precision structurally impossible, delete means erase (§6.11) |
+| **Recipe titles + location sent to a free model provider** | Private library exposed to a third party that may train on it | Weather *band* only, never a place; explicit consent screen; BYOK honours the user's own data policy (§6.11) |
+| Electron geolocation needs a billed Google key | Would force a paid dependency | Timezone-derived guess + typed city; `geolocation` permission denied outright (§5.7, §8.1) |
+| Open-Meteo free tier is non-commercial | Blocks a future commercial pivot | Recorded in the README checklist (§5.8) |
 | Ingredient normalization built too early | Large sunk cost, no user value | Explicit deferral with a named trigger (§6.5) |
 | Auto-merge corrupting recipes | Irreversible loss of family data | No auto-merge in v1; honest 409 conflicts |
 | Migration on boot | Race conditions on multi-instance deploy | Discrete deploy step (§6.10) |
@@ -1126,6 +1316,11 @@ Settled in review on 2026-08-18:
 | 16 | **Forking a pin is where servings and step confirmation are captured** — and where it becomes cookable |
 | 17 | **Email + password auth**, JWT with rotating refresh tokens |
 | 18 | **TheMealDB £10 lifetime premium** before any public release |
+| 19 | **Open-Meteo** for weather and geocoding — no key, CC-BY, non-commercial free tier accepted |
+| 20 | **No browser geolocation.** OS timezone gives the first guess, user edits a city field (§5.7) |
+| 21 | **Recommendation is deterministic scoring first, model second** — degrades to rules when quota is gone |
+| 22 | **Location is opt-in, rounded before storage, and never sent to the model** — only a weather band |
+| 23 | **Licence obligations recorded in the README** (§5.8) rather than rediscovered later |
 
 ### Still open
 
@@ -1154,6 +1349,9 @@ Settled in review on 2026-08-18:
 - [USDA FoodData Central API guide](https://fdc.nal.usda.gov/api-guide)
 - [OpenRouter rate limits](https://openrouter.ai/docs/api-reference/limits) · [Privacy and logging](https://openrouter.ai/docs/features/privacy-and-logging)
 - [Spoonacular pricing](https://spoonacular.com/food-api/pricing)
+- [Open-Meteo terms](https://open-meteo.com/en/terms) · [pricing](https://open-meteo.com/en/pricing) · [Geocoding API](https://open-meteo.com/en/docs/geocoding-api)
+- [Electron environment variables (`GOOGLE_API_KEY` / geolocation)](https://www.electronjs.org/docs/latest/api/environment-variables)
+- [ip-api.com legal terms (SSL is paid-only)](https://ip-api.com/docs/legal)
 
 **Standards and law**
 - [schema.org Recipe](https://schema.org/Recipe)
