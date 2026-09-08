@@ -11,9 +11,13 @@ Written 2026-09-08 at the end of the first session. Read this, INTENT.txt, and S
 5. Rotem writes constraints into CLAUDE.md files per folder in the next session; do not invent constraints.
 6. **Commits go through the local git CLI**, configured with Rotem's identity, so they count as Rotem's contributions on GitHub. No Co-Authored-By or "Generated with" lines anywhere. PRs, if needed, are opened through the GitKraken MCP tools. (Rotem, 2026-09-08)
 
+## App name
+
+Working name is **CookBook** (Rotem, 2026-09-08), chosen as a placeholder after a search found every short cooking word (Ladle, Mise, Simmer, Stovetop, Potluck, Foodkin, PanPal) already taken by existing apps. Names that came back clean if a rename is wanted later: Supperkin, Forkfolk, Tablekin (no app, no npm package found on 2026-09-08). Repo name and the `@rsn` alias are unchanged.
+
 ## State of the repository
 
-- Branch `master`, remote `origin` = https://github.com/rotem1999/recipe-social-network.git. Everything is pushed; last commit `ab535ab`.
+- Branch `master`, remote `origin` = https://github.com/rotem1999/recipe-social-network.git. Everything is pushed; see `git log` for the latest commit.
 - Files: INTENT.txt (product intent, the source of truth), SPEC.md (Draft 2, complete, no open items), .env.example (predates SPEC; regenerate from SPEC §14 when keys are settled), .gitignore, this file.
 - No application code exists yet.
 

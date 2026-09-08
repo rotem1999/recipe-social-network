@@ -1,4 +1,6 @@
-# SPEC.md — Recipe Social Network
+# SPEC.md — CookBook
+
+**Working name:** CookBook (Rotem, chat 2026-09-08; provisional, may change later). Repository name stays `recipe-social-network`; import alias stays `@rsn`.
 
 **Status:** Draft 2, 2026-09-08. Built from `INTENT.txt`, `.env.example`, `.gitignore`, and Rotem's decisions in chat on 2026-09-08. All open points are resolved; this revision is the one to build from.
 
@@ -18,7 +20,7 @@ From INTENT.txt lines 30–33:
 
 ## 1. Product summary [INTENT L1–L2]
 
-A cooking social network for family and friends. Users create recipes, share them with each other, and can enter **cook mode**, a live step tracker with an AI helper for the current step.
+CookBook is a cooking social network for family and friends. Users create recipes, share them with each other, and can enter **cook mode**, a live step tracker with an AI helper for the current step.
 
 ---
 
