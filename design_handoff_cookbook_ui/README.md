@@ -1,7 +1,7 @@
-# Handoff: Potluck — Recipe Social Network UI
+# Handoff: CookBook — Recipe Social Network UI
 
 ## Overview
-Complete UI design for "Potluck", the recipe social network specified in `SPEC.md` (Draft 2, 2026-09-08). Five screens: Home, Discover, Friends, Recipe detail, and Cook mode, plus a New-recipe dialog. The design follows four UX rules: (1) less is more, (2) good infrastructure needs no instructions, (3) UI matches the technology, (4) visual feedback on every interaction.
+Design guide for "CookBook", the recipe social network specified in `SPEC.md`. This folder is a guidebook, not a concrete UI: SPEC.md decides what is built, this folder shows the look and the interaction patterns to follow (Rotem, chat 2026-09-08). Five screens: Home, Discover, Friends, Recipe detail, and Cook mode, plus a New-recipe dialog. The design follows four UX rules: (1) less is more, (2) good infrastructure needs no instructions, (3) UI matches the technology, (4) visual feedback on every interaction.
 
 ## About the Design Files
 The files in this bundle are **design references created in HTML** — an interactive prototype showing intended look and behavior, not production code to copy. The task is to **recreate these designs in the target codebase**: the Nx monorepo at `recipe-social-network` (React 19 + TypeScript renderer in `apps/web`, presentational components in `libs/web/ui`, per SPEC §11.3). Open `Recipe Social Network.dc.html` in a browser to interact with the prototype (keep `support.js` and `_ds/` beside it).
@@ -26,7 +26,7 @@ Source of truth: `_ds/organic-a2f58494-e42c-4054-8f82-12e22132329c/styles.css` (
 ## Screens
 
 ### 1. Header (all screens except Cook mode)
-`.nav` bar, max-width 1100px centered. Left: brand — 34px terracotta circle with a white chef-hat Lucide icon + "Potluck" in Caprasimo 20px. Links: Home, Discover, Friends (active link = accent color via `aria-current="page"`). Right: primary pill button "+ New recipe", then a 34px avatar circle (sage-200 bg, sage-800 initial).
+`.nav` bar, max-width 1100px centered. Left: brand — 34px terracotta circle with a white chef-hat Lucide icon + "CookBook" in Caprasimo 20px. Links: Home, Discover, Friends (active link = accent color via `aria-current="page"`). Right: primary pill button "+ New recipe", then a 34px avatar circle (sage-200 bg, sage-800 initial).
 
 ### 2. Home
 - H1 greeting ("Good evening, Rotem") + muted 14px line with weather: e.g. "9° and clear tonight in Tel Aviv — city read from your clock's timezone, nothing tracked." (Rule 3: WX-8 derives location from OS timezone only — say so.)
