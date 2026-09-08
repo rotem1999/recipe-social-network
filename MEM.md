@@ -9,6 +9,7 @@ Written 2026-09-08 at the end of the first session. Read this, INTENT.txt, and S
 3. **Verify online before presenting.** Every third-party fact (versions, limits, licences, endpoints) needs a source URL fetched that day. SPEC.md §16 is the source list; re-verify before scaffolding, the facts there were checked on 2026-09-08.
 4. Deleted files (the old README.md and docs/ARCHITECTURE.md from git history) are out of scope. Do not use them as a source.
 5. Rotem writes constraints into CLAUDE.md files per folder in the next session; do not invent constraints.
+6. **Commits go through the local git CLI**, configured with Rotem's identity, so they count as Rotem's contributions on GitHub. No Co-Authored-By or "Generated with" lines anywhere. PRs, if needed, are opened through the GitKraken MCP tools. (Rotem, 2026-09-08)
 
 ## State of the repository
 
