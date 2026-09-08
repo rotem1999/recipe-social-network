@@ -1,0 +1,33 @@
+I would like to make a cooking social network.
+The idea is for family/friends to be able to create, share recipes with eachother as well as be able to enter cook mode.
+cook mode is a way to track steps in the recipe live while cooking, and at each step, in a click of a button, they will be able to ask an ai (from openrouter) -> minimax3 (free)
+for tips and questions they might have about the current step of the recipe (context and such will be provided automatically with the recipe with an engineered auto prompt).
+
+each user will be able to upload a recipe for himself only (meaning private) and be able to share it with friends without publishing the recipe to the rest of the network.
+he will also be able to publish such recipe to the public space, when this happens users online will be able to download the recipe to their account and rank it (1-5 stars with 2 digit after dot to (half stars - quarter stars and such)).
+cooking mode is only available after a user saved the recipe, but every recipe is viewable without saving it to the personal space. (viewing the recipe preview in the public "discover" tab).
+
+users will be able to view nutritional data (what is freely available) like calories in a recipe per portion as well as serving size in the recipe, from the USDA food database. (the calories will be calculated by the app from the data of either the entire meal name or from the ingredients).
+
+(analyze the .env.example), recipes will be pulled with a v2 key from themealdb.(already paid, I will addd later to the .env when you make it)
+data for now will be saved in a postgres server. but have the infrastructure to move it to docker.
+
+The app will fetch weather and location data from an api, and be able to give advice in the discover tab AND the hometab(from saved recipes)
+based on the weather and time of day. (for example in a cold night -> ramen recipe, etc...). these decisions will be made by prompting an ai from openrouter, given the context needed. in the personal space the prompt will ask the ai to rank several recipes saved to give multiple recommandations or offer the user immediate answer if he doesn't want a certain recipe. as well as give him the option to "view next" and prompt again with the recipes already recommended removed).
+
+each ai prompt should be logged server side to see the costs. (and appended to a file in the server machine for later reviewing).
+
+the app will work user based (by sign-in with google(firebase)/username + password).
+with a friend system (to be able to share offline)
+and have a comment section for public and shared recipes. (in public-> with a voting system for both comments and recipes as mentioned before. the comments will be ranked by points rather than stars (only integers, like reddit)).
+
+As for the architecture of the app:
+The front will run REACT wrapped with electron. using typescript of course.
+the back will run NEST.js with typeORM.
+testing units of the back will run with JEST.
+recommend me a front testing suite.
+
+never assume anything. always question everything you do if its outdated or not and before presenting me anything look for sources online that justify what you are saying.
+never fill any gap in knowledge with something you assume, if you dont have enough data on what I asked, ask me to fill it in for you this is an important rule. remember it.
+
+you will never write code from my prompt. you will first change SPEC.md according to my request and build the code from SPEC.md. the file is the building scaffolding of the project.
