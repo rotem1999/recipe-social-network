@@ -1,0 +1,45 @@
+{
+  "name": "desktop",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/desktop/src",
+  "tags": ["scope:desktop"],
+  "implicitDependencies": ["web"],
+  "targets": {
+    "dev": {
+      "executor": "nx:run-commands",
+      "continuous": true,
+      "options": {
+        "command": "electron-vite dev",
+        "cwd": "apps/desktop"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["production", "^production"],
+      "outputs": ["{projectRoot}/out"],
+      "options": {
+        "command": "electron-vite build",
+        "cwd": "apps/desktop"
+      }
+    },
+    "preview": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "options": {
+        "command": "electron-vite preview",
+        "cwd": "apps/desktop"
+      }
+    },
+    "package": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "outputs": ["{workspaceRoot}/dist/apps/desktop"],
+      "options": {
+        "command": "electron-builder --config electron-builder.yml",
+        "cwd": "apps/desktop"
+      }
+    }
+  }
+}

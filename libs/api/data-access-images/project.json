@@ -1,0 +1,12 @@
+{
+  "name": "api-data-access-images",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/api/data-access-images/src",
+  "projectType": "library",
+  "tags": [
+    "scope:api",
+    "type:data-access"
+  ],
+  "// targets": "to see all targets run: nx show project data-access-images --web",
+  "targets": {}
+}

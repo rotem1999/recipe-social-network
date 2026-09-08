@@ -1,0 +1,12 @@
+{
+  "name": "api-data-access-usda",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/api/data-access-usda/src",
+  "projectType": "library",
+  "tags": [
+    "scope:api",
+    "type:data-access"
+  ],
+  "// targets": "to see all targets run: nx show project data-access-usda --web",
+  "targets": {}
+}

@@ -1,0 +1,98 @@
+{
+  "compileOnSave": false,
+  "compilerOptions": {
+    "rootDir": ".",
+    "sourceMap": true,
+    "declaration": false,
+    "moduleResolution": "bundler",
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "importHelpers": true,
+    "target": "es2022",
+    "module": "esnext",
+    "lib": [
+      "es2022"
+    ],
+    "skipLibCheck": true,
+    "skipDefaultLibCheck": true,
+    "strict": true,
+    "paths": {
+      "@rsn/shared/util-domain": [
+        "./libs/shared/util-domain/src/index.ts"
+      ],
+      "@rsn/shared/util-contracts": [
+        "./libs/shared/util-contracts/src/index.ts"
+      ],
+      "@rsn/api/data-access-db": [
+        "./libs/api/data-access-db/src/index.ts"
+      ],
+      "@rsn/api/data-access-images": [
+        "./libs/api/data-access-images/src/index.ts"
+      ],
+      "@rsn/api/data-access-openrouter": [
+        "./libs/api/data-access-openrouter/src/index.ts"
+      ],
+      "@rsn/api/data-access-themealdb": [
+        "./libs/api/data-access-themealdb/src/index.ts"
+      ],
+      "@rsn/api/data-access-usda": [
+        "./libs/api/data-access-usda/src/index.ts"
+      ],
+      "@rsn/api/data-access-weather": [
+        "./libs/api/data-access-weather/src/index.ts"
+      ],
+      "@rsn/api/feature-auth": [
+        "./libs/api/feature-auth/src/index.ts"
+      ],
+      "@rsn/api/feature-recipes": [
+        "./libs/api/feature-recipes/src/index.ts"
+      ],
+      "@rsn/api/feature-friends": [
+        "./libs/api/feature-friends/src/index.ts"
+      ],
+      "@rsn/api/feature-discover": [
+        "./libs/api/feature-discover/src/index.ts"
+      ],
+      "@rsn/api/feature-social": [
+        "./libs/api/feature-social/src/index.ts"
+      ],
+      "@rsn/api/feature-cook": [
+        "./libs/api/feature-cook/src/index.ts"
+      ],
+      "@rsn/api/feature-nutrition": [
+        "./libs/api/feature-nutrition/src/index.ts"
+      ],
+      "@rsn/api/feature-recommend": [
+        "./libs/api/feature-recommend/src/index.ts"
+      ],
+      "@rsn/web/ui": [
+        "./libs/web/ui/src/index.ts"
+      ],
+      "@rsn/web/data-access-api": [
+        "./libs/web/data-access-api/src/index.ts"
+      ],
+      "@rsn/web/feature-auth": [
+        "./libs/web/feature-auth/src/index.ts"
+      ],
+      "@rsn/web/feature-recipes": [
+        "./libs/web/feature-recipes/src/index.ts"
+      ],
+      "@rsn/web/feature-discover": [
+        "./libs/web/feature-discover/src/index.ts"
+      ],
+      "@rsn/web/feature-friends": [
+        "./libs/web/feature-friends/src/index.ts"
+      ],
+      "@rsn/web/feature-cook": [
+        "./libs/web/feature-cook/src/index.ts"
+      ],
+      "@rsn/web/feature-recommend": [
+        "./libs/web/feature-recommend/src/index.ts"
+      ]
+    }
+  },
+  "exclude": [
+    "node_modules",
+    "tmp"
+  ]
+}

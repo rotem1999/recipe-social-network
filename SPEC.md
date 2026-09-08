@@ -283,7 +283,7 @@ Re-checked on 2026-09-08 (later session, §16 N5, N7, N9–N11): the React and N
 
 #### 11.2.1 Workspace layout and creation (Rotem delegated the choice, chat 2026-09-08)
 
-- **Layout: tsconfig paths, not package-manager workspaces.** The alias `@rsn/<scope>/<type>-<name>` (§11.3, also in every `libs/**/CLAUDE.md`) needs two slashes, which the workspaces layout cannot express. Nx 23.2.0 (`@nx/js` `ts-solution-setup.js`) uses the paths layout whenever `pnpm-workspace.yaml` has no `packages` key and `tsconfig.base.json` is not `composite`. The workspace therefore has no `pnpm-workspace.yaml`, a `tsconfig.base.json` with `paths`, no root `tsconfig.json`, and one `project.json` per project. `baseUrl` is not set (deprecated in TypeScript 6, an error in 7); `paths` resolve relative to `tsconfig.base.json`.
+- **Layout: tsconfig paths, not package-manager workspaces.** The alias `@rsn/<scope>/<type>-<name>` (§11.3, also in every `libs/**/CLAUDE.md`) needs two slashes, which the workspaces layout cannot express. Nx 23.2.0 (`@nx/js` `ts-solution-setup.js`) uses the paths layout whenever `pnpm-workspace.yaml` has no `packages` key and `tsconfig.base.json` is not `composite`. The workspace therefore has a `tsconfig.base.json` with `paths`, no root `tsconfig.json`, and one `project.json` per project. `pnpm-workspace.yaml` exists only because pnpm 12 stores its settings there: the build-script allowlist (`allowBuilds`) and `minimumReleaseAgeExclude`, the by-name list of packages allowed to install before pnpm's default 1,440-minute release age (the WebdriverIO 9.31.7 packages were younger than that on 2026-09-08; §16 N13). It never gets a `packages` key. `baseUrl` is not set (deprecated in TypeScript 6, an error in 7); `paths` resolve relative to `tsconfig.base.json`. `moduleResolution` is `bundler` in `tsconfig.base.json` because TypeScript 6 rejects `node` (`node10`) with TS5107; the Nest projects override it per project (`module: commonjs`, `moduleResolution: bundler`, as the `@nx/nest` generator writes them).
 - **Creation.** `npx create-nx-workspace@23.2.0` maps every preset to a GitHub template and ignores `--workspaces=false`, so the workspace was created in a scratch folder with `--preset=apps --pm=pnpm --formatter=prettier --linter=eslint --nxCloud=skip --skipGit --aiAgents=none`, converted to the paths layout as above, and only `package.json`, `nx.json`, `tsconfig.base.json`, `.prettierrc`, `.prettierignore` and `pnpm-lock.yaml` were carried into this repository. The Nx-generated `README.md`, `CLAUDE.md`, `AGENTS.md` and editor-agent folders were not carried over; this repository keeps its own.
 - **Root `package.json`:** name `@rsn/source`, `private: true`, `engines.node ^24.0.0 || ^26.0.0`, `packageManager pnpm@12.3.4`. Every dependency is pinned by the generator that adds it; TypeScript `~6.0.3` and Vite `^7.0.0` are pinned by hand (§11.1).
 - **Formatter:** Prettier 3 (`singleQuote: true`, the Nx default). **Linter:** ESLint with `@nx/eslint-plugin`; `@nx/enforce-module-boundaries` is an ESLint rule, so oxlint is not used.
@@ -296,11 +296,16 @@ Every project is generated with the flags below, non-interactively, after a `--d
 |---|---|---|
 | `apps/api` (+ `apps/api-e2e`) | `@nx/nest:application` | `--directory=apps/api --e2eTestRunner=jest --unitTestRunner=jest --linter=eslint --strict --tags=scope:api` |
 | `apps/web` (+ `apps/web-e2e`) | `@nx/react:application` | `--directory=apps/web --bundler=vite --unitTestRunner=vitest --e2eTestRunner=playwright --linter=eslint --style=css --compiler=babel --routing=false --strict --tags=scope:web` |
-| `apps/desktop` | none (plain `project.json`) | targets `dev`, `build`, `preview` as `nx:run-commands` wrapping `electron-vite`; `test` as `@nx/vite:test`; tag `scope:desktop` |
-| `apps/desktop-e2e` | none (plain `project.json`) | target `e2e` as `nx:run-commands` wrapping `wdio` with `@wdio/electron-service`; tag `scope:desktop` |
+| `apps/desktop` | none (plain `project.json`) | targets `dev`, `build`, `preview` as `nx:run-commands` wrapping `electron-vite` 5.0.0 (config `electron.vite.config.ts` with `main`, `preload`, `renderer`); `package` as `nx:run-commands` wrapping `electron-builder` 26.15.3 (MIT; the packager electron-vite's distribution guide recommends, §16 E4); `test` inferred by the `@nx/vitest` plugin from `vitest.config.mts` (Node environment); tag `scope:desktop`; Electron 44.2.0 (`engines.node >= 22.12.0`). `apps/desktop/package.json` (name `cookbook`, `main: out/main/index.js`, no dependencies) exists only because electron-builder reads the app's package.json; `electron-builder.yml` sets `appId dev.rsn.cookbook`, `productName CookBook`, output `dist/apps/desktop`, targets `nsis`, `dmg`, `AppImage`. The main window loads `ELECTRON_RENDERER_URL` in dev and `out/renderer/index.html` in production, with `contextIsolation`, `sandbox` and no `nodeIntegration`; the preload exposes `window.cookbook.timezone` (WX-9) and nothing else. |
+| `apps/desktop-e2e` | none (plain `project.json`) | target `e2e` as `nx:run-commands` wrapping `wdio run wdio.conf.ts` with `@wdio/electron-service` 10.3.0 (peer `webdriverio >9.0.0`) on the WebdriverIO 9.31.7 stack (`@wdio/cli`, `@wdio/local-runner`, `@wdio/mocha-framework`, `webdriverio`, §16 T13); tag `scope:desktop` |
+
 | `libs/api/*` | `@nx/nest:library` | `--directory=libs/api/<type>-<name> --importPath=@rsn/api/<type>-<name> --unitTestRunner=jest --linter=eslint --strict --buildable=false --tags=scope:api,type:<type>` |
 | `libs/web/*` | `@nx/react:library` | `--directory=libs/web/<type>-<name> --importPath=@rsn/web/<type>-<name> --bundler=none --unitTestRunner=vitest --linter=eslint --style=css --compiler=babel --strict --buildable=false --tags=scope:web,type:<type>` |
 | `libs/shared/*` | `@nx/js:library` | `--directory=libs/shared/<type>-<name> --importPath=@rsn/shared/<type>-<name> --bundler=none --unitTestRunner=vitest --linter=eslint --strict --tags=scope:shared,type:util` |
+
+Project names follow `<scope>-<type>-<name>` for libraries (`api-feature-auth`, `web-feature-auth`), which the generators do not derive from the folder, so `--name` is passed explicitly; applications keep their folder name (`api`, `api-e2e`, `web`, `web-e2e`, `desktop`, `desktop-e2e`). Every `*-e2e` project carries the same `scope:*` tag as the app it tests.
+
+Compiler contract after generation (Rotem delegated, 2026-09-08): `tsconfig.base.json` has `lib: ["es2022"]` only; `apps/web` and every `libs/web/*` add `dom` and `dom.iterable` in their own `tsconfig.json`; `libs/shared/*` set `types: []` in `tsconfig.lib.json`. So Node globals and the DOM are not even type-visible inside `scope:shared`, which enforces libs/shared/CLAUDE.md at compile time.
 
 Reasons: `strict` is passed everywhere because `@nx/nest:application` alone defaults it to `false`; libraries are not buildable because the two applications bundle them and nothing is published; `bundler=none` on shared libraries keeps them dependency-free (§11.3); `compiler=babel` and `style=css` are the generator defaults and the design guide (§11.5) is plain CSS with custom properties; `routing=false` because the renderer is a tabbed Electron window, not a URL-driven site.
 
@@ -372,6 +377,8 @@ Boundary rules encoded in `depConstraints`:
 
 `type:ui → type:ui` is this project's own rule (kept on 2026-09-08, Rotem delegated the choice); the Nx article (§16 N7) allows `ui → util` only. The other rows match the article.
 
+`apps/desktop` hosts `apps/web`: the Electron window loads the renderer build, so `desktop` declares `web` as an `implicitDependencies` entry in its `project.json` (a build-order edge between two applications). This is not a library import: `scope:desktop` code still imports `scope:shared` only, and the table above is unchanged. (Rotem delegated, 2026-09-08.)
+
 Consequence: the renderer never imports backend code and never holds a third-party API key. The backend is the only caller of OpenRouter, TheMealDB, USDA, and the weather provider.
 
 ### 11.4 Secrets
@@ -417,7 +424,7 @@ The guide's `support.js` and `.dc.html` are the prototype runtime and are never 
 | Layer | Tool | Justification |
 |---|---|---|
 | Renderer unit and component tests | Vitest 5.0.0 + React Testing Library 16.3.3 (with `@testing-library/dom` 10.x as an explicit devDependency, it is a peer) | Vitest reads `vite.config.*` directly; its docs state that keeping a second Jest pipeline for a Vite app "is not justifiable". RTL 16.3 supports React 18 and 19. The Nx React generators no longer set a unit runner by default (`unitTestRunner` defaults to `none` in 23.2.0), so `--unitTestRunner=vitest` is passed explicitly (§11.2). |
-| Real-browser component tests | Vitest Browser Mode with `@vitest/browser-playwright` + `vitest-browser-react` | Browser Mode lost its experimental label in Vitest 4.0 (2025-10-22). |
+| Real-browser component tests | Vitest Browser Mode with `@vitest/browser-playwright` 5.0.0 + `vitest-browser-react` 2.3.0 | Browser Mode lost its experimental label in Vitest 4.0 (2025-10-22). `@vitest/browser-playwright` 5.0.0 declares the peer `vitest: 5.0.0` (exact) and a required `playwright` peer, so the root `package.json` pins `vitest` to exactly `5.0.0` (§16 T12, T14). |
 | Electron main and preload unit tests | Vitest, Node environment, `vi.mock('electron')` | No official Electron unit-test runner exists; electron-vite's docs have no testing section; Vitest's Electron browser-mode issue is still open. |
 | Electron end-to-end | `@wdio/electron-service` 10.3.0 (official WebdriverIO service, not marked experimental) | Playwright 1.63 `_electron` is still labelled experimental by Playwright; only WebdriverIO's service carries no experimental label. |
 
@@ -536,6 +543,9 @@ Not mentioned in INTENT.txt and therefore not part of this specification: mobile
 - V10 `npm view pnpm version` — pnpm 12.3.4 (Node ≥ 18).
 - V11 https://registry.npmjs.org/@nestjs/typeorm — 11.0.3 peers `typeorm ^0.3.0 || ^1.0.0-dev`, `@nestjs/core ^11`.
 - V12 https://github.com/microsoft/typescript-go/pull/2343 and https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/ — tsgo emits `__decorate`/`__metadata`/`__param`; TS 7.0 has no stable programmatic API (7.1 will); hard errors on `baseUrl`, `moduleResolution: node`.
+- V13 https://registry.npmjs.org/pg and https://registry.npmjs.org/@types/pg — pg 8.23.0 (MIT); @types/pg 8.23.1; typeorm 1.1.1 optional peer `pg ^8.5.1`.
+- V14 https://registry.npmjs.org/@nestjs/typeorm — latest 12.0.1, peers `@nestjs/core ^10 || ^11 || ^12`, `typeorm ^0.3.0 || ^1.0.0-dev`; 11.0.3 peers stop at ^11. The API uses 12.0.1 so the NestJS 12 move (§11.1) stays open (Rotem delegated, 2026-09-08).
+- V15 https://registry.npmjs.org/@nestjs/config, /@nestjs/jwt, /@nestjs/passport, /passport-jwt, /bcrypt, /argon2 — config 12.0.0, jwt 12.0.1, passport 12.0.0 (all peer `@nestjs/common ^11 || ^12`); passport-jwt 4.0.1; passport 0.7.0; bcrypt 6.0.0; argon2 0.45.1. Which of these feature-auth uses is decided in §2 when that library is built.
 
 **Nx**
 - N1 https://registry.npmjs.org/nx/latest — Nx 23.2.0.
@@ -550,11 +560,13 @@ Not mentioned in INTENT.txt and therefore not part of this specification: mobile
 - N10 https://nx.dev/blog/nx-23-1-release and https://registry.npmjs.org/@nx/js/-/js-23.2.0.tgz (`versions.js`) — TypeScript `~6.0.3` installed, minimum 5.8.0; TS 7 side by side only.
 - N11 `schema.json` of `@nx/nest`, `@nx/react`, `@nx/js` 23.2.0 (registry tarballs) — generator options and defaults behind §11.2.2; `@nx/vite` 23.2.0 `versions.js` installs `vite ^8.0.0` and supports `^7.0.0`.
 - N12 `@nx/js` 23.2.0 `dist/src/utils/typescript/ts-solution-setup.js` and `package-manager-workspaces.js` — layout detection behind §11.2.1.
+- N13 https://pnpm.io/settings/build and https://pnpm.io/settings/dependency-resolution — pnpm 12 `allowBuilds` map in `pnpm-workspace.yaml`; `strictDepBuilds` (default true) fails the install on unreviewed build scripts; `onlyBuiltDependencies` removed in v11; `minimumReleaseAge` default 1440 minutes since v11, `minimumReleaseAgeExclude` lists packages by name that may install immediately.
 
 **Electron tooling**
 - E1 https://registry.npmjs.org/nx-electron/latest and https://github.com/bennymeg/nx-electron — 22.0.0; peers `@nx/devkit ^22`; webpack; major must match Nx.
 - E2 https://electron-vite.org/guide/ and https://registry.npmjs.org/electron-vite — 5.0.0; main/preload/renderer; Node 20.19+ or 22.12+; peer `vite ^5 || ^6 || ^7`; Vite 8 only in 6.0.0-beta (issue 925).
 - E3 https://github.com/alex8088/electron-vite/issues/880 — maintainer: `tsgo` added to the scaffolding once stable; no TypeScript 7 support in 5.x docs or changelog.
+- E4 https://registry.npmjs.org/electron (44.2.0, engines node >= 22.12.0), https://electron-vite.org/guide/ (config keys main/preload/renderer; CLI `dev`, `build`, `preview`), https://electron-vite.org/guide/distribution and https://registry.npmjs.org/electron-builder (26.15.3, MIT, recommended packager).
 
 **Testing**
 - T1 https://vitest.dev/guide/ and https://registry.npmjs.org/vitest/latest — Vitest 5.0.0; Node ≥ 22.12; Vite ≥ 6.4.
@@ -569,6 +581,8 @@ Not mentioned in INTENT.txt and therefore not part of this specification: mobile
 - T10 https://electron-vite.org/guide/ — no testing section.
 - T11 https://storybook.js.org/docs/writing-tests/integrations/vitest-addon and `npm view @storybook/addon-vitest peerDependencies` — addon 10.6.0 peers `vitest ^3 || ^4`; not used with Vitest 5.
 - T12 https://registry.npmjs.org/vitest/latest — engines `^22.12.0 || ^24.0.0 || >=26.0.0`; peer `vite ^6.4.0 || ^7.0.0 || ^8.0.0`; `@vitest/browser-playwright` 5.0.0; `vitest-browser-react` 2.3.0 peers vitest ^4 || ^5.
+- T13 https://registry.npmjs.org/@wdio/electron-service (10.3.0, peers `webdriverio >9.0.0`, `electron *`, node ≥ 22.12) and https://registry.npmjs.org/webdriverio — webdriverio, @wdio/cli, @wdio/local-runner, @wdio/mocha-framework all 9.31.7 and `@wdio/globals` 9.31.3 (its latest, for the `WebdriverIO.Config` types); the Electron guide's install line names `@wdio/electron-service` only.
+- T14 https://registry.npmjs.org/@vitest/browser-playwright — 5.0.0 peers `vitest 5.0.0` (exact) and `playwright *` (required); https://registry.npmjs.org/vitest-browser-react — 2.3.0 peers `vitest ^4 || ^5`, react ^18 || ^19.
 
 **Design guide (§11.5)**
 - D1 https://raw.githubusercontent.com/google/fonts/main/ofl/caprasimo/OFL.txt — Caprasimo, SIL OFL 1.1.
