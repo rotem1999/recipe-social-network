@@ -48,6 +48,64 @@ const UNIT_WORDS: Readonly<Record<string, Unit>> = {
   pinch: 'pinch',
 };
 
+/**
+ * CAT-6: measurement words outside the fixed list. A number followed by one of these
+ * ("4 oz", "1 lb") is a quantity the app cannot express, so the raw measure stays in the
+ * note; any other trailing text ("2 large") is a piece count with a description.
+ */
+const FOREIGN_UNIT_WORDS: ReadonlySet<string> = new Set([
+  'oz',
+  'ounce',
+  'ounces',
+  'lb',
+  'lbs',
+  'pound',
+  'pounds',
+  'pint',
+  'pints',
+  'pt',
+  'quart',
+  'quarts',
+  'qt',
+  'gallon',
+  'gallons',
+  'gal',
+  'litre',
+  'litres',
+  'liter',
+  'liters',
+  'dash',
+  'dashes',
+  'drop',
+  'drops',
+  'stick',
+  'sticks',
+  'can',
+  'cans',
+  'tin',
+  'tins',
+  'jar',
+  'jars',
+  'packet',
+  'packets',
+  'package',
+  'packages',
+  'bottle',
+  'bottles',
+  'bunch',
+  'bunches',
+  'handful',
+  'handfuls',
+  'slice',
+  'slices',
+  'sprig',
+  'sprigs',
+  'inch',
+  'inches',
+  'cm',
+  'mm',
+]);
+
 /** CAT-6: the unicode fractions TheMealDB measures use. */
 const UNICODE_FRACTIONS: Readonly<Record<string, number>> = {
   '½': 0.5,
@@ -131,6 +189,18 @@ export function parseMeasure(
       return note.length > 0
         ? { quantity: round(parsed.value), unit, note }
         : { quantity: round(parsed.value), unit };
+    }
+    // CAT-6: a bare number ("1", "2 large") counts pieces; any text after it is the note,
+    // unless that text starts with a measurement word the app cannot express ("4 oz").
+    if (afterNumber.length === 0) {
+      return { quantity: round(parsed.value), unit: 'piece' };
+    }
+    if (!word || !FOREIGN_UNIT_WORDS.has(word[1].toLowerCase())) {
+      return {
+        quantity: round(parsed.value),
+        unit: 'piece',
+        note: afterNumber,
+      };
     }
   }
 

@@ -154,4 +154,69 @@ describe('PromptLogService', () => {
     ).resolves.toBeUndefined();
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });
+
+  describe('LOG-3 folder when PROMPT_LOG_DIR is unset (§14)', () => {
+    // The fallback folder is `<cwd>/log`; cwd is stubbed to a temp dir so the
+    // repository `log/` is never touched.
+    let fakeRoot: string;
+
+    beforeEach(async () => {
+      fakeRoot = await mkdtemp(join(tmpdir(), 'rsn-prompt-log-root-'));
+      jest.spyOn(process, 'cwd').mockReturnValue(fakeRoot);
+    });
+
+    afterEach(async () => {
+      jest.restoreAllMocks();
+      await rm(fakeRoot, { recursive: true, force: true });
+    });
+
+    it('LOG-3 writes under <cwd>/log when PROMPT_LOG_DIR is an empty string', async () => {
+      await new PromptLogService(configStub({ PROMPT_LOG_DIR: '' })).append(
+        entry(),
+      );
+
+      const written = await readFile(
+        join(fakeRoot, 'log', '2026-09-28.json'),
+        'utf8',
+      );
+      expect(JSON.parse(written.trimEnd())).toEqual(entry());
+    });
+
+    it('LOG-3 writes under <cwd>/log when PROMPT_LOG_DIR is only whitespace', async () => {
+      await new PromptLogService(
+        configStub({ PROMPT_LOG_DIR: '   \t ' }),
+      ).append(entry());
+
+      const written = await readFile(
+        join(fakeRoot, 'log', '2026-09-28.json'),
+        'utf8',
+      );
+      expect(JSON.parse(written.trimEnd())).toEqual(entry());
+    });
+
+    it('LOG-3 writes under <cwd>/log when PROMPT_LOG_DIR is undefined', async () => {
+      await new PromptLogService(configStub({})).append(entry());
+
+      const written = await readFile(
+        join(fakeRoot, 'log', '2026-09-28.json'),
+        'utf8',
+      );
+      expect(JSON.parse(written.trimEnd())).toEqual(entry());
+    });
+
+    it('LOG-3 uses a set PROMPT_LOG_DIR and writes nothing under <cwd>/log', async () => {
+      const configured = join(fakeRoot, 'custom-log');
+
+      await new PromptLogService(
+        configStub({ PROMPT_LOG_DIR: configured }),
+      ).append(entry());
+
+      await expect(
+        readFile(join(configured, '2026-09-28.json'), 'utf8'),
+      ).resolves.toContain('"generationId":"gen-1"');
+      await expect(
+        readFile(join(fakeRoot, 'log', '2026-09-28.json'), 'utf8'),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
 });

@@ -16,8 +16,12 @@ export class PromptLogService {
   private readonly directory: string;
 
   constructor(private readonly config: ConfigService) {
+    // §14: PROMPT_LOG_DIR is optional; an empty value in .env.local means "unset".
+    const configured = this.config.get<string>('PROMPT_LOG_DIR')?.trim();
     this.directory =
-      this.config.get<string>('PROMPT_LOG_DIR') ?? join(process.cwd(), 'log');
+      configured !== undefined && configured.length > 0
+        ? configured
+        : join(process.cwd(), 'log');
   }
 
   /** LOG-5: append one entry; a successful call carries `response`, a failed one `error`. */

@@ -52,3 +52,8 @@ apps/desktop/out/
 
 # AI prompt log (SPEC §10 LOG-3/LOG-4): full prompts and responses, never committed
 log/
+
+# FirebaseSDK
+cooking-sn-firebase-adminsdk-fbsvc-6f5d96395b.json
+# Claude desktop app dev-server launcher (local tooling)
+.claude/launch.json

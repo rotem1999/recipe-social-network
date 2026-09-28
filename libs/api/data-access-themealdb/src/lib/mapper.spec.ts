@@ -57,6 +57,26 @@ describe('parseMeasure', () => {
     });
   });
 
+  it('CAT-6 reads a bare number `1` as one piece', () => {
+    const parsed = parseMeasure('1');
+    expect(parsed).toEqual({ quantity: 1, unit: 'piece' });
+    expect('note' in parsed).toBe(false);
+  });
+
+  it('CAT-6 reads `2 large` as two pieces with the trailing text as the note', () => {
+    expect(parseMeasure('2 large')).toEqual({
+      quantity: 2,
+      unit: 'piece',
+      note: 'large',
+    });
+  });
+
+  it('CAT-6 reads the bare unicode fraction `½` as half a piece', () => {
+    const parsed = parseMeasure('½');
+    expect(parsed).toEqual({ quantity: 0.5, unit: 'piece' });
+    expect('note' in parsed).toBe(false);
+  });
+
   it('CAT-6 keeps a measure with no leading number raw', () => {
     expect(parseMeasure('to taste')).toEqual({
       quantity: null,
