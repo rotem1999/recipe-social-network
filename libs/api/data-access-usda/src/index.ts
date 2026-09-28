@@ -1,1 +1,3 @@
-export * from './lib/data-access-usda.module';
+export * from './lib/usda.types';
+export * from './lib/usda.service';
+export * from './lib/usda.module';

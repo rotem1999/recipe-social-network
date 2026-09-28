@@ -1,0 +1,362 @@
+// SPEC §9 NUT-2/NUT-5/NUT-6 (§16 U1–U9): the FoodData Central client. `fetch`
+// is mocked; the key is a placeholder and every field name comes from §9.
+
+import { HttpException, ServiceUnavailableException } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
+import { UsdaService } from './usda.service';
+import type { UsdaDataType } from './usda.types';
+
+/** §16 U1: the verified FoodData Central base URL. */
+const VERIFIED_BASE_URL = 'https://api.nal.usda.gov/fdc/v1';
+const TEST_KEY = 'test-key';
+
+/** NUT-6: the three data types ingredient search uses. */
+const INGREDIENT_DATA_TYPES: UsdaDataType[] = [
+  'SR Legacy',
+  'Foundation',
+  'Survey (FNDDS)',
+];
+
+// SPEC §16 V16: @nestjs/config 12 ships ESM only while this Jest project is
+// CommonJS (§11.1), and the unit under test imports ConfigService for DI. The
+// module is mocked at its boundary so the unit loads; configuration still
+// reaches it only through the explicit stub below.
+jest.mock('@nestjs/config', () => ({
+  ConfigService: class ConfigService {},
+}));
+
+function configStub(
+  values: Record<string, string> = { USDA_FDC_KEY: TEST_KEY },
+): ConfigService {
+  return {
+    get: (key: string) => values[key],
+  } as unknown as ConfigService;
+}
+
+function jsonResponse(body: unknown): Response {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => body,
+  } as unknown as Response;
+}
+
+function statusResponse(status: number): Response {
+  return {
+    ok: false,
+    status,
+    json: async () => ({}),
+  } as unknown as Response;
+}
+
+/** §9: a `POST /foods/search` hit; nutrient ids carry the value in `value`. */
+function searchHit(foodNutrients: unknown[], overrides: object = {}) {
+  return {
+    fdcId: 171705,
+    description: 'Onions, raw',
+    dataType: 'SR Legacy',
+    foodNutrients,
+    ...overrides,
+  };
+}
+
+describe('UsdaService', () => {
+  let fetchMock: jest.Mock;
+
+  beforeEach(() => {
+    fetchMock = jest.fn();
+    global.fetch = fetchMock as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  function service(values?: Record<string, string>): UsdaService {
+    return new UsdaService(configStub(values));
+  }
+
+  describe('searchFoods', () => {
+    it('NUT-6 posts the query, the dataType array and pageSize 5 to /foods/search', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ foods: [] }));
+
+      await service().searchFoods('onion', INGREDIENT_DATA_TYPES);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(
+        `${VERIFIED_BASE_URL}/foods/search?api_key=${TEST_KEY}`,
+      );
+      expect(init.method).toBe('POST');
+      expect((init.headers as Record<string, string>)['Content-Type']).toBe(
+        'application/json',
+      );
+      expect(JSON.parse(String(init.body))).toEqual({
+        query: 'onion',
+        dataType: INGREDIENT_DATA_TYPES,
+        pageSize: 5,
+        pageNumber: 1,
+      });
+    });
+
+    it('NUT-6 uses the configured base URL without its trailing slash', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ foods: [] }));
+
+      await service({
+        USDA_FDC_KEY: TEST_KEY,
+        USDA_FDC_BASE_URL: `${VERIFIED_BASE_URL}/`,
+      }).searchFoods('onion', ['Survey (FNDDS)']);
+
+      expect(String(fetchMock.mock.calls[0][0])).toBe(
+        `${VERIFIED_BASE_URL}/foods/search?api_key=${TEST_KEY}`,
+      );
+    });
+
+    it('§9 reads energy from nutrient 1008 first', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          foods: [
+            searchHit([
+              { nutrientId: 2048, value: 44 },
+              { nutrientId: 2047, value: 42 },
+              { nutrientId: 1008, value: 40 },
+            ]),
+          ],
+        }),
+      );
+
+      const [hit] = await service().searchFoods('onion', INGREDIENT_DATA_TYPES);
+      expect(hit.kcalPer100g).toBe(40);
+    });
+
+    it('§9 falls back to 2047 before 2048 when 1008 is absent', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          foods: [
+            searchHit([
+              { nutrientId: 2048, value: 44 },
+              { nutrientId: 2047, value: 42 },
+            ]),
+          ],
+        }),
+      );
+
+      const [hit] = await service().searchFoods('onion', INGREDIENT_DATA_TYPES);
+      expect(hit.kcalPer100g).toBe(42);
+    });
+
+    it('§9 uses 2048 when it is the only Atwater id present', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ foods: [searchHit([{ nutrientId: 2048, value: 44 }])] }),
+      );
+
+      const [hit] = await service().searchFoods('onion', INGREDIENT_DATA_TYPES);
+      expect(hit.kcalPer100g).toBe(44);
+    });
+
+    it('§9 never reads 1062 (kJ) as energy', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ foods: [searchHit([{ nutrientId: 1062, value: 167 }])] }),
+      );
+
+      const [hit] = await service().searchFoods('onion', INGREDIENT_DATA_TYPES);
+      expect(hit.kcalPer100g).toBe(null);
+    });
+
+    it('NUT-5 leaves a missing energy id null, never zero', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ foods: [searchHit([{ nutrientId: 1003, value: 1.1 }])] }),
+      );
+
+      const [hit] = await service().searchFoods('onion', INGREDIENT_DATA_TYPES);
+      expect(hit.kcalPer100g).toBe(null);
+      expect(hit.kcalPer100g).not.toBe(0);
+    });
+
+    it('§9 accepts both the `nutrientId`/`value` and the `nutrient.id`/`amount` shapes', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          foods: [
+            searchHit([{ nutrientId: 1008, value: 40 }]),
+            searchHit([{ nutrient: { id: 1008 }, amount: 139 }], {
+              fdcId: 782203,
+              description: 'Lasagna with meat',
+              dataType: 'Survey (FNDDS)',
+            }),
+          ],
+        }),
+      );
+
+      const hits = await service().searchFoods('lasagna', ['Survey (FNDDS)']);
+      expect(hits.map((hit) => hit.kcalPer100g)).toEqual([40, 139]);
+    });
+
+    it('NUT-6 keeps fdcId, description, dataType and foodMeasures[0].gramWeight', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          foods: [
+            searchHit([{ nutrientId: 1008, value: 139 }], {
+              fdcId: 782203,
+              description: 'Lasagna with meat',
+              dataType: 'Survey (FNDDS)',
+              foodMeasures: [{ gramWeight: 250 }, { gramWeight: 500 }],
+            }),
+          ],
+        }),
+      );
+
+      await expect(
+        service().searchFoods('lasagna', ['Survey (FNDDS)']),
+      ).resolves.toEqual([
+        {
+          fdcId: 782203,
+          description: 'Lasagna with meat',
+          dataType: 'Survey (FNDDS)',
+          kcalPer100g: 139,
+          gramWeightPerMeasure: 250,
+        },
+      ]);
+    });
+
+    it('NUT-6 tolerates a search result without foodMeasures', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ foods: [searchHit([{ nutrientId: 1008, value: 40 }])] }),
+      );
+
+      const [hit] = await service().searchFoods('onion', INGREDIENT_DATA_TYPES);
+      expect(hit.gramWeightPerMeasure).toBe(null);
+    });
+
+    it('NUT-6 answers a repeated query from the 24-hour cache without a second fetch', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ foods: [searchHit([{ nutrientId: 1008, value: 40 }])] }),
+      );
+      const client = service();
+
+      const first = await client.searchFoods('onion', INGREDIENT_DATA_TYPES);
+      const second = await client.searchFoods('onion', INGREDIENT_DATA_TYPES);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(second).toEqual(first);
+    });
+
+    it('NUT-6 fetches again for a different query or data-type list', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ foods: [] }));
+      const client = service();
+
+      await client.searchFoods('onion', INGREDIENT_DATA_TYPES);
+      await client.searchFoods('garlic', INGREDIENT_DATA_TYPES);
+      await client.searchFoods('onion', ['Survey (FNDDS)']);
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('NUT-6 fetches again once the cached entry is older than 24 hours', async () => {
+      const start = Date.UTC(2026, 8, 28, 12, 0, 0);
+      let now = start;
+      jest.spyOn(Date, 'now').mockImplementation(() => now);
+      fetchMock.mockResolvedValue(jsonResponse({ foods: [] }));
+      const client = service();
+
+      await client.searchFoods('onion', INGREDIENT_DATA_TYPES);
+      now = start + 24 * 60 * 60 * 1000 + 1;
+      await client.searchFoods('onion', INGREDIENT_DATA_TYPES);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('§9 surfaces a 429 as an HTTP 429, not as a 503', async () => {
+      fetchMock.mockResolvedValue(statusResponse(429));
+
+      const error = await service()
+        .searchFoods('onion', INGREDIENT_DATA_TYPES)
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(HttpException);
+      expect((error as HttpException).getStatus()).toBe(429);
+    });
+
+    it('§9 turns any other failure into a 503', async () => {
+      fetchMock.mockResolvedValue(statusResponse(500));
+      await expect(
+        service().searchFoods('onion', INGREDIENT_DATA_TYPES),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+      fetchMock.mockRejectedValue(new Error('network down'));
+      await expect(
+        service().searchFoods('garlic', INGREDIENT_DATA_TYPES),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
+
+    it('NUT-2 refuses without a key and makes no request', async () => {
+      await expect(
+        service({}).searchFoods('onion', INGREDIENT_DATA_TYPES),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getFood', () => {
+    it('NUT-6 reads the food detail and its foodPortions gram weights', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          fdcId: 171705,
+          description: 'Onions, raw',
+          foodNutrients: [{ nutrient: { id: 1008 }, amount: 40 }],
+          foodPortions: [
+            { gramWeight: 110, portionDescription: '1 medium' },
+            { gramWeight: 160, modifier: 'large' },
+            { portionDescription: 'no gram weight' },
+          ],
+        }),
+      );
+
+      await expect(service().getFood(171705)).resolves.toEqual({
+        fdcId: 171705,
+        description: 'Onions, raw',
+        kcalPer100g: 40,
+        portions: [
+          { gramWeight: 110, description: '1 medium' },
+          { gramWeight: 160, description: 'large' },
+        ],
+      });
+      expect(String(fetchMock.mock.calls[0][0])).toBe(
+        `${VERIFIED_BASE_URL}/food/171705?api_key=${TEST_KEY}`,
+      );
+      expect(
+        (fetchMock.mock.calls[0][1] as RequestInit).method,
+      ).toBe('GET');
+    });
+
+    it('NUT-5 returns null for a 404 food id', async () => {
+      fetchMock.mockResolvedValue(statusResponse(404));
+
+      await expect(service().getFood(999999999)).resolves.toBe(null);
+    });
+
+    it('NUT-6 answers a repeated food id from the cache', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ fdcId: 171705, description: 'Onions, raw' }),
+      );
+      const client = service();
+
+      await client.getFood(171705);
+      await client.getFood(171705);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('NUT-6 gives a food with no portions an empty portion list', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ fdcId: 171705, description: 'Onions, raw' }),
+      );
+
+      await expect(service().getFood(171705)).resolves.toEqual({
+        fdcId: 171705,
+        description: 'Onions, raw',
+        kcalPer100g: null,
+        portions: [],
+      });
+    });
+  });
+});

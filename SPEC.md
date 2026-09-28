@@ -2,7 +2,7 @@
 
 **Working name:** CookBook (Rotem, chat 2026-09-08; provisional, may change later). Repository name stays `recipe-social-network`; import alias stays `@rsn`.
 
-**Status:** Draft 3, 2026-09-08. Built from `INTENT.txt`, `.env.example`, `.gitignore`, and Rotem's decisions in chat on 2026-09-08. Draft 3 re-verified every §16 source on 2026-09-08 (later session), fixed the scaffolding toolchain in §11.2, and added the UI design guide (§11.5). Rotem delegated the toolchain and UI-detail choices to me in chat on 2026-09-08 ("choose actions yourself"); rows that record such a choice say so in their Source column. All open points are resolved; this revision is the one to build from.
+**Status:** Draft 4, 2026-09-28. Draft 4 adds what the first full build needed: auth mechanics (§2), the API surface (§11.6), the database schema (§12.1), the remaining UI details (§11.5 UI-9 onwards), the env key list (§14) and today's package versions (§16 V16–V18, D9, S1). Rotem asked on 2026-09-28 to "finish the app according to SPEC.md"; every detail SPEC.md did not settle was decided under the 2026-09-08 delegation and is marked "Rotem delegated". Previously: Draft 3, 2026-09-08. Built from `INTENT.txt`, `.env.example`, `.gitignore`, and Rotem's decisions in chat on 2026-09-08. Draft 3 re-verified every §16 source on 2026-09-08 (later session), fixed the scaffolding toolchain in §11.2, and added the UI design guide (§11.5). Rotem delegated the toolchain and UI-detail choices to me in chat on 2026-09-08 ("choose actions yourself"); rows that record such a choice say so in their Source column. All open points are resolved; this revision is the one to build from.
 
 **Owner:** Rotem
 
@@ -33,6 +33,11 @@ CookBook is a cooking social network for family and friends. Users create recipe
 | AUTH-3 | API requests are authenticated with JWT issued by the backend (access and refresh secrets and TTLs in `.env.example`). | Rotem, chat 2026-09-08 |
 | AUTH-4 | Backend requests are tied to the signed-in user (required by private recipes, friends, and per-user logging). | INTENT L6, L18, L21 |
 
+| AUTH-5 | Sign-up takes `username` (3–32 chars, `[a-z0-9_.-]`, stored lower-case, unique), `password` (8–128 chars) and optional `email` (unique when present, stored lower-case). Sign-in takes username + password. | Rotem delegated, chat 2026-09-28 |
+| AUTH-6 | Passwords are hashed with **scrypt** from `node:crypto`, N=2¹⁷, r=8, p=1, 16-byte random salt, 64-byte key, stored as `scrypt$N$r$p$<salt b64>$<key b64>`; comparison is constant-time (`timingSafeEqual`). OWASP lists Argon2id first and scrypt second (§16 S1); scrypt was chosen because it needs no native module, so nothing runs a build script on install. | Rotem delegated, chat 2026-09-28 |
+| AUTH-7 | Tokens: an access JWT (`JWT_ACCESS_SECRET`, `JWT_ACCESS_TTL`, default 15m) carrying `sub` (user id) and `username`, and a refresh JWT (`JWT_REFRESH_SECRET`, `JWT_REFRESH_TTL`, default 30d) carrying `sub` and `typ: refresh`, both HS256 through `@nestjs/jwt`. `POST /auth/refresh` exchanges a valid refresh token for a new pair. Sign-out discards the tokens on the client; there is no server-side session table. Package: `@nestjs/jwt` 11.0.2 (§16 V19). | Rotem delegated, chat 2026-09-28 |
+| AUTH-8 | Every route except `POST /auth/sign-up`, `POST /auth/sign-in`, `POST /auth/refresh` and `GET /health` requires `Authorization: Bearer <access token>`; a global guard rejects with 401. | derived from AUTH-3, AUTH-4 |
+
 Firebase and Google sign-in (INTENT L20) were dropped by Rotem on 2026-09-08. Verified background for that decision: Firebase's JS SDK does not support Electron, `signInWithPopup` and `signInWithRedirect` do not work outside browsers, and Google blocks its OAuth endpoint inside embedded webviews (§16 F1–F5).
 
 ---
@@ -60,8 +65,8 @@ The app is focused on usability: a recipe is the meal and how to make it, with n
 
 | Field | Type | Required | Source |
 |---|---|---|---|
-| title | text | yes | Rotem, chat 2026-09-08 |
-| description | short text describing the meal | no | Rotem, chat 2026-09-08 |
+| title | text, at most 200 characters (limit: Rotem delegated, 2026-09-28) | yes | Rotem, chat 2026-09-08 |
+| description | short text describing the meal, at most 500 characters (limit: Rotem delegated, 2026-09-28) | no | Rotem, chat 2026-09-08 |
 | category | one of the 14 categories (DISC-7, DISC-8) | yes | Rotem, chat 2026-09-08 |
 | servings | integer ≥ 1 | yes (default 2 for TheMealDB imports, CAT-4) | INTENT L10; Rotem |
 | ingredients[] | structured list, ordered: `quantity` (decimal, empty allowed for "to taste"), `unit` (from a fixed list: g, kg, ml, l, tsp, tbsp, cup, piece, pinch, none), `name` (text), `note` (optional text, e.g. "chopped") | at least one | Rotem, chat 2026-09-08 (structured); unit list and `note` are my call |
@@ -80,6 +85,7 @@ Not included, by the usability focus: difficulty, cuisine, free tags, story or h
 | IMG-3 | Upload: the desktop app sends the image to the API; the API writes it to the bucket with the Admin SDK and stores the object path on the recipe. | Rotem, chat 2026-09-08 |
 | IMG-4 | Display: the API returns a short-lived **signed URL** (read action, expiry chosen at build time, at most 7 days) for each image in a recipe response; the desktop app loads the URL directly. Private and shared recipes stay private because only users allowed to see the recipe receive its URLs. | Rotem, chat 2026-09-08 |
 | IMG-5 | Security Rules deny all client access; the bucket is reached only by the service account. | follows from IMG-2 |
+| IMG-6 | Limits: at most 3 images per recipe version, 5 MB each, `image/jpeg`, `image/png` or `image/webp`; upload is `multipart/form-data` field `file` on `POST /recipes/:id/images`; the object path is `recipes/<recipeId>/<uuid>.<ext>`. Signed URLs are read-only with an expiry of `IMAGE_SIGNED_URL_TTL_SECONDS` (default 21600, six hours, within the seven-day maximum). The client reloads a recipe when an image URL returns 403. Env: `FIREBASE_PROJECT_ID`, `FIREBASE_STORAGE_BUCKET`, `FIREBASE_SERVICE_ACCOUNT_PATH` (path to the service-account JSON, outside the repo). When those keys are empty the API answers image uploads with 503 and recipe responses carry no image URLs. | Rotem delegated, chat 2026-09-28 |
 
 Verified Firebase facts (§16 F6–F10):
 
@@ -110,6 +116,7 @@ Verified Firebase facts (§16 F6–F10):
 | CAT-3 | A TheMealDB recipe is pulled into the database when a user saves it (SAVE-1). | Rotem, chat 2026-09-08 |
 | CAT-4 | A saved TheMealDB recipe gets a default of 2 servings; the user can change it. | Rotem, chat 2026-09-08 |
 | CAT-5 | TheMealDB's `strCategory` maps one-to-one onto the app's categories, since the app uses TheMealDB's list (DISC-7). | Rotem, chat 2026-09-08 |
+| CAT-6 | Mapping (data-access-themealdb/CLAUDE.md): `strMeasure` is parsed into `quantity` + `unit` when it starts with a number (fractions like `1/2` and `1 1/2` included) followed by a unit word from the fixed list (`g`, `kg`, `ml`, `l`, `tsp`, `tbsp`, `cup`/`cups`, `pinch`); anything else keeps `quantity` empty, `unit: none` and the raw measure in `note`. `strInstructions` is split into steps on line breaks and on sentence ends when a paragraph exceeds 300 characters; empty steps are dropped. `strMealThumb` is kept as `externalImageUrl` on the saved recipe (TheMealDB hosts it; no upload to Firebase). Catalogue previews in Discover are served live from `filter.php?c=<category>` (id, name, thumb) and `lookup.php?i=<id>` for the full preview. | Rotem delegated, chat 2026-09-28 |
 
 Verified facts (§16 M1–M8):
 
@@ -129,6 +136,7 @@ Verified facts (§16 M1–M8):
 | FR-1 | A friend system exists so users can share recipes privately, without publishing. | INTENT L6, L21 |
 | FR-2 | Friendship is mutual: one user sends a request, the other accepts. | Rotem, chat 2026-09-08 |
 | FR-3 | Users are found by username, or by email when the user has one on record. | Rotem, chat 2026-09-08 |
+| FR-4 | `GET /users/search?q=` returns at most 10 users whose username starts with `q` (case-insensitive) or whose email equals `q` exactly; the caller and existing friends are marked. A request is `pending` until the receiver accepts or declines; either side can cancel a pending request; a friend can be removed, which also removes every share between the two users. | Rotem delegated, chat 2026-09-28 |
 
 ---
 
@@ -144,6 +152,7 @@ Verified facts (§16 M1–M8):
 | DISC-6 | A user can favourite up to 3 categories; favourites are pinned in Discover. | Rotem, chat 2026-09-08 |
 | DISC-7 | The category list is TheMealDB's own list, fetched on 2026-09-08 from `list.php?c=list` (14 entries): Beef, Breakfast, Chicken, Dessert, Goat, Lamb, Miscellaneous, Pasta, Pork, Seafood, Side, Starter, Vegan, Vegetarian. | Rotem, chat 2026-09-08; §16 M9 |
 | DISC-8 | A recipe owner picks exactly one category per recipe. | Rotem, chat 2026-09-08 |
+| DISC-9 | `GET /discover?category=<one of the 14>&page=` returns, for that category, the public user recipes (newest version, newest first, 20 per page, with owner username, average and rating count, whether the caller has saved it) followed by the TheMealDB catalogue entries of that category (id, name, thumbnail). Without `category` it returns the caller's favourite categories first and then the other categories, each with its first 8 items, which is the split view of DISC-5. Favourites are toggled with `PUT /me/favourite-categories` (list of at most 3). | Rotem delegated, chat 2026-09-28 |
 
 ---
 
@@ -156,6 +165,8 @@ Verified facts (§16 M1–M8):
 | RATE-3 | The star display renders the average in quarter-star steps; hovering reveals the decimal value. | Rotem, chat 2026-09-08 |
 | COM-1 | Public and shared recipes have a comment section. | INTENT L22 |
 | COM-2 | On public recipes, comments have up and down votes, like Reddit, and are ranked by integer points, not by stars. | INTENT L22; Rotem, chat 2026-09-08 |
+| RATE-4 | One rating per user per public recipe; rating again replaces the earlier value. The stored average and count are recomputed on every write. The owner can rate their own public recipe like anyone else. Ratings attach to the recipe, not to a version. | Rotem delegated, chat 2026-09-28 |
+| COM-3 | Comments are 1–2000 characters, attach to the recipe, and are returned with author username, points (sum of votes, 0 on shared recipes), the caller's own vote, and creation time, ordered by points then newest. A vote is `1`, `-1` or `0` (removes). The author can delete their own comment. Only users who can see the recipe (owner, share recipients, everyone if public) can read or write comments. | Rotem delegated, chat 2026-09-28 |
 
 ---
 
@@ -172,6 +183,7 @@ Verified facts (§16 M1–M8):
 | COOK-8 | Each user is limited to 100 AI requests per day (cook mode and recommendations combined), counted server-side before the call is made, as cost control for a personal project with 2–3 users. The value is the `OPENROUTER_SHARED_DAILY_QUOTA_PER_USER` environment variable. | Rotem asked me to choose, chat 2026-09-08 |
 | COOK-9 | Chat history is not saved. Each question is a single request carrying the recipe context and the current step. | Rotem, chat 2026-09-08 |
 | COOK-6 | Every AI prompt is logged server-side (§10). Therefore every OpenRouter call is made by the backend; the desktop app never holds the OpenRouter key. | INTENT L18 |
+| COOK-10 | `POST /cook/ask` takes `recipeId`, `stepIndex` and an optional `question` (max 500 chars). The backend checks access (COOK-5), then the quota (COOK-8; 429 with the remaining count when exhausted), then sends one request with a fixed system prompt ("You are a concise cooking assistant…", answers under 120 words, plain text) and a user message holding the recipe title, servings, the ingredient list in one line each, the numbered steps with the current one marked, and the question or "Give one useful tip for the current step". `max_tokens` 300, `temperature` 0.4. The response text, the tokens and the cost are returned; `GET /cook/quota` returns `{ used, limit, remaining }` for today (UTC). | Rotem delegated, chat 2026-09-28 |
 
 Verified OpenRouter facts (§16 O1–O12):
 
@@ -199,6 +211,7 @@ Verified OpenRouter facts (§16 O1–O12):
 | WX-7 | Weather provider: **Open-Meteo** (the URLs already in `.env.example`). | Rotem, chat 2026-09-08 |
 | WX-8 | Location is derived from the **OS timezone only**; no IP lookup and no browser geolocation. | Rotem, chat 2026-09-08 |
 | WX-9 | The desktop app reports the machine's IANA timezone (for example `Asia/Jerusalem`). The backend takes the city segment after the `/`, resolves it to coordinates with Open-Meteo geocoding (`name=<city>`), and calls the forecast with those coordinates and the timezone. Follows from WX-7 and WX-8. | derived |
+| WX-10 | `POST /recommend` takes `timezone`, `scope` (`home` or `discover`) and `excludeRecipeIds`. Candidates: for `home` the caller's own and saved recipes; for `discover` the 30 newest public recipes; minus the excluded ids; at most 30, each sent to the model as `id | title | category | prep+cook minutes`. Weather context: current temperature, `is_day`, WMO `weather_code` mapped to a word (clear, cloudy, fog, drizzle, rain, snow, thunderstorm), local hour and city. The model must answer JSON `{"picks":[{"id":"…","reason":"…"}]}` with up to 3 picks ordered best first (`home`) or 1 pick (`discover`); a non-JSON answer yields an empty list and the client shows "No recommendation right now". The response also returns the weather line shown in the greeting (WX-2). Geocoding and forecast results are cached in memory for 30 minutes per city. `max_tokens` 400, `temperature` 0.5. Underscores in the city segment become spaces; a city that Open-Meteo cannot geocode yields a recommendation without weather context and a greeting without a weather line. | Rotem delegated, chat 2026-09-28 |
 
 Verified Open-Meteo facts (§16 W1–W5): no API key; free limits 600/min, 5,000/h, 10,000/day, 300,000/month; data licensed CC-BY 4.0 with attribution required; the free tier is for non-commercial use only. Forecast endpoint `https://api.open-meteo.com/v1/forecast` (`latitude`, `longitude`, `timezone`) returns `is_day`, `sunrise`, `sunset`, and `weather_code`. Geocoding endpoint `https://geocoding-api.open-meteo.com/v1/search` (`name`, `count`, `language`) is forward-only, city name to coordinates; there is no reverse geocoding.
 
@@ -215,6 +228,7 @@ Verified location facts behind WX-8 (§16 W7–W12): `navigator.geolocation` in 
 | NUT-3 | The app computes calories from either the entire meal name or from the ingredients. | INTENT L10 |
 | NUT-4 | Ingredient-based calculation is the default; the user can switch to meal-name lookup. | Rotem, chat 2026-09-08 |
 | NUT-5 | An ingredient that cannot be matched shows "nutrition data unavailable". | Rotem, chat 2026-09-08 |
+| NUT-6 | `GET /recipes/:id/nutrition?mode=ingredients\|meal`. Ingredients mode: each ingredient name is searched with `POST /foods/search` (`dataType` SR Legacy, Foundation, Survey (FNDDS); first result), grams are derived from quantity and unit (`g` as is, `kg` ×1000, `ml` ×1 (density 1), `l` ×1000, `tsp` 5 ml, `tbsp` 15 ml, `cup` 240 ml, `pinch` 0.3 g, `piece` uses the food's first `foodPortions[].gramWeight` from `GET /food/{fdcId}`, `none` or empty quantity is unmatched), kcal = kcal/100 g × grams / 100; the response lists each ingredient's kcal or `unavailable`, the total, and the per-portion value (total ÷ servings) with `partial: true` when any ingredient is unavailable. Meal mode: the recipe title is searched with `dataType: ["Survey (FNDDS)"]`; the first hit's kcal/100 g and a portion weight (`foodMeasures[0].gramWeight` when the search result carries it, otherwise the first `foodPortions[].gramWeight` from `GET /food/{fdcId}`; when neither exists, kcal per portion is `unavailable` and only kcal/100 g is shown) give kcal per portion, plus the matched description; no hit yields `unavailable`. USDA responses are cached in memory for 24 hours by query. | Rotem delegated, chat 2026-09-28 |
 
 Verified USDA FoodData Central facts (§16 U1–U8):
 
@@ -222,7 +236,7 @@ Verified USDA FoodData Central facts (§16 U1–U8):
 - Endpoints: `GET /food/{fdcId}`, `GET|POST /foods`, `GET|POST /foods/list`, `GET|POST /foods/search` (params `query`, `dataType`, `pageSize`, `pageNumber`, `sortBy`, `sortOrder`; `dataType` is an array with the enum `Branded`, `Foundation`, `Survey (FNDDS)`, `SR Legacy`; Experimental is not searchable). Filtering by `Survey (FNDDS)` returned 400 over GET and worked with POST + JSON body during testing on 2026-09-08 (the later same-day re-run hit the `DEMO_KEY` limit); the client uses POST.
 - Data types: Foundation (analytical, few household portions), SR Legacy (final release April 2018, has portions), Survey/FNDDS (composite dishes with per-100 g nutrients and portion weights, e.g. "Lasagna with meat" 139 kcal/100 g, observed 2026-09-08), Branded, Experimental. FNDDS is what makes NUT-3's meal-name lookup possible; its coverage is US-survey dishes. FNDDS 2021-2023 (5,432 items) is still the newest release; FDC data version 15.4 of 2026-08-20 changed Branded items only.
 - Nutrient values in search results are per 100 g. Energy nutrient IDs (nutrient.csv, §16 U9): `1008` (kcal; SR Legacy, FNDDS, Branded), `1062` (kJ, never used), `2047` and `2048` (Atwater kcal; Foundation Foods dropped 1008 in October 2020). The client reads 1008, then 2047, then 2048, and never treats a missing ID as zero.
-- Food detail exposes `foodPortions[]` with `gramWeight` (documented on Foundation and Survey items, absent on SR Legacy). The OpenAPI schema for search results has no `foodMeasures` property, so the client never reads it. Converting recipe quantities to grams is the app's responsibility.
+- Food detail exposes `foodPortions[]` with `gramWeight` (documented on Foundation and Survey items, absent on SR Legacy). The OpenAPI schema for search results has no `foodMeasures` property; the client tolerates it when present (observed live on 2026-09-08) and never depends on it: when it is absent, NUT-6 falls back to `GET /food/{fdcId}` `foodPortions[]`. Converting recipe quantities to grams is the app's responsibility.
 
 ---
 
@@ -236,6 +250,8 @@ Verified USDA FoodData Central facts (§16 U1–U8):
 | LOG-4 | Each entry includes the full prompt and the full response text. (Rotem, chat 2026-09-08) |
 
 Each entry also records: timestamp, user id, feature (cook mode or recommendation), model requested, model used (the response `model` field, which is what is billed), prompt and completion token counts, `usage.cost` in credits (1 credit = $1), generation id, and latency, all available from the OpenRouter response (§7).
+
+| LOG-5 | File format: `log/YYYY-MM-DD.json` (UTC date) holds one JSON object per line (JSON Lines), appended with a single `appendFile` call per entry so concurrent requests never interleave; the folder is created on first write and is gitignored. Failed calls are logged too, with `error` instead of the response. | Rotem delegated, chat 2026-09-28 |
 
 ---
 
@@ -393,12 +409,61 @@ Consequence: the renderer never imports backend code and never holds a third-par
 | UI-2 | The app is branded **CookBook** everywhere (nav brand, window title, dialogs). The guide's earlier name was replaced on 2026-09-08. | Rotem, chat 2026-09-08 |
 | UI-3 | The theme is the "Organic" system: `design_handoff_cookbook_ui/_ds/organic-*/styles.css` is ported verbatim (its `:root` tokens and component classes) into one global stylesheet owned by `libs/web/ui` and imported once by `apps/web`. Colours, spacing, radii and shadows are used only through the CSS custom properties; no hard-coded hex, font name or pixel value that a token carries. | guide README "Theme"; Rotem delegated, chat 2026-09-08 |
 | UI-4 | Fonts: Caprasimo (headings, 400) and Figtree (body, variable 300–900 with italic). They are **bundled** through the npm packages `@fontsource/caprasimo` 5.3.0 and `@fontsource-variable/figtree` 5.3.0 (WOFF2, SIL OFL 1.1), imported by the `libs/web/ui` stylesheet; the `@import` of `fonts.googleapis.com` in the guide's `styles.css` is not carried over, so the renderer makes no network request outside the API (apps/web/CLAUDE.md). The OFL text and both copyright notices ship with the desktop build in a `licenses/` folder next to the app resources (OFL 1.1 clause 2 makes this a condition of bundling). | §16 D1–D4; Rotem delegated, chat 2026-09-08 |
-| UI-5 | Icons: Lucide through `lucide-react` 1.43.0 (ISC), named imports only, rendered by one `Icon` wrapper in `libs/web/ui` that fixes `strokeWidth={2.75}` (the package default is 2). The ISC notice ships in the same `licenses/` folder. | guide README "Icons"; §16 D5–D8; Rotem delegated |
-| UI-6 | Screens the guide shows (Home, Discover, Friends, Recipe detail, Cook mode, New-recipe dialog) are built from it. Screens SPEC.md requires but the guide lacks (sign-in and sign-up, the full recipe editor of §3.1.1, share-with-friends and visibility, version history, image upload, delete and remove-saved) are built from the same tokens and component classes, following the guide's rules: left-aligned layouts, pill buttons and inputs, `--radius-lg` containers, `.washed` images, accent `:focus-visible` ring, `.15s` transitions. | Rotem delegated, chat 2026-09-08 |
+| UI-5 | Icons: Lucide through `lucide-react` 1.48.0 (ISC, §16 V17; was 1.43.0 on 2026-09-08), named imports only, rendered by one `Icon` wrapper in `libs/web/ui` that fixes `strokeWidth={2.75}` (the package default is 2). The ISC notice ships in the same `licenses/` folder. | guide README "Icons"; §16 D5–D8; Rotem delegated |
+| UI-6 | Screens the guide shows (Home, Discover, Friends, Recipe detail, Cook mode, New-recipe dialog) are built from it. Screens SPEC.md requires but the guide lacks (sign-in and sign-up, the full recipe editor of §3.1.1, share-with-friends and visibility, version history, image upload, delete and remove-saved) are built from the same tokens and component classes, following the guide's rules: left-aligned layouts, pill buttons and inputs, `--radius-lg` containers, `.washed` images, accent `:focus-visible` ring, `.15s` transitions; dialogs close on Escape and on a backdrop click, never on a click inside the panel (2026-09-28). | Rotem delegated, chat 2026-09-08 |
 | UI-7 | The guide's screen-level behaviours that SPEC.md already settles are implemented as SPEC.md states them, in particular: the daily AI quota shown in cook mode comes from the API (COOK-8 counts server-side), the "New recipe" dialog opens the full editor because servings, ingredients and steps are required (§3.1.1), Discover keeps its category split (DISC-5) with the chip row as the filter, Discover also shows the recommendation strip (DISC-3), the home recommendation shows the ranked list (WX-4) with "Show another" as WX-5, comment votes appear on public recipes only (COM-2), and the TheMealDB footer carries the full attribution string with the URL (§3.3). | derived from §3–§8 |
 | UI-8 | Guide details SPEC.md does not settle are decided when the owning `libs/web/*` library is built and recorded in that section of SPEC.md before the code is written (§0 rule 1); they are not decided in the guide. | Rotem, chat 2026-09-08 ("choose actions yourself"); §0 |
 
 The guide's `support.js` and `.dc.html` are the prototype runtime and are never shipped or imported.
+
+Details decided on 2026-09-28 (Rotem delegated, "finish the app"):
+
+| ID | Requirement |
+|---|---|
+| UI-9 | Sign-in and sign-up are one screen with a segmented switch, shown whenever there is no valid token; fields per AUTH-5; errors inline under the form. Sign-out is an item in the avatar menu (avatar initial = first letter of the username). |
+| UI-10 | The greeting uses the username ("Good evening, rotem"); "Good morning/afternoon/evening" from the local hour (5–11, 12–17, else). Bylines show usernames. Cards show "N min" from `prepMinutes + cookMinutes` and omit it when both are absent; "serves N" always. |
+| UI-11 | "New recipe" opens the full editor (title, description, category, servings, prep/cook minutes, ingredients with unit select, steps with optional minutes, images). Create saves as private and opens the detail screen. Edit (owner only) opens the same editor pre-filled and saves a new version. |
+| UI-12 | Recipe detail owner actions in an "Owner" row: Edit, Visibility (private / shared / public), Share… (checkbox list of friends, shown when visibility is shared), Delete (confirm dialog). A saved copy shows Remove from my recipes (confirm). Versions: a "v3" tag opens a list of versions with dates; picking one shows it read-only with "Current" marked; no restore. |
+| UI-13 | Star row on cards and detail shows the average in quarter steps with the count; private and shared recipes, which have no ratings, show no star row. The rating input appears on public recipes only. |
+| UI-14 | Servings stepper rescales ingredient quantities on screen only and is not saved. Save from Discover is optimistic; on failure the button returns to Save and an inline message shows. |
+| UI-15 | Cook mode reads the quota from `GET /cook/quota` on entry and from each `POST /cook/ask` response; there is no artificial delay; the timer belongs to the current step and resets on step change or exit; the detail screen shows the minutes tag on steps too. The nutrition patch shows "nutrition data unavailable" per ingredient and for the total when everything is unavailable. Comment votes render on public recipes only; private recipes show no comment section (COM-1). |
+| UI-16 | Navigation is in-app state (no URL router): `auth`, `home`, `discover`, `friends`, `recipe/:id`, `editor`, `cook/:id`. The renderer reads `window.cookbook.timezone` from the preload and falls back to `Intl.DateTimeFormat().resolvedOptions().timeZone` in a plain browser (web-e2e). |
+| UI-17 | Data access: a small `fetch` client in `libs/web/data-access-api` with the base URL from `VITE_API_BASE_URL`, tokens in `localStorage` (`cookbook.accessToken`, `cookbook.refreshToken`), automatic refresh on 401 once, and one React hook per endpoint group; no third-party data library. |
+
+### 11.6 API surface (Rotem delegated, chat 2026-09-28)
+
+All routes are under `API_GLOBAL_PREFIX` (`api/v1`), JSON in and out, DTO types in `@rsn/shared/util-contracts`, validated with `class-validator` 0.15.1 + `class-transformer` 0.5.1 (§16 V16) through a global `ValidationPipe` (`whitelist`, `transform`). Errors are `{ statusCode, message, error }` (Nest default). Ids are UUIDs.
+
+| Method and path | Library | Purpose (SPEC IDs) |
+|---|---|---|
+| `GET /health` | apps/api | liveness |
+| `POST /auth/sign-up`, `POST /auth/sign-in`, `POST /auth/refresh` | feature-auth | AUTH-5..7; return `{ accessToken, refreshToken, user }` |
+| `GET /me` | feature-auth | current user (id, username, email, favouriteCategories) |
+| `PUT /me/favourite-categories` | feature-discover | DISC-6, DISC-9 |
+| `GET /users/search?q=` | feature-friends | FR-3, FR-4 |
+| `GET /friends` | feature-friends | friends, incoming and outgoing pending requests |
+| `POST /friends/requests` `{ userId }`, `POST /friends/requests/:id/accept`, `POST /friends/requests/:id/decline`, `DELETE /friends/requests/:id`, `DELETE /friends/:userId` | feature-friends | FR-2, FR-4 |
+| `GET /recipes` | feature-recipes | SAVE-3: the caller's own and saved recipes (current version), plus recipes shared with the caller, each flagged `relation: own \| saved \| shared` |
+| `POST /recipes` | feature-recipes | REC-1: create private recipe with version 1 |
+| `GET /recipes/:id` | feature-recipes | REC-4: current version with `canCook`, `canEdit`, `relation`, image URLs (IMG-4), rating summary, `forkedFrom` (SAVE-6), `versionCount` |
+| `GET /recipes/:id/versions`, `GET /recipes/:id/versions/:n` | feature-recipes | REC-7 |
+| `PUT /recipes/:id` | feature-recipes | REC-6/7: new version (owner); on a saved copy the first edit sets `forkedFrom` (SAVE-5/6) |
+| `PATCH /recipes/:id/visibility` `{ visibility, sharedWithUserIds? }` | feature-recipes | REC-2, REC-3, REC-6, REC-8 |
+| `DELETE /recipes/:id` | feature-recipes | REC-6, SAVE-4 (deletes the caller's own or saved copy) |
+| `POST /recipes/:id/save` | feature-recipes | SAVE-1, SAVE-4: copies a public recipe to the caller |
+| `POST /recipes/catalogue/:mealId/save` | feature-recipes | CAT-3, CAT-4 |
+| `POST /recipes/:id/images` (multipart), `DELETE /recipes/:id/images/:index` | feature-recipes | IMG-3, IMG-6 |
+| `GET /recipes/:id/nutrition?mode=` | feature-nutrition | NUT-1..6 |
+| `GET /discover?category=&page=` | feature-discover | DISC-1..9 |
+| `GET /discover/catalogue/:mealId` | feature-discover | CAT-2 preview |
+| `PUT /recipes/:id/rating` `{ stars }`, `GET /recipes/:id/rating` | feature-social | RATE-1..4 |
+| `GET /recipes/:id/comments`, `POST /recipes/:id/comments`, `DELETE /comments/:id`, `PUT /comments/:id/vote` `{ value }` | feature-social | COM-1..3 |
+| `POST /cook/ask`, `GET /cook/quota` | feature-cook | COOK-1..10 |
+| `POST /recommend` | feature-recommend | WX-1..10 |
+
+Response bodies (Rotem delegated, 2026-09-28, matched by `libs/web/data-access-api`): `POST /recipes`, `PUT /recipes/:id`, `PATCH …/visibility`, `POST /recipes/:id/save`, `POST /recipes/catalogue/:mealId/save` and `GET /recipes/:id/versions/:n` return `RecipeDetailDto`; `DELETE /recipes/:id` and `DELETE /comments/:id` return 204; image upload and delete return `ImageUploadResponse`; `PUT /recipes/:id/rating` and `GET /recipes/:id/rating` return `RatingSummaryDto`; `POST /recipes/:id/comments` and `PUT /comments/:id/vote` return `CommentDto`; `PUT /me/favourite-categories` returns `UserDto`; every friend mutation (`POST /friends/requests`, accept, decline, cancel, `DELETE /friends/:userId`) returns the updated `FriendsResponse`; `GET /discover/catalogue/:mealId` returns `CataloguePreviewDto`.
+
+CORS is enabled for the Electron renderer: `CORS_ORIGINS` (comma-separated; default `http://localhost:4200`, and `.env.example` also lists `http://localhost:4300`, the `web:preview` port that web-e2e uses) plus the literal origin `null`, which is what Chromium sends for a page loaded from `file://` in the packaged app. Request bodies up to 6 MB for the image route only. OpenRouter calls carry the optional attribution headers `HTTP-Referer: https://cookbook.local` and `X-Title: CookBook` (§16 O6 lists both as optional app-identification headers); no `response_format` parameter is sent, the JSON answer of WX-10 is extracted from the text.
 
 ---
 
@@ -411,6 +476,25 @@ The guide's `support.js` and `.dc.html` are the prototype runtime and are never 
 | DB-3 | TypeORM `synchronize` is always false; schema changes go through migrations only (`.env.example` line 14). |
 | DB-4 | The backend is the only process that talks to PostgreSQL. (Rotem, chat 2026-09-08) |
 | DB-5 | Development database: PostgreSQL **18.6**, installed on Rotem's machine at `C:\Program Files\PostgreSQL\18`, Windows service `postgresql-x64-18` (running), port 5432. (Detected 2026-09-08 with `postgres.exe --version` and `postgresql.conf`.) |
+| DB-6 | Packages: `typeorm` 1.1.1, `pg` 8.23.0, `@nestjs/typeorm` 11.0.3 (§16 V13, V19). Migrations live in `libs/api/data-access-db/src/migrations`, are TypeScript classes registered explicitly in the `DataSource` (no globs, so the webpack bundle carries them), and run with `pnpm nx run api-data-access-db:migrate` (`typeorm-ts-node-commonjs migration:run -d libs/api/data-access-db/src/data-source.ts`, the TypeORM CLI wrapper that loads TypeScript through ts-node; `migrate:revert` wraps `migration:revert`) before the API starts; `migrationsRun` is false so a start never mutates the schema. `docker/docker-compose.yml` runs `postgres:18` reading the same `DB_*` keys. (Rotem delegated, chat 2026-09-28) |
+
+### 12.1 Schema (Rotem delegated, chat 2026-09-28)
+
+All tables have `id uuid` primary key (`gen_random_uuid()`), `created_at` and `updated_at timestamptz`. Names are snake_case in PostgreSQL and camelCase in TypeScript.
+
+| Table | Columns | Notes |
+|---|---|---|
+| `users` | `username text unique`, `email text unique null`, `password_hash text`, `favourite_categories text[]` (max 3, DISC-6) | AUTH-2, AUTH-5 |
+| `recipes` | `owner_id → users`, `visibility text` (private/shared/public), `current_version_id → recipe_versions null`, `saved_from_recipe_id → recipes null` (SAVE-4 source), `forked_from_recipe_id → recipes null` (SAVE-6, set on the first edit of a saved copy), `source text` (user/themealdb), `external_id text null` (idMeal), `external_image_url text null`, `rating_average numeric(3,2) null`, `rating_count int default 0`, `deleted_at timestamptz null` | REC-1..8, SAVE-4..6, CAT-3, RATE-2 |
+| `recipe_versions` | `recipe_id → recipes`, `version_number int` (unique with recipe), `title text`, `description text null`, `category text`, `servings int`, `prep_minutes int null`, `cook_minutes int null`, `ingredients jsonb`, `steps jsonb`, `image_paths text[]` | §3.1.1, REC-7, IMG-3 |
+| `recipe_shares` | `recipe_id → recipes`, `user_id → users`, unique pair | REC-2, REC-8 |
+| `friend_requests` | `from_user_id → users`, `to_user_id → users`, `status text` (pending/accepted/declined), unique pair | FR-2; a friendship is an `accepted` row in either direction |
+| `ratings` | `recipe_id → recipes`, `user_id → users`, `stars smallint` (1–5), unique pair | RATE-1, RATE-4 |
+| `comments` | `recipe_id → recipes`, `user_id → users`, `body text`, `deleted_at null` | COM-1, COM-3 |
+| `comment_votes` | `comment_id → comments`, `user_id → users`, `value smallint` (1/-1), unique pair | COM-2 |
+| `ai_daily_usage` | `user_id → users`, `day date`, `count int`, unique pair | COOK-8 |
+
+Deleting a user's own recipe soft-deletes it (`deleted_at`) so saved copies keep their attribution; saved copies of a deleted recipe stay. Deleting a saved copy deletes that row and its versions.
 
 ---
 
@@ -450,7 +534,7 @@ Vitest 5 requires Node ≥ 22.12 and Vite ≥ 6.4. Approved by Rotem, chat 2026-
 | `STORAGE_*` (S3-compatible object storage) | Superseded by Firebase Cloud Storage (§3.4); replaced by the Firebase project id, bucket name, and service-account credential path. |
 | `VITE_API_BASE_URL` | Public, build-time renderer configuration. |
 
-The file's comments reference sections of a document that no longer exists in the repository; the file is regenerated from this SPEC once its keys are settled.
+The file was regenerated on 2026-09-28 (Rotem delegated). Keys now: `NODE_ENV`, `API_PORT`, `API_GLOBAL_PREFIX`, `CORS_ORIGINS`, `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME`, `JWT_ACCESS_SECRET`, `JWT_ACCESS_TTL`, `JWT_REFRESH_SECRET`, `JWT_REFRESH_TTL`, `THEMEALDB_KEY`, `THEMEALDB_BASE_URL` (v2), `USDA_FDC_KEY`, `USDA_FDC_BASE_URL`, `OPENROUTER_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL` (`minimax/minimax-m3`), `OPENROUTER_SHARED_DAILY_QUOTA_PER_USER` (100), `OPENMETEO_FORECAST_URL`, `OPENMETEO_GEOCODING_URL`, `FIREBASE_PROJECT_ID`, `FIREBASE_STORAGE_BUCKET`, `FIREBASE_SERVICE_ACCOUNT_PATH`, `IMAGE_SIGNED_URL_TTL_SECONDS`, `PROMPT_LOG_DIR` (optional; overrides the LOG-3 folder `<project root>/log/`, used by tests), `VITE_API_BASE_URL`. Removed: `MODEL_KEY_ENCRYPTION_KEY`, `OPENROUTER_MODEL_PREFERENCE`, `LOCATION_COORD_PRECISION`, `STORAGE_*`. The API reads `.env.local` then `.env` from the repository root through `@nestjs/config` 12.0.1 (§16 V16) and refuses to start when `DB_*` or the JWT secrets are missing.
 
 ---
 
@@ -545,7 +629,14 @@ Not mentioned in INTENT.txt and therefore not part of this specification: mobile
 - V12 https://github.com/microsoft/typescript-go/pull/2343 and https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/ — tsgo emits `__decorate`/`__metadata`/`__param`; TS 7.0 has no stable programmatic API (7.1 will); hard errors on `baseUrl`, `moduleResolution: node`.
 - V13 https://registry.npmjs.org/pg and https://registry.npmjs.org/@types/pg — pg 8.23.0 (MIT); @types/pg 8.23.1; typeorm 1.1.1 optional peer `pg ^8.5.1`.
 - V14 https://registry.npmjs.org/@nestjs/typeorm — latest 12.0.1, peers `@nestjs/core ^10 || ^11 || ^12`, `typeorm ^0.3.0 || ^1.0.0-dev`; 11.0.3 peers stop at ^11. The API uses 12.0.1 so the NestJS 12 move (§11.1) stays open (Rotem delegated, 2026-09-08).
-- V15 https://registry.npmjs.org/@nestjs/config, /@nestjs/jwt, /@nestjs/passport, /passport-jwt, /bcrypt, /argon2 — config 12.0.0, jwt 12.0.1, passport 12.0.0 (all peer `@nestjs/common ^11 || ^12`); passport-jwt 4.0.1; passport 0.7.0; bcrypt 6.0.0; argon2 0.45.1. Which of these feature-auth uses is decided in §2 when that library is built.
+- V15 https://registry.npmjs.org/@nestjs/config, /@nestjs/jwt, /@nestjs/passport, /passport-jwt, /bcrypt, /argon2 — config 12.0.0, jwt 12.0.1, passport 12.0.0 (all peer `@nestjs/common ^11 || ^12`); passport-jwt 4.0.1; passport 0.7.0; bcrypt 6.0.0; argon2 0.45.1 (2026-09-08). Superseded by AUTH-6 (scrypt, no passport).
+- V16 `npm view` on 2026-09-28 — @nestjs/typeorm 12.0.2 (peers `@nestjs/core ^10||^11||^12`, `typeorm ^0.3||^1.0.0-dev`, node ≥ 20.19), @nestjs/jwt 12.0.2 (peer `@nestjs/common ^8…^12`), @nestjs/config 12.0.1 (peer `@nestjs/common ^11||^12`), class-validator 0.15.1 (MIT), class-transformer 0.5.1 (MIT), typeorm 1.1.1, pg 8.23.0, @types/pg 8.23.1, firebase-admin 14.5.0 (Apache-2.0, node ≥ 22), @types/multer 2.2.0, @nestjs/platform-express latest 11.x is 11.2.6 (installed 11.2.3 with core 11.2.3).
+- V19 `node_modules/@nestjs/{config,jwt,typeorm}/package.json` on 2026-09-28 — all three 12.x packages are `"type": "module"` with no `require` export, so Jest in the CommonJS workspace cannot load them (TEST-1, §11.1). **The API pins the CommonJS lines: @nestjs/config 4.0.4 (peer `@nestjs/common ^10||^11`), @nestjs/jwt 11.0.2, @nestjs/typeorm 11.0.3 (peers `@nestjs/core ^10||^11`, `typeorm ^0.3||^1.0.0-dev`).** The NestJS 12 move (§11.1) therefore also moves these three to 12.x together with the ESM switch. (Rotem delegated, chat 2026-09-28; supersedes V14's choice of 12.0.1.)
+- V17 https://registry.npmjs.org/lucide-react — 1.48.0 on 2026-09-28 (ISC, peer react ^16.5.1…^19); supersedes the 1.43.0 in D5 and UI-5.
+- V18 https://registry.npmjs.org/@fontsource/caprasimo and /@fontsource-variable/figtree — still 5.3.0 on 2026-09-28.
+
+**Security**
+- S1 https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html (2026-09-28) — "Use Argon2id with a minimum configuration of 19 MiB of memory, an iteration count of 2, and 1 degree of parallelism. If Argon2id is not available, use scrypt"; scrypt "N=2^17 (128 MiB), r=8 (1024 bytes), p=1".
 
 **Nx**
 - N1 https://registry.npmjs.org/nx/latest — Nx 23.2.0.

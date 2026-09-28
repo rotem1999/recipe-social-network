@@ -8,6 +8,10 @@ directories:
 files:
   - out/**
   - package.json
+# UI-4, UI-5: font (OFL 1.1) and icon (ISC) licences ship next to the app resources.
+extraResources:
+  - from: licenses
+    to: licenses
 asar: true
 win:
   target:

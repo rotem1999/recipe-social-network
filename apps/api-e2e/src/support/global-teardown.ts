@@ -1,10 +1,9 @@
+// Jest `globalTeardown`: stops the API that `api:serve` started for the run.
 import { killPort } from '@nx/node/utils';
-/* eslint-disable */
 
-module.exports = async function () {
-  // Put clean up logic here (e.g. stopping services, docker-compose, etc.).
-  // Hint: `globalThis` is shared between setup and teardown.
-  const port = process.env.PORT ? Number(process.env.PORT) : 3000;
+module.exports = async function (): Promise<void> {
+  // §14: the API reads `API_PORT`; the Nx e2e scaffolding passes `PORT`.
+  const port = Number(process.env['PORT'] ?? process.env['API_PORT'] ?? 3000);
   await killPort(port);
   console.log(globalThis.__TEARDOWN_MESSAGE__);
 };

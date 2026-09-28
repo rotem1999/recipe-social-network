@@ -1,1 +1,2 @@
-/* You can add global styles to this file, and also import other style files */
+/* UI-3: intentionally empty — every token and component class lives in the one
+   global stylesheet owned by @rsn/web/ui, imported by src/main.tsx. */

@@ -1,12 +1,13 @@
+// GET /health (SPEC §11.6): liveness, unauthenticated (AUTH-8).
 import { Controller, Get } from '@nestjs/common';
-import { AppService } from './app.service';
+import type { HealthResponse } from '@rsn/shared/util-contracts';
+import { Public } from '@rsn/api/feature-auth';
 
-@Controller()
+@Controller('health')
 export class AppController {
-  constructor(private readonly appService: AppService) {}
-
+  @Public()
   @Get()
-  getData() {
-    return this.appService.getData();
+  health(): HealthResponse {
+    return { status: 'ok', time: new Date().toISOString() };
   }
 }
