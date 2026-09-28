@@ -35,7 +35,7 @@ Full description in `.claude/README.md`. Guard behaviours learned: a Bash comman
 
 ## Next step (Rotem, 2026-09-28: "then we'll run the program and test what and if needs changes")
 
-1. Rotem fills `.env.local` (copy `.env.example`; the values to complete are listed in the 2026-09-28 session report: DB password after creating the PostgreSQL role and database, two JWT secrets, TheMealDB v2 key, USDA key, OpenRouter key, optional Firebase trio).
+1. Rotem fills `.env.local` (copy `.env.example`; the values to complete are listed in the 2026-09-28 session report: DB password chosen in docker/setup-database.sql (run once in pgAdmin as postgres), two JWT secrets, TheMealDB v2 key, USDA key, OpenRouter key, optional Firebase trio).
 2. `pnpm nx run api-data-access-db:migrate`, then `pnpm nx serve api` and `pnpm nx run desktop:dev` (or `pnpm nx serve web` for a browser at http://localhost:4200).
 3. Run `pnpm nx e2e api-e2e` against the running API; `pnpm exec playwright install` then `pnpm nx e2e web-e2e`; `pnpm nx run desktop:build` then `pnpm nx e2e desktop-e2e`.
 4. Fix what the live run shows, SPEC-first.
