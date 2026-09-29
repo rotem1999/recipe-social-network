@@ -1,5 +1,5 @@
-// §3: REC-1/6/7/8, SAVE-1/4..10, CAT-3/4/7, IMG-6 and §3.1.1 validation on every recipe write.
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+// §3: REC-1/6/7/8, SAVE-1/4..10, CAT-3/4/7, IMG-3/6/7 and §3.1.1 validation on every recipe write.
+import { BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { IsNull } from 'typeorm';
 import type { DataSource, EntityManager, Repository } from 'typeorm';
 import {
@@ -123,7 +123,7 @@ interface Harness {
     delete: jest.Mock;
     findOne: jest.Mock;
   };
-  dataSource: { transaction: jest.Mock };
+  dataSource: { transaction: jest.Mock; query: jest.Mock };
   dtos: { toDetail: jest.Mock; cardsFor: jest.Mock };
   images: { upload: jest.Mock; signedUrls: jest.Mock; remove: jest.Mock };
   friends: { friendIdsOf: jest.Mock; areFriends: jest.Mock };
@@ -167,6 +167,7 @@ function harness(): Harness {
     transaction: jest.fn((callback: (m: EntityManager) => Promise<unknown>) =>
       callback(manager as unknown as EntityManager),
     ),
+    query: jest.fn().mockResolvedValue([]),
   };
 
   const dtos = {
@@ -1298,6 +1299,268 @@ describe('RecipesService', () => {
     });
   });
 
+  describe('IMG-3, IMG-7 removeImage', () => {
+    /** The owned-image statement, compared with its whitespace collapsed. */
+    const SWEEP =
+      'UPDATE "recipe_versions" SET "image_paths" = array_remove("image_paths", $1), "updated_at" = now() WHERE $1 = ANY("image_paths")';
+
+    function sweepCalls(h: Harness): [string, unknown[]][] {
+      return h.dataSource.query.mock.calls.map(
+        ([sql, parameters]: [string, unknown[]]) => [
+          sql.replace(/\s+/g, ' ').trim(),
+          parameters,
+        ],
+      );
+    }
+
+    /** A saved copy of source-1 that links the source's image and owns one of its own. */
+    function copyWithImages(h: Harness, ownerId = ME): void {
+      h.recipes.findOne.mockResolvedValue(
+        recipeRow({
+          id: 'copy-1',
+          ownerId,
+          savedFromRecipeId: 'source-1',
+          syncedVersionNumber: 1,
+          currentVersionId: 'copy-version-1',
+          currentVersion: versionRow({
+            id: 'copy-version-1',
+            recipeId: 'copy-1',
+            imagePaths: ['recipes/source-1/a.jpg', 'recipes/copy-1/b.jpg'],
+          }),
+        }),
+      );
+    }
+
+    it('IMG-7 drops a linked image (owned by the source) from the copy’s current version only', async () => {
+      const h = harness();
+      copyWithImages(h);
+
+      await h.service.removeImage(ME, 'copy-1', 0);
+
+      expect(h.versions.update).toHaveBeenCalledTimes(1);
+      expect(h.versions.update).toHaveBeenCalledWith(
+        { id: 'copy-version-1' },
+        { imagePaths: ['recipes/copy-1/b.jpg'] },
+      );
+      expect(h.dataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('IMG-7 leaves a linked image’s object in the bucket', async () => {
+      const h = harness();
+      copyWithImages(h);
+
+      await h.service.removeImage(ME, 'copy-1', 0);
+
+      expect(h.images.remove).not.toHaveBeenCalled();
+    });
+
+    it('IMG-7 returns the signed URLs of the paths left after dropping a linked image', async () => {
+      const h = harness();
+      copyWithImages(h);
+      h.images.signedUrls.mockResolvedValue(['https://signed.example/b']);
+
+      const result = await h.service.removeImage(ME, 'copy-1', 0);
+
+      expect(h.images.signedUrls).toHaveBeenCalledWith(['recipes/copy-1/b.jpg']);
+      expect(result).toEqual({ imageUrls: ['https://signed.example/b'] });
+    });
+
+    it('IMG-7 treats a path under another recipe whose id only starts with this id as linked', async () => {
+      const h = harness();
+      h.recipes.findOne.mockResolvedValue(
+        recipeRow({
+          ownerId: ME,
+          currentVersion: versionRow({
+            imagePaths: ['recipes/recipe-10/a.jpg'],
+          }),
+        }),
+      );
+
+      await h.service.removeImage(ME, 'recipe-1', 0);
+
+      expect(h.versions.update).toHaveBeenCalledWith(
+        { id: 'version-1' },
+        { imagePaths: [] },
+      );
+      expect(h.dataSource.query).not.toHaveBeenCalled();
+      expect(h.images.remove).not.toHaveBeenCalled();
+    });
+
+    it('IMG-7 drops an owned image from every version of every recipe that carries it', async () => {
+      const h = harness();
+      copyWithImages(h);
+
+      await h.service.removeImage(ME, 'copy-1', 1);
+
+      expect(h.dataSource.query).toHaveBeenCalledTimes(1);
+      expect(sweepCalls(h)).toEqual([[SWEEP, ['recipes/copy-1/b.jpg']]]);
+      expect(h.versions.update).not.toHaveBeenCalled();
+    });
+
+    it('IMG-3, IMG-7 deletes an owned image’s object after sweeping it out of the versions', async () => {
+      const h = harness();
+      copyWithImages(h);
+
+      await h.service.removeImage(ME, 'copy-1', 1);
+
+      expect(h.images.remove).toHaveBeenCalledTimes(1);
+      expect(h.images.remove).toHaveBeenCalledWith('recipes/copy-1/b.jpg');
+      expect(h.dataSource.query.mock.invocationCallOrder[0]).toBeLessThan(
+        h.images.remove.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('IMG-7 deletes the object of an own recipe’s image that copies link to', async () => {
+      const h = harness();
+      h.recipes.findOne.mockResolvedValue(
+        recipeRow({
+          id: 'source-1',
+          ownerId: ME,
+          visibility: 'public',
+          currentVersionId: 'source-version-2',
+          currentVersion: versionRow({
+            id: 'source-version-2',
+            recipeId: 'source-1',
+            versionNumber: 2,
+            imagePaths: ['recipes/source-1/a.jpg'],
+          }),
+        }),
+      );
+
+      await h.service.removeImage(ME, 'source-1', 0);
+
+      expect(sweepCalls(h)).toEqual([[SWEEP, ['recipes/source-1/a.jpg']]]);
+      expect(h.images.remove).toHaveBeenCalledWith('recipes/source-1/a.jpg');
+    });
+
+    describe('IMG-7 a bucket delete that fails', () => {
+      afterEach(() => jest.restoreAllMocks());
+
+      it('IMG-7 still resolves with the remaining URLs when the object cannot be deleted', async () => {
+        const warn = jest
+          .spyOn(Logger.prototype, 'warn')
+          .mockImplementation(() => undefined);
+        const h = harness();
+        copyWithImages(h);
+        h.images.remove.mockRejectedValue(new Error('bucket unavailable'));
+        h.images.signedUrls.mockResolvedValue(['https://signed.example/a']);
+
+        const result = await h.service.removeImage(ME, 'copy-1', 1);
+
+        expect(result).toEqual({ imageUrls: ['https://signed.example/a'] });
+        expect(h.images.signedUrls).toHaveBeenCalledWith([
+          'recipes/source-1/a.jpg',
+        ]);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining('recipes/copy-1/b.jpg'),
+        );
+      });
+
+      it('IMG-7 has already dropped the path from every version when the object delete fails', async () => {
+        jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+        const h = harness();
+        copyWithImages(h);
+        h.images.remove.mockRejectedValue(new Error('bucket unavailable'));
+
+        await h.service.removeImage(ME, 'copy-1', 1);
+
+        expect(sweepCalls(h)).toEqual([[SWEEP, ['recipes/copy-1/b.jpg']]]);
+        expect(h.dataSource.query.mock.invocationCallOrder[0]).toBeLessThan(
+          h.images.remove.mock.invocationCallOrder[0],
+        );
+      });
+
+      it('IMG-7 still resolves and logs when the failure is not an Error', async () => {
+        const warn = jest
+          .spyOn(Logger.prototype, 'warn')
+          .mockImplementation(() => undefined);
+        const h = harness();
+        copyWithImages(h);
+        h.images.remove.mockRejectedValue('timeout');
+
+        await expect(h.service.removeImage(ME, 'copy-1', 1)).resolves.toEqual({
+          imageUrls: [],
+        });
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining('recipes/copy-1/b.jpg'),
+        );
+      });
+
+      it('IMG-7 does not log when the object is deleted', async () => {
+        const warn = jest
+          .spyOn(Logger.prototype, 'warn')
+          .mockImplementation(() => undefined);
+        const h = harness();
+        copyWithImages(h);
+
+        await h.service.removeImage(ME, 'copy-1', 1);
+
+        expect(warn).not.toHaveBeenCalled();
+      });
+    });
+
+    it('IMG-7 returns the signed URLs of the paths left after deleting an owned image', async () => {
+      const h = harness();
+      copyWithImages(h);
+      h.images.signedUrls.mockResolvedValue(['https://signed.example/a']);
+
+      const result = await h.service.removeImage(ME, 'copy-1', 1);
+
+      expect(h.images.signedUrls).toHaveBeenCalledWith(['recipes/source-1/a.jpg']);
+      expect(result).toEqual({ imageUrls: ['https://signed.example/a'] });
+    });
+
+    it('IMG-4 returns no URLs and asks for none when the last image is removed', async () => {
+      const h = harness();
+      h.recipes.findOne.mockResolvedValue(
+        recipeRow({
+          ownerId: ME,
+          currentVersion: versionRow({ imagePaths: ['recipes/recipe-1/a.jpg'] }),
+        }),
+      );
+
+      const result = await h.service.removeImage(ME, 'recipe-1', 0);
+
+      expect(h.images.signedUrls).not.toHaveBeenCalled();
+      expect(result).toEqual({ imageUrls: [] });
+    });
+
+    it.each([
+      ['past the last image', 2],
+      ['negative', -1],
+      ['not a whole number', 0.5],
+    ])('IMG-3 answers 400 for an index %s and changes nothing', async (_name, index) => {
+      const h = harness();
+      copyWithImages(h);
+
+      const error = await failureOf<BadRequestException>(
+        h.service.removeImage(ME, 'copy-1', index),
+      );
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect(error.message).toBe(`This recipe has no image ${index}`);
+      expect(h.versions.update).not.toHaveBeenCalled();
+      expect(h.dataSource.query).not.toHaveBeenCalled();
+      expect(h.images.remove).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a linked image', 0],
+      ['an owned image', 1],
+    ])('IMG-3, REC-6 answers 403 when someone other than the owner removes %s', async (_name, index) => {
+      const h = harness();
+      copyWithImages(h, OWNER);
+
+      await expect(h.service.removeImage(ME, 'copy-1', index)).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(h.versions.update).not.toHaveBeenCalled();
+      expect(h.dataSource.query).not.toHaveBeenCalled();
+      expect(h.images.remove).not.toHaveBeenCalled();
+    });
+  });
+
   describe('REC-6, SAVE-4, SAVE-7 remove', () => {
     it('§12.1 soft-deletes an own recipe so saved copies keep their attribution', async () => {
       const { service, recipes, dataSource } = harness();
@@ -1392,6 +1655,233 @@ describe('RecipesService', () => {
       expect(manager.delete).not.toHaveBeenCalled();
     });
 
+    it.each([
+      ['an own recipe', {}],
+      [
+        'a fork of a user recipe',
+        {
+          savedFromRecipeId: 'source-1',
+          forkedFromRecipeId: 'source-1',
+          forkedAt: AT,
+        },
+      ],
+      [
+        'a fork of a TheMealDB meal',
+        {
+          source: 'themealdb' as RecipeSource,
+          externalId: '52772',
+          forkedAt: AT,
+        },
+      ],
+    ])('IMG-7, SAVE-7 keeps the image objects of %s it soft-deletes', async (_name, overrides) => {
+      const h = harness();
+      h.recipes.findOne.mockResolvedValue(
+        recipeRow({
+          ownerId: ME,
+          currentVersion: versionRow({ imagePaths: ['recipes/recipe-1/a.jpg'] }),
+          ...overrides,
+        }),
+      );
+      h.versions.find.mockResolvedValue([
+        versionRow({ imagePaths: ['recipes/recipe-1/a.jpg'] }),
+      ]);
+
+      await h.service.remove(ME, 'recipe-1');
+
+      expect(h.images.remove).not.toHaveBeenCalled();
+      expect(h.dataSource.query).not.toHaveBeenCalled();
+    });
+
+    describe('IMG-7, SAVE-7 image objects of a saved copy', () => {
+      function savedCopy(h: Harness): void {
+        h.recipes.findOne.mockResolvedValue(
+          recipeRow({
+            id: 'copy-1',
+            ownerId: ME,
+            savedFromRecipeId: 'source-1',
+            syncedVersionNumber: 2,
+            currentVersionId: 'copy-version-2',
+            currentVersion: versionRow({
+              id: 'copy-version-2',
+              recipeId: 'copy-1',
+              versionNumber: 2,
+              imagePaths: ['recipes/source-1/a.jpg', 'recipes/copy-1/c.jpg'],
+            }),
+          }),
+        );
+        h.versions.find.mockResolvedValue([
+          versionRow({
+            id: 'copy-version-1',
+            recipeId: 'copy-1',
+            versionNumber: 1,
+            imagePaths: ['recipes/source-1/a.jpg', 'recipes/copy-1/b.jpg'],
+          }),
+          versionRow({
+            id: 'copy-version-2',
+            recipeId: 'copy-1',
+            versionNumber: 2,
+            imagePaths: [
+              'recipes/source-1/a.jpg',
+              'recipes/copy-1/b.jpg',
+              'recipes/copy-1/c.jpg',
+            ],
+          }),
+          versionRow({
+            id: 'copy-version-3',
+            recipeId: 'copy-1',
+            versionNumber: 3,
+            imagePaths: null as unknown as string[],
+          }),
+        ]);
+      }
+
+      it('IMG-7, SAVE-7 reads the image paths of every version of the copy', async () => {
+        const h = harness();
+        savedCopy(h);
+
+        await h.service.remove(ME, 'copy-1');
+
+        expect(h.versions.find).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { recipeId: 'copy-1' } }),
+        );
+      });
+
+      it('IMG-7, SAVE-7 deletes each object the copy owns once, across all its versions', async () => {
+        const h = harness();
+        savedCopy(h);
+
+        await h.service.remove(ME, 'copy-1');
+
+        expect(h.images.remove).toHaveBeenCalledTimes(2);
+        expect(h.images.remove).toHaveBeenCalledWith('recipes/copy-1/b.jpg');
+        expect(h.images.remove).toHaveBeenCalledWith('recipes/copy-1/c.jpg');
+      });
+
+      it('IMG-7, SAVE-7 leaves the source’s linked objects in the bucket', async () => {
+        const h = harness();
+        savedCopy(h);
+
+        await h.service.remove(ME, 'copy-1');
+
+        expect(h.images.remove).not.toHaveBeenCalledWith('recipes/source-1/a.jpg');
+      });
+
+      it('IMG-7, SAVE-7 still hard-deletes the row, and deletes the objects after it', async () => {
+        const h = harness();
+        savedCopy(h);
+
+        await h.service.remove(ME, 'copy-1');
+
+        expect(h.manager.update).toHaveBeenCalledWith(
+          RecipeEntity,
+          { id: 'copy-1' },
+          { currentVersionId: null },
+        );
+        expect(h.manager.delete).toHaveBeenCalledWith(RecipeEntity, {
+          id: 'copy-1',
+        });
+        expect(h.recipes.update).not.toHaveBeenCalled();
+        expect(h.manager.delete.mock.invocationCallOrder[0]).toBeLessThan(
+          h.images.remove.mock.invocationCallOrder[0],
+        );
+      });
+
+      it('IMG-7, SAVE-7 deletes no object when the row could not be deleted', async () => {
+        const h = harness();
+        savedCopy(h);
+        h.manager.delete.mockRejectedValue(new Error('delete failed'));
+
+        await expect(h.service.remove(ME, 'copy-1')).rejects.toThrow(
+          'delete failed',
+        );
+        expect(h.images.remove).not.toHaveBeenCalled();
+      });
+
+      describe('IMG-7 a bucket delete that fails', () => {
+        afterEach(() => jest.restoreAllMocks());
+
+        it('IMG-7, SAVE-7 still resolves and still tries every other owned object', async () => {
+          const warn = jest
+            .spyOn(Logger.prototype, 'warn')
+            .mockImplementation(() => undefined);
+          const h = harness();
+          savedCopy(h);
+          h.images.remove.mockImplementation((path: string) =>
+            path === 'recipes/copy-1/b.jpg'
+              ? Promise.reject(new Error('bucket unavailable'))
+              : Promise.resolve(undefined),
+          );
+
+          await expect(h.service.remove(ME, 'copy-1')).resolves.toBeUndefined();
+
+          expect(h.images.remove).toHaveBeenCalledTimes(2);
+          expect(h.images.remove).toHaveBeenCalledWith('recipes/copy-1/b.jpg');
+          expect(h.images.remove).toHaveBeenCalledWith('recipes/copy-1/c.jpg');
+          expect(warn).toHaveBeenCalledTimes(1);
+          expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining('recipes/copy-1/b.jpg'),
+          );
+        });
+
+        it('IMG-7, SAVE-7 still resolves when every owned object fails, and logs each one', async () => {
+          const warn = jest
+            .spyOn(Logger.prototype, 'warn')
+            .mockImplementation(() => undefined);
+          const h = harness();
+          savedCopy(h);
+          h.images.remove.mockRejectedValue(new Error('bucket unavailable'));
+
+          await expect(h.service.remove(ME, 'copy-1')).resolves.toBeUndefined();
+
+          expect(h.images.remove).toHaveBeenCalledTimes(2);
+          expect(warn).toHaveBeenCalledTimes(2);
+          expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining('recipes/copy-1/b.jpg'),
+          );
+          expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining('recipes/copy-1/c.jpg'),
+          );
+        });
+
+        it('IMG-7, SAVE-7 has already hard-deleted the row when an object delete fails', async () => {
+          jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+          const h = harness();
+          savedCopy(h);
+          h.images.remove.mockRejectedValue(new Error('bucket unavailable'));
+
+          await h.service.remove(ME, 'copy-1');
+
+          expect(h.manager.delete).toHaveBeenCalledWith(RecipeEntity, {
+            id: 'copy-1',
+          });
+          expect(h.manager.delete.mock.invocationCallOrder[0]).toBeLessThan(
+            h.images.remove.mock.invocationCallOrder[0],
+          );
+        });
+      });
+
+      it('IMG-7, SAVE-7, CAT-7 deletes no object for a saved TheMealDB copy with only its external image', async () => {
+        const h = harness();
+        h.recipes.findOne.mockResolvedValue(
+          recipeRow({
+            ownerId: ME,
+            source: 'themealdb',
+            externalId: '52772',
+            forkedAt: null,
+            currentVersion: versionRow(),
+          }),
+        );
+        h.versions.find.mockResolvedValue([versionRow()]);
+
+        await h.service.remove(ME, 'recipe-1');
+
+        expect(h.manager.delete).toHaveBeenCalledWith(RecipeEntity, {
+          id: 'recipe-1',
+        });
+        expect(h.images.remove).not.toHaveBeenCalled();
+      });
+    });
+
     it('REC-6 answers 403 when someone other than the owner removes a recipe', async () => {
       const { service, recipes, dataSource } = harness();
       recipes.findOne.mockResolvedValue(
@@ -1403,6 +1893,27 @@ describe('RecipesService', () => {
       );
       expect(recipes.update).not.toHaveBeenCalled();
       expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('IMG-7, REC-6 deletes no object when someone other than the owner removes a saved copy', async () => {
+      const h = harness();
+      h.recipes.findOne.mockResolvedValue(
+        recipeRow({
+          id: 'copy-1',
+          ownerId: OWNER,
+          savedFromRecipeId: 'source-1',
+          currentVersion: versionRow({ imagePaths: ['recipes/copy-1/b.jpg'] }),
+        }),
+      );
+      h.versions.find.mockResolvedValue([
+        versionRow({ imagePaths: ['recipes/copy-1/b.jpg'] }),
+      ]);
+
+      await expect(h.service.remove(ME, 'copy-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(h.dataSource.transaction).not.toHaveBeenCalled();
+      expect(h.images.remove).not.toHaveBeenCalled();
     });
   });
 });

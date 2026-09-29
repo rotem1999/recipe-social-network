@@ -1,7 +1,8 @@
-// §3 (REC-1..8, IMG-3/6, SAVE-1..10, CAT-3/4/7): every write and read of a recipe.
+// §3 (REC-1..8, IMG-3/6/7, SAVE-1..10, CAT-3/4/7): every write and read of a recipe.
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -74,6 +75,8 @@ function versionColumns(
 
 @Injectable()
 export class RecipesService {
+  private readonly logger = new Logger(RecipesService.name);
+
   constructor(
     @InjectRepository(RecipeEntity)
     private readonly recipes: Repository<RecipeEntity>,
@@ -245,12 +248,24 @@ export class RecipesService {
 
   /**
    * REC-6, SAVE-4, SAVE-7, §12.1: an own recipe or a fork is soft-deleted so saved copies
-   * keep their attribution; a saved copy is removed outright.
+   * keep their attribution and images; a saved copy is removed outright, together with
+   * the image objects it owns (IMG-7).
    */
   async remove(userId: string, id: string): Promise<void> {
     const recipe = await this.access.loadOrThrow(id);
     this.access.assertIsOwner(userId, recipe);
     if (isSavedCopy(recipe)) {
+      const versionRows = await this.versions.find({
+        where: { recipeId: recipe.id },
+        select: { imagePaths: true },
+      });
+      const ownedPaths = [
+        ...new Set(
+          versionRows
+            .flatMap((row) => row.imagePaths ?? [])
+            .filter((path) => ownsImage(recipe.id, path)),
+        ),
+      ];
       await this.dataSource.transaction(async (manager) => {
         // current_version_id points at a version, so it is cleared before the cascade.
         await manager.update(
@@ -260,6 +275,7 @@ export class RecipesService {
         );
         await manager.delete(RecipeEntity, { id: recipe.id });
       });
+      for (const path of ownedPaths) await this.removeObject(path);
       return;
     }
     await this.recipes.update({ id: recipe.id }, { deletedAt: new Date() });
@@ -485,7 +501,11 @@ export class RecipesService {
     return { imageUrls: await this.signedUrls(next) };
   }
 
-  /** IMG-3: removes one image of the current version from the bucket and the version. */
+  /**
+   * IMG-3, IMG-7: removes one image of the current version. A linked image (a copy's or a
+   * sync's, owned by another recipe) only leaves this version; an image this recipe owns
+   * is deleted from the bucket and from every version of every recipe that carries it.
+   */
   async removeImage(
     userId: string,
     id: string,
@@ -500,8 +520,17 @@ export class RecipesService {
       throw new BadRequestException(`This recipe has no image ${index}`);
     }
     const next = paths.filter((_, position) => position !== index);
-    await this.versions.update({ id: version.id }, { imagePaths: next });
-    await this.images.remove(objectPath);
+    if (!ownsImage(recipe.id, objectPath)) {
+      await this.versions.update({ id: version.id }, { imagePaths: next });
+      return { imageUrls: await this.signedUrls(next) };
+    }
+    await this.dataSource.query(
+      `UPDATE "recipe_versions"
+       SET "image_paths" = array_remove("image_paths", $1), "updated_at" = now()
+       WHERE $1 = ANY("image_paths")`,
+      [objectPath],
+    );
+    await this.removeObject(objectPath);
     return { imageUrls: await this.signedUrls(next) };
   }
 
@@ -582,6 +611,21 @@ export class RecipesService {
     return version;
   }
 
+  /**
+   * IMG-7: the bucket is changed after the database, so a failed delete only leaves an
+   * unused object behind; it is logged and the request still succeeds.
+   */
+  private async removeObject(objectPath: string): Promise<void> {
+    try {
+      await this.images.remove(objectPath);
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : 'unknown error';
+      this.logger.warn(
+        `Could not delete image ${objectPath} (${reason}); the object is left unused`,
+      );
+    }
+  }
+
   /** IMG-4: non-empty signed URLs, or an empty list when Firebase is unconfigured. */
   private async signedUrls(paths: string[]): Promise<string[]> {
     if (paths.length === 0) return [];
@@ -589,6 +633,11 @@ export class RecipesService {
       (url) => url.length > 0,
     );
   }
+}
+
+/** IMG-6, IMG-7: an image belongs to the recipe whose id is in its object path. */
+function ownsImage(recipeId: string, objectPath: string): boolean {
+  return objectPath.startsWith(`recipes/${recipeId}/`);
 }
 
 /** A stored version read back as §3.1.1 content (used when a copy is made). */
