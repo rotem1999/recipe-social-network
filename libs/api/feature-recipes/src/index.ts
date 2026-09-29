@@ -4,7 +4,12 @@ export { RecipesModule } from './lib/recipes.module';
 export { RecipesController } from './lib/recipes.controller';
 export { RecipesService } from './lib/recipes.service';
 export type { RecipeImageUpload } from './lib/recipes.service';
-export { RecipeAccessService, relationOf } from './lib/recipe-access.service';
+export {
+  RecipeAccessService,
+  isCopy,
+  isSavedCopy,
+  relationOf,
+} from './lib/recipe-access.service';
 export { RecipeDtoService } from './lib/recipe-dto.service';
 export type {
   PublicCardsOptions,

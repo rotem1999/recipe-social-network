@@ -177,6 +177,7 @@ function AppShell(): ReactElement {
           mealId={route.mealId}
           onBack={() => navigate(DISCOVER)}
           onSaved={openFromHome}
+          onCook={cook}
         />
       );
       break;

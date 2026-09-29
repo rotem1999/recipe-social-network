@@ -1,4 +1,5 @@
-// §11.6 response bodies: RATE-2/4, COM-1/2, CAT-6, SAVE-2/6, REC-6/7 on RecipeDetailDto.
+// §11.6 response bodies: RATE-2/4, COM-1/2, CAT-6, SAVE-2/6/7/9/10, DISC-10, REC-6/7.
+import { In, IsNull } from 'typeorm';
 import type { Repository } from 'typeorm';
 import type {
   RatingEntity,
@@ -56,8 +57,11 @@ function recipeRow(overrides: Partial<RecipeEntity> = {}): RecipeEntity {
     currentVersionId: 'version-1',
     savedFromRecipeId: null,
     forkedFromRecipeId: null,
+    forkedAt: null,
+    syncedVersionNumber: null,
     source: 'user' as RecipeSource,
     externalId: null,
+    externalTitle: null,
     externalImageUrl: null,
     ratingAverage: null,
     ratingCount: 0,
@@ -106,9 +110,15 @@ function harness(relation: RecipeRelation, isOwner = false): Harness {
     find: jest.fn().mockResolvedValue([]),
     findOne: jest.fn().mockResolvedValue(null),
   };
-  const versions = { count: jest.fn().mockResolvedValue(1), find: jest.fn() };
+  const versions = {
+    count: jest.fn().mockResolvedValue(1),
+    find: jest.fn().mockResolvedValue([]),
+  };
   const shares = { find: jest.fn().mockResolvedValue([]) };
-  const ratings = { findOne: jest.fn().mockResolvedValue(null), find: jest.fn() };
+  const ratings = {
+    findOne: jest.fn().mockResolvedValue(null),
+    find: jest.fn().mockResolvedValue([]),
+  };
   const users = {
     findOne: jest.fn().mockResolvedValue({ id: OWNER, username: 'owner' }),
     find: jest.fn().mockResolvedValue([]),
@@ -332,11 +342,16 @@ describe('RecipeDtoService.toDetail', () => {
       });
     });
 
-    it('SAVE-6 names the recipe a fork came from and the one a copy was saved from', async () => {
-      const { service, recipes } = harness('saved');
+    it('SAVE-6, SAVE-9 names the recipe a fork came from as forkedFrom only, never both lines', async () => {
+      const { service, recipes, access } = harness('own', true);
+      access.relationFor.mockImplementation(
+        async (_userId: string, recipe: RecipeEntity) =>
+          recipe.id === 'source-1' ? 'public' : 'own',
+      );
       recipes.findOne.mockResolvedValue(
         recipeRow({
           id: 'source-1',
+          visibility: 'public',
           currentVersion: versionRow({ title: 'Original shakshuka' }),
           owner: { id: OWNER, username: 'owner' } as UserEntity,
         }),
@@ -347,6 +362,7 @@ describe('RecipeDtoService.toDetail', () => {
           ownerId: ME,
           savedFromRecipeId: 'source-1',
           forkedFromRecipeId: 'source-1',
+          forkedAt: AT,
         }),
         versionRow(),
         ME,
@@ -356,8 +372,9 @@ describe('RecipeDtoService.toDetail', () => {
         recipeId: 'source-1',
         title: 'Original shakshuka',
         ownerUsername: 'owner',
+        source: 'user',
       });
-      expect(detail.savedFrom).toEqual(detail.forkedFrom);
+      expect(detail.savedFrom).toBeNull();
     });
 
     it('SAVE-6 leaves both attributions null on a recipe written from scratch', async () => {
@@ -442,5 +459,556 @@ describe('RecipeDtoService.toDetail', () => {
         'https://www.themealdb.com/images/media/meals/x.jpg',
       );
     });
+  });
+});
+
+/** The source of the copies below: someone else's public recipe, now at version 3. */
+function sourceRow(overrides: Partial<RecipeEntity> = {}): RecipeEntity {
+  return recipeRow({
+    id: 'source-1',
+    ownerId: OWNER,
+    visibility: 'public',
+    currentVersionId: 'source-version-3',
+    currentVersion: versionRow({
+      id: 'source-version-3',
+      recipeId: 'source-1',
+      versionNumber: 3,
+      title: 'Original shakshuka',
+    }),
+    owner: { id: OWNER, username: 'owner' } as UserEntity,
+    ...overrides,
+  });
+}
+
+/** The caller's copy of `source-1`. */
+function copyRow(overrides: Partial<RecipeEntity> = {}): RecipeEntity {
+  return recipeRow({
+    id: 'copy-1',
+    ownerId: ME,
+    savedFromRecipeId: 'source-1',
+    syncedVersionNumber: 3,
+    currentVersion: versionRow({ id: 'copy-version', recipeId: 'copy-1' }),
+    ...overrides,
+  });
+}
+
+/** relationFor answers `copyRelation` for the copy and `sourceRelation` for its source. */
+function withRelations(
+  h: Harness,
+  copyRelation: RecipeRelation,
+  sourceRelation: RecipeRelation,
+): void {
+  h.access.relationFor.mockImplementation(
+    async (_userId: string, recipe: RecipeEntity) =>
+      recipe.id === 'source-1' ? sourceRelation : copyRelation,
+  );
+}
+
+describe('RecipeDtoService.toDetail SAVE-9 attribution line', () => {
+  it('SAVE-9 gives a saved copy of a user recipe savedFrom with the source’s current title and owner, linked while viewable', async () => {
+    const h = harness('saved', true);
+    withRelations(h, 'saved', 'public');
+    h.recipes.findOne.mockResolvedValue(sourceRow());
+
+    const detail = await h.service.toDetail(copyRow(), versionRow(), ME);
+
+    expect(detail.savedFrom).toEqual({
+      recipeId: 'source-1',
+      title: 'Original shakshuka',
+      ownerUsername: 'owner',
+      source: 'user',
+    });
+    expect(detail.forkedFrom).toBeNull();
+    expect(h.recipes.findOne).toHaveBeenCalledWith({
+      where: { id: 'source-1' },
+      relations: { currentVersion: true, owner: true },
+    });
+  });
+
+  it('SAVE-9 links a source shared with the caller', async () => {
+    const h = harness('saved', true);
+    withRelations(h, 'saved', 'shared');
+    h.recipes.findOne.mockResolvedValue(sourceRow({ visibility: 'shared' }));
+
+    const detail = await h.service.toDetail(copyRow(), versionRow(), ME);
+
+    expect(detail.savedFrom?.recipeId).toBe('source-1');
+  });
+
+  it('SAVE-9 keeps title and owner but drops the link when the source is soft-deleted', async () => {
+    const h = harness('saved', true);
+    withRelations(h, 'saved', 'public');
+    h.recipes.findOne.mockResolvedValue(sourceRow({ deletedAt: AT }));
+
+    const detail = await h.service.toDetail(copyRow(), versionRow(), ME);
+
+    expect(detail.savedFrom).toEqual({
+      recipeId: null,
+      title: 'Original shakshuka',
+      ownerUsername: 'owner',
+      source: 'user',
+    });
+  });
+
+  it('SAVE-9 drops the link when the caller can no longer view the source', async () => {
+    const h = harness('own', true);
+    withRelations(h, 'own', 'none');
+    h.recipes.findOne.mockResolvedValue(sourceRow({ visibility: 'private' }));
+
+    const detail = await h.service.toDetail(
+      copyRow({ forkedAt: AT, forkedFromRecipeId: 'source-1' }),
+      versionRow(),
+      ME,
+    );
+
+    expect(detail.forkedFrom).toEqual({
+      recipeId: null,
+      title: 'Original shakshuka',
+      ownerUsername: 'owner',
+      source: 'user',
+    });
+    expect(detail.savedFrom).toBeNull();
+  });
+
+  it('SAVE-9, CAT-7 gives a saved TheMealDB copy "Saved from <strMeal> on TheMealDB" with no link, no owner and no lookup', async () => {
+    const h = harness('saved', true);
+
+    const detail = await h.service.toDetail(
+      recipeRow({
+        ownerId: ME,
+        source: 'themealdb',
+        externalId: '52772',
+        externalTitle: 'Teriyaki Chicken Casserole',
+      }),
+      versionRow({ title: 'Renamed later' }),
+      ME,
+    );
+
+    expect(detail.savedFrom).toEqual({
+      recipeId: null,
+      title: 'Teriyaki Chicken Casserole',
+      ownerUsername: null,
+      source: 'themealdb',
+    });
+    expect(detail.forkedFrom).toBeNull();
+    expect(h.recipes.findOne).not.toHaveBeenCalled();
+    // SAVE-9: the §3.3 attribution string still shows at the bottom.
+    expect(detail.attribution).toBe(THEMEALDB_ATTRIBUTION);
+  });
+
+  it('SAVE-9, CAT-7 moves a TheMealDB fork’s line to forkedFrom', async () => {
+    const h = harness('own', true);
+
+    const detail = await h.service.toDetail(
+      recipeRow({
+        ownerId: ME,
+        source: 'themealdb',
+        externalId: '52772',
+        externalTitle: 'Teriyaki Chicken Casserole',
+        forkedAt: AT,
+      }),
+      versionRow(),
+      ME,
+    );
+
+    expect(detail.forkedFrom).toEqual({
+      recipeId: null,
+      title: 'Teriyaki Chicken Casserole',
+      ownerUsername: null,
+      source: 'themealdb',
+    });
+    expect(detail.savedFrom).toBeNull();
+  });
+
+  it('SAVE-7 carries the relation the access service decides for a saved copy', async () => {
+    const h = harness('saved', true);
+    withRelations(h, 'saved', 'public');
+    h.recipes.findOne.mockResolvedValue(sourceRow());
+
+    const detail = await h.service.toDetail(copyRow(), versionRow(), ME);
+
+    expect(detail.relation).toBe('saved');
+    expect(detail.canCook).toBe(true);
+    expect(detail.canEdit).toBe(true);
+  });
+});
+
+describe('RecipeDtoService.toDetail SAVE-10 and DISC-10 copy state', () => {
+  it('SAVE-10 flags the caller’s copy when the viewable source moved past the synced version', async () => {
+    const h = harness('saved', true);
+    withRelations(h, 'saved', 'public');
+    h.recipes.find.mockResolvedValue([sourceRow()]);
+
+    const detail = await h.service.toDetail(
+      copyRow({ syncedVersionNumber: 2 }),
+      versionRow(),
+      ME,
+    );
+
+    expect(detail.updateAvailable).toBe(true);
+    expect(detail.myCopyId).toBeNull();
+    expect(h.recipes.find).toHaveBeenCalledWith({
+      where: { id: In(['source-1']), deletedAt: IsNull() },
+      relations: { currentVersion: true },
+    });
+    expect(h.access.sharedRecipeIds).toHaveBeenCalledWith(ME, ['source-1']);
+  });
+
+  it('SAVE-10 flags a fork too', async () => {
+    const h = harness('own', true);
+    h.recipes.find.mockResolvedValue([sourceRow()]);
+
+    const detail = await h.service.toDetail(
+      copyRow({
+        syncedVersionNumber: 2,
+        forkedAt: AT,
+        forkedFromRecipeId: 'source-1',
+      }),
+      versionRow(),
+      ME,
+    );
+
+    expect(detail.updateAvailable).toBe(true);
+  });
+
+  it('SAVE-10 reports no update when the copy is at the source’s version', async () => {
+    const h = harness('saved', true);
+    h.recipes.find.mockResolvedValue([sourceRow()]);
+
+    const detail = await h.service.toDetail(
+      copyRow({ syncedVersionNumber: 3 }),
+      versionRow(),
+      ME,
+    );
+
+    expect(detail.updateAvailable).toBe(false);
+  });
+
+  it('SAVE-10 reports no update when the source is deleted (the query finds no live source)', async () => {
+    const h = harness('saved', true);
+    h.recipes.find.mockResolvedValue([]);
+
+    const detail = await h.service.toDetail(
+      copyRow({ syncedVersionNumber: 1 }),
+      versionRow(),
+      ME,
+    );
+
+    expect(detail.updateAvailable).toBe(false);
+  });
+
+  it('SAVE-10 reports no update when the caller can no longer view the source', async () => {
+    const h = harness('saved', true);
+    h.recipes.find.mockResolvedValue([sourceRow({ visibility: 'private' })]);
+
+    const detail = await h.service.toDetail(
+      copyRow({ syncedVersionNumber: 1 }),
+      versionRow(),
+      ME,
+    );
+
+    expect(detail.updateAvailable).toBe(false);
+  });
+
+  it('SAVE-10 reports an update from a source shared with the caller', async () => {
+    const h = harness('saved', true);
+    h.recipes.find.mockResolvedValue([sourceRow({ visibility: 'shared' })]);
+    h.access.sharedRecipeIds.mockResolvedValue(new Set(['source-1']));
+
+    const detail = await h.service.toDetail(
+      copyRow({ syncedVersionNumber: 1 }),
+      versionRow(),
+      ME,
+    );
+
+    expect(detail.updateAvailable).toBe(true);
+  });
+
+  it('SAVE-10 never reports an update on a copy with no synced version', async () => {
+    const h = harness('saved', true);
+    h.recipes.find.mockResolvedValue([sourceRow()]);
+
+    const detail = await h.service.toDetail(
+      copyRow({ syncedVersionNumber: null }),
+      versionRow(),
+      ME,
+    );
+
+    expect(detail.updateAvailable).toBe(false);
+  });
+
+  it('SAVE-10, CAT-7 never checks a TheMealDB copy for updates', async () => {
+    const h = harness('saved', true);
+
+    const detail = await h.service.toDetail(
+      recipeRow({ ownerId: ME, source: 'themealdb', externalId: '52772' }),
+      versionRow(),
+      ME,
+    );
+
+    expect(detail.updateAvailable).toBe(false);
+    expect(detail.myCopyId).toBeNull();
+    expect(h.recipes.find).not.toHaveBeenCalled();
+  });
+
+  it('DISC-10 gives someone else’s public recipe the id of the caller’s live copy', async () => {
+    const h = harness('public');
+    h.recipes.find.mockResolvedValue([
+      { id: 'copy-1', savedFromRecipeId: 'source-1', syncedVersionNumber: 3 },
+    ]);
+
+    const detail = await h.service.toDetail(sourceRow(), versionRow(), ME);
+
+    expect(detail.myCopyId).toBe('copy-1');
+    expect(detail.updateAvailable).toBe(false);
+    expect(h.recipes.find).toHaveBeenCalledWith({
+      where: {
+        ownerId: ME,
+        savedFromRecipeId: In(['source-1']),
+        deletedAt: IsNull(),
+      },
+      select: { id: true, savedFromRecipeId: true, syncedVersionNumber: true },
+    });
+  });
+
+  it('DISC-10, SAVE-10 flags the original when the caller’s copy is behind it', async () => {
+    const h = harness('public');
+    h.recipes.find.mockResolvedValue([
+      { id: 'copy-1', savedFromRecipeId: 'source-1', syncedVersionNumber: 2 },
+    ]);
+
+    const detail = await h.service.toDetail(sourceRow(), versionRow(), ME);
+
+    expect(detail.myCopyId).toBe('copy-1');
+    expect(detail.updateAvailable).toBe(true);
+  });
+
+  it('DISC-10 leaves myCopyId null when the caller has no live copy', async () => {
+    const h = harness('public');
+    h.recipes.find.mockResolvedValue([]);
+
+    const detail = await h.service.toDetail(sourceRow(), versionRow(), ME);
+
+    expect(detail.myCopyId).toBeNull();
+    expect(detail.updateAvailable).toBe(false);
+  });
+
+  it('SAVE-10 never calls someone else’s recipe behind a copy with no synced version', async () => {
+    const h = harness('public');
+    h.recipes.find.mockResolvedValue([
+      { id: 'copy-1', savedFromRecipeId: 'source-1', syncedVersionNumber: null },
+    ]);
+
+    const detail = await h.service.toDetail(sourceRow(), versionRow(), ME);
+
+    expect(detail.myCopyId).toBe('copy-1');
+    expect(detail.updateAvailable).toBe(false);
+  });
+
+  it('DISC-10 leaves myCopyId null and updateAvailable false on a recipe the caller wrote', async () => {
+    const h = harness('own', true);
+
+    const detail = await h.service.toDetail(
+      recipeRow({ ownerId: ME, visibility: 'public' }),
+      versionRow(),
+      ME,
+    );
+
+    expect(detail.myCopyId).toBeNull();
+    expect(detail.updateAvailable).toBe(false);
+    expect(h.recipes.find).not.toHaveBeenCalled();
+  });
+});
+
+describe('RecipeDtoService.cardsFor (SAVE-3, SAVE-7, SAVE-10)', () => {
+  it('SAVE-7 classifies unforked copies as "saved" and forks as "own" on Home cards', async () => {
+    const h = harness('none');
+    h.users.find.mockResolvedValue([{ id: ME, username: 'me' }]);
+
+    const cards = await h.service.cardsFor(ME, [
+      copyRow({ id: 'copy-saved', syncedVersionNumber: null }),
+      copyRow({
+        id: 'copy-fork',
+        forkedAt: AT,
+        forkedFromRecipeId: 'source-1',
+        syncedVersionNumber: null,
+      }),
+      recipeRow({
+        id: 'meal-saved',
+        ownerId: ME,
+        source: 'themealdb',
+        currentVersion: versionRow({ recipeId: 'meal-saved' }),
+      }),
+      recipeRow({
+        id: 'meal-fork',
+        ownerId: ME,
+        source: 'themealdb',
+        forkedAt: AT,
+        currentVersion: versionRow({ recipeId: 'meal-fork' }),
+      }),
+    ]);
+
+    expect(cards.map((card) => [card.id, card.relation])).toEqual([
+      ['copy-saved', 'saved'],
+      ['copy-fork', 'own'],
+      ['meal-saved', 'saved'],
+      ['meal-fork', 'own'],
+    ]);
+  });
+
+  it('SAVE-10 sets the "Update available" flag on each Home copy that is behind a viewable source', async () => {
+    const h = harness('none');
+    h.recipes.find.mockResolvedValue([
+      sourceRow(),
+      sourceRow({
+        id: 'source-2',
+        currentVersion: versionRow({ recipeId: 'source-2', versionNumber: 5 }),
+      }),
+    ]);
+
+    const cards = await h.service.cardsFor(ME, [
+      copyRow({ id: 'copy-behind', syncedVersionNumber: 2 }),
+      copyRow({
+        id: 'copy-current',
+        savedFromRecipeId: 'source-2',
+        syncedVersionNumber: 5,
+      }),
+    ]);
+
+    expect(
+      cards.map((card) => [card.id, card.updateAvailable, card.myCopyId]),
+    ).toEqual([
+      ['copy-behind', true, null],
+      ['copy-current', false, null],
+    ]);
+    // One query for every source of the page, not one per card.
+    expect(h.recipes.find).toHaveBeenCalledTimes(1);
+    expect(h.recipes.find).toHaveBeenCalledWith({
+      where: { id: In(['source-1', 'source-2']), deletedAt: IsNull() },
+      relations: { currentVersion: true },
+    });
+  });
+});
+
+describe('RecipeDtoService.listPublicCards (DISC-1, DISC-10, SAVE-7)', () => {
+  it('SAVE-7 uses relationOf: the caller’s own recipe and their published fork are "own", others "public"', async () => {
+    const h = harness('none');
+    h.recipes.find
+      .mockResolvedValueOnce([
+        recipeRow({
+          id: 'mine',
+          ownerId: ME,
+          visibility: 'public',
+          currentVersion: versionRow({ recipeId: 'mine' }),
+        }),
+        copyRow({
+          id: 'my-fork',
+          visibility: 'public',
+          forkedAt: AT,
+          forkedFromRecipeId: 'source-1',
+        }),
+        sourceRow(),
+      ])
+      .mockResolvedValue([]);
+
+    const page = await h.service.listPublicCards(ME, { page: 1, pageSize: 20 });
+
+    expect(page.cards.map((card) => [card.id, card.relation])).toEqual([
+      ['mine', 'own'],
+      ['my-fork', 'own'],
+      ['source-1', 'public'],
+    ]);
+  });
+
+  it('DISC-10, SAVE-10 marks the public cards the caller has a live copy of, with the update flag', async () => {
+    const h = harness('none');
+    h.recipes.find
+      .mockResolvedValueOnce([
+        sourceRow(),
+        sourceRow({
+          id: 'source-2',
+          currentVersion: versionRow({ recipeId: 'source-2', versionNumber: 1 }),
+        }),
+        sourceRow({
+          id: 'source-3',
+          currentVersion: versionRow({ recipeId: 'source-3', versionNumber: 1 }),
+        }),
+      ])
+      .mockResolvedValueOnce([
+        { id: 'copy-1', savedFromRecipeId: 'source-1', syncedVersionNumber: 2 },
+        { id: 'copy-2', savedFromRecipeId: 'source-2', syncedVersionNumber: 1 },
+      ]);
+
+    const page = await h.service.listPublicCards(ME, { page: 1, pageSize: 20 });
+
+    expect(
+      page.cards.map((card) => [card.id, card.myCopyId, card.updateAvailable]),
+    ).toEqual([
+      ['source-1', 'copy-1', true],
+      ['source-2', 'copy-2', false],
+      ['source-3', null, false],
+    ]);
+    expect(h.recipes.find).toHaveBeenLastCalledWith({
+      where: {
+        ownerId: ME,
+        savedFromRecipeId: In(['source-1', 'source-2', 'source-3']),
+        deletedAt: IsNull(),
+      },
+      select: { id: true, savedFromRecipeId: true, syncedVersionNumber: true },
+    });
+  });
+});
+
+describe('RecipeDtoService.catalogueCopyIds (DISC-10, CAT-7)', () => {
+  it('DISC-10 maps each idMeal to the caller’s live TheMealDB copy', async () => {
+    const h = harness('none');
+    h.recipes.find.mockResolvedValue([
+      { id: 'copy-a', externalId: '52772' },
+      { id: 'copy-b', externalId: '52959' },
+    ]);
+
+    const copies = await h.service.catalogueCopyIds(ME, [
+      '52772',
+      '52959',
+      '52772',
+      '53000',
+    ]);
+
+    expect(copies).toEqual(
+      new Map([
+        ['52772', 'copy-a'],
+        ['52959', 'copy-b'],
+      ]),
+    );
+    expect(copies.has('53000')).toBe(false);
+    expect(h.recipes.find).toHaveBeenCalledWith({
+      where: {
+        ownerId: ME,
+        source: 'themealdb',
+        externalId: In(['52772', '52959', '53000']),
+        savedFromRecipeId: IsNull(),
+        deletedAt: IsNull(),
+      },
+      select: { id: true, externalId: true },
+    });
+  });
+
+  it('CAT-7, DISC-10 leaves out copies of another user’s published TheMealDB fork (saved_from_recipe_id set)', async () => {
+    const h = harness('none');
+
+    await h.service.catalogueCopyIds(ME, ['52772']);
+
+    const [firstCall] = h.recipes.find.mock.calls as [
+      { where: Record<string, unknown> },
+    ][];
+    expect(firstCall[0].where['savedFromRecipeId']).toEqual(IsNull());
+    expect(firstCall[0].where['source']).toBe('themealdb');
+  });
+
+  it('DISC-10 skips the query for an empty list', async () => {
+    const h = harness('none');
+
+    await expect(h.service.catalogueCopyIds(ME, [])).resolves.toEqual(new Map());
+    expect(h.recipes.find).not.toHaveBeenCalled();
   });
 });

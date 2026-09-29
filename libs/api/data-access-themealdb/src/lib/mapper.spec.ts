@@ -259,7 +259,15 @@ describe('toCatalogueItem', () => {
       name: 'Beef and Mustard Pie',
       thumbnailUrl: 'https://www.themealdb.com/images/media/meals/pie.jpg',
       category: 'Beef',
+      myCopyId: null,
     });
+  });
+
+  it('DISC-10 leaves myCopyId null for feature-discover to fill per caller', () => {
+    expect(
+      toCatalogueItem({ idMeal: '1', strMeal: 'X', strMealThumb: null }, 'Side')
+        .myCopyId,
+    ).toBeNull();
   });
 
   it('DISC-9 uses an empty thumbnail when the row carries none', () => {
@@ -285,6 +293,13 @@ describe('toCataloguePreview', () => {
   it('CAT-2 leaves the area null when the meal has none', () => {
     expect(toCataloguePreview(meal({ strArea: '  ' })).area).toBe(null);
     expect(toCataloguePreview(meal({ strArea: null })).area).toBe(null);
+  });
+
+  it('DISC-10 leaves myCopyId null for feature-discover to fill per caller', () => {
+    const preview = toCataloguePreview(meal());
+
+    expect(preview).toHaveProperty('myCopyId');
+    expect(preview.myCopyId).toBeNull();
   });
 
   it('CAT-1 carries the exact attribution string TheMealDB requires (§16 M5)', () => {

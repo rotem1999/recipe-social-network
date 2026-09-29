@@ -92,10 +92,16 @@ export interface RatingSummaryDto {
   mine: number | null;
 }
 
+/**
+ * SAVE-9: the source of a copy. `recipeId` is set only while the caller can still view
+ * the source (the line is then a link); a TheMealDB source has `source: 'themealdb'`,
+ * the meal name as `title` and no owner.
+ */
 export interface RecipeAttributionDto {
   recipeId: string | null;
   title: string;
   ownerUsername: string | null;
+  source: RecipeSource;
 }
 
 export interface RecipeCardDto {
@@ -113,6 +119,10 @@ export interface RecipeCardDto {
   rating: RatingSummaryDto | null;
   versionNumber: number;
   updatedAt: string;
+  /** DISC-10: on someone else's recipe, the caller's live copy of it; otherwise null. */
+  myCopyId: string | null;
+  /** SAVE-10: the caller's copy (this recipe, or `myCopyId`) is behind its source. */
+  updateAvailable: boolean;
 }
 
 export interface RecipeDetailDto extends RecipeCardDto {
@@ -165,6 +175,8 @@ export interface CatalogueItemDto {
   name: string;
   thumbnailUrl: string;
   category: Category;
+  /** DISC-10: the caller's live copy of this meal, or null. */
+  myCopyId: string | null;
 }
 
 export interface DiscoverCategoryDto {
@@ -186,6 +198,8 @@ export interface CataloguePreviewDto extends RecipeContent {
   thumbnailUrl: string;
   area: string | null;
   attribution: string;
+  /** DISC-10: the caller's live copy of this meal, or null. */
+  myCopyId: string | null;
 }
 
 // ---------- social (§6) ----------

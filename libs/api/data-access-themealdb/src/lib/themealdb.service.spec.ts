@@ -101,6 +101,8 @@ describe('TheMealDbService', () => {
         name: 'Beef and Mustard Pie',
         thumbnailUrl: 'https://www.themealdb.com/images/media/meals/pie.jpg',
         category: 'Beef',
+        // DISC-10: feature-discover fills the caller's copy id later.
+        myCopyId: null,
       },
     ]);
   });

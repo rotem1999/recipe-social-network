@@ -9,6 +9,16 @@ import { In, Repository } from 'typeorm';
 import { RecipeEntity, RecipeShareEntity } from '@rsn/api/data-access-db';
 import type { RecipeRelation } from '@rsn/shared/util-domain';
 
+/** SAVE-7, CAT-7: a recipe saved from a public user recipe or from TheMealDB. */
+export function isCopy(recipe: RecipeEntity): boolean {
+  return recipe.savedFromRecipeId !== null || recipe.source === 'themealdb';
+}
+
+/** SAVE-7: a copy not edited yet; the first edit makes it a fork, which counts as own. */
+export function isSavedCopy(recipe: RecipeEntity): boolean {
+  return isCopy(recipe) && recipe.forkedAt === null;
+}
+
 /**
  * REC-8, §11.6 `relation`: the same decision made from data already in hand, so a list
  * can classify many recipes with one query for the caller's shares.
@@ -19,7 +29,7 @@ export function relationOf(
   isSharedWithUser: boolean,
 ): RecipeRelation {
   if (recipe.ownerId === userId) {
-    return recipe.savedFromRecipeId === null ? 'own' : 'saved';
+    return isSavedCopy(recipe) ? 'saved' : 'own';
   }
   if (isSharedWithUser) return 'shared';
   if (recipe.visibility === 'public') return 'public';
@@ -53,7 +63,7 @@ export class RecipeAccessService {
     recipe: RecipeEntity,
   ): Promise<RecipeRelation> {
     if (recipe.ownerId === userId) {
-      return recipe.savedFromRecipeId === null ? 'own' : 'saved';
+      return isSavedCopy(recipe) ? 'saved' : 'own';
     }
     const isShared = await this.shares.exists({
       where: { recipeId: recipe.id, userId },

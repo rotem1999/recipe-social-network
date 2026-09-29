@@ -1,6 +1,6 @@
-// SPEC.md §11.5 UI-10/UI-13 and the design guide §2: the recipe card shown on
-// Home, in Discover and in the recommendation strip. Presentational only — the
-// screen that renders it owns the data (libs/web/CLAUDE.md).
+// SPEC.md §11.5 UI-10/UI-13, SAVE-10 and the design guide §2: the recipe card
+// shown on Home, in Discover and in the recommendation strip. Presentational only —
+// the screen that renders it owns the data (libs/web/CLAUDE.md).
 import type { KeyboardEvent, MouseEvent, ReactElement, ReactNode } from 'react';
 import type { RecipeCardDto } from '@rsn/shared/util-contracts';
 import { totalMinutes } from '@rsn/shared/util-domain';
@@ -33,10 +33,10 @@ export function RecipeCard({
   actionSlot,
   showStars = true,
 }: RecipeCardProps): ReactElement {
-  const byline =
-    recipe.relation === 'own' || recipe.relation === 'saved'
-      ? null
-      : `by ${recipe.ownerUsername}`;
+  const isMine = recipe.relation === 'own' || recipe.relation === 'saved';
+  const byline = isMine ? null : `by ${recipe.ownerUsername}`;
+  // SAVE-10: the caller's copy is behind its source (the Home card's tag).
+  const showUpdate = isMine && recipe.updateAvailable;
   const open = (): void => onOpen(recipe.id);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -89,6 +89,11 @@ export function RecipeCard({
           />
         ) : null}
         <div className="card-meta">{metaLine(recipe)}</div>
+        {showUpdate ? (
+          <div>
+            <Tag tone="accent">Update available</Tag>
+          </div>
+        ) : null}
         {byline === null && actionSlot === undefined ? null : (
           <div
             className="card-meta"

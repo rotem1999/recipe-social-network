@@ -17,7 +17,12 @@ import type {
   RecipeCardDto,
   RecipeDetailDto,
 } from '@rsn/shared/util-contracts';
-import { RecipeAccessService, relationOf } from './recipe-access.service';
+import {
+  RecipeAccessService,
+  isCopy,
+  isSavedCopy,
+  relationOf,
+} from './recipe-access.service';
 
 /** Options of `listPublicCards` (DISC-1..5, WX-6). */
 export interface PublicCardsOptions {
@@ -32,6 +37,14 @@ export interface PublicCardsPage {
   cards: RecipeCardDto[];
   hasMore: boolean;
 }
+
+/** DISC-10, SAVE-10: the caller's copy of a recipe, and whether a copy is behind its source. */
+interface CopyState {
+  myCopyId: string | null;
+  updateAvailable: boolean;
+}
+
+const NO_COPY: CopyState = { myCopyId: null, updateAvailable: false };
 
 @Injectable()
 export class RecipeDtoService {
@@ -50,29 +63,6 @@ export class RecipeDtoService {
     private readonly access: RecipeAccessService,
   ) {}
 
-  /**
-   * §11.6 `GET /recipes`: one card. IMG-4 signs the version's image paths; a catalogue
-   * save has no stored image, so the card falls back to TheMealDB's own URL (CAT-6).
-   * RATE-2/4: the rating summary is carried only by public recipes.
-   */
-  async toCard(
-    recipe: RecipeEntity,
-    version: RecipeVersionEntity,
-    relation: RecipeRelation,
-    ownerUsername: string,
-    mine: number | null,
-  ): Promise<RecipeCardDto> {
-    const [imageUrl] = await this.signedUrlsOf(version);
-    return this.cardFrom(
-      recipe,
-      version,
-      relation,
-      ownerUsername,
-      mine,
-      imageUrl ?? null,
-    );
-  }
-
   /** REC-4, §11.6 `GET /recipes/:id`: the full recipe for one viewer. */
   async toDetail(
     recipe: RecipeEntity,
@@ -89,6 +79,15 @@ export class RecipeDtoService {
     const imageUrls = (await this.signedUrlsOf(version)).filter(
       (url) => url.length > 0,
     );
+    const [copyStates, versionCount, attribution, sharedWithUserIds] =
+      await Promise.all([
+        this.copyStatesOf(userId, [recipe]),
+        this.versions.count({ where: { recipeId: recipe.id } }),
+        this.attributionFor(userId, recipe),
+        this.access.isOwner(userId, recipe)
+          ? this.sharedWithUserIds(recipe.id)
+          : Promise.resolve<string[]>([]),
+      ]);
     const card = this.cardFrom(
       recipe,
       version,
@@ -96,17 +95,10 @@ export class RecipeDtoService {
       owner?.username ?? '',
       mine,
       imageUrls[0] ?? recipe.externalImageUrl ?? null,
+      copyStates.get(recipe.id) ?? NO_COPY,
     );
-
-    const [versionCount, forkedFrom, savedFrom, sharedWithUserIds] =
-      await Promise.all([
-        this.versions.count({ where: { recipeId: recipe.id } }),
-        this.attributionFor(recipe.forkedFromRecipeId),
-        this.attributionFor(recipe.savedFromRecipeId),
-        this.access.isOwner(userId, recipe)
-          ? this.sharedWithUserIds(recipe.id)
-          : Promise.resolve<string[]>([]),
-      ]);
+    // SAVE-9: one line, "Saved from" on a saved copy and "Forked from" on a fork.
+    const savedCopy = isSavedCopy(recipe);
 
     return {
       ...card,
@@ -126,15 +118,15 @@ export class RecipeDtoService {
       hasComments: isPublic || recipe.visibility === 'shared',
       hasVotes: isPublic,
       versionCount,
-      forkedFrom,
-      savedFrom,
+      forkedFrom: savedCopy ? null : attribution,
+      savedFrom: savedCopy ? attribution : null,
       sharedWithUserIds,
       // CAT-6: TheMealDB requires attribution wherever its content is shown.
       attribution: recipe.source === 'themealdb' ? THEMEALDB_ATTRIBUTION : null,
     };
   }
 
-  /** DISC-1..5, WX-6: a page of public recipes, newest first. */
+  /** DISC-1..5, DISC-10, WX-6: a page of public recipes, newest first. */
   async listPublicCards(
     userId: string,
     options: PublicCardsOptions,
@@ -157,15 +149,9 @@ export class RecipeDtoService {
     });
 
     const pageRows = rows.slice(0, pageSize);
+    // Every row is public, so "shared with the caller" never changes the answer.
     const relations = new Map<string, RecipeRelation>(
-      pageRows.map((recipe) => [
-        recipe.id,
-        recipe.ownerId === userId
-          ? recipe.savedFromRecipeId === null
-            ? 'own'
-            : 'saved'
-          : 'public',
-      ]),
+      pageRows.map((recipe) => [recipe.id, relationOf(userId, recipe, false)]),
     );
     return {
       cards: await this.cardsWithRelations(userId, pageRows, relations),
@@ -191,6 +177,31 @@ export class RecipeDtoService {
     return this.cardsWithRelations(userId, recipes, relations);
   }
 
+  /** DISC-10, CAT-7: the caller's live copy of each TheMealDB meal, by `idMeal`. */
+  async catalogueCopyIds(
+    userId: string,
+    mealIds: string[],
+  ): Promise<Map<string, string>> {
+    const unique = [...new Set(mealIds)];
+    if (unique.length === 0) return new Map();
+    const copies = await this.recipes.find({
+      where: {
+        ownerId: userId,
+        source: 'themealdb',
+        externalId: In(unique),
+        // A copy of another user's TheMealDB fork carries the idMeal too; it is not the meal's copy.
+        savedFromRecipeId: IsNull(),
+        deletedAt: IsNull(),
+      },
+      select: { id: true, externalId: true },
+    });
+    const byMealId = new Map<string, string>();
+    for (const copy of copies) {
+      if (copy.externalId !== null) byMealId.set(copy.externalId, copy.id);
+    }
+    return byMealId;
+  }
+
   /** RATE-4: the caller's own grade, or null when they have not rated the recipe. */
   private async myStars(
     userId: string,
@@ -209,21 +220,107 @@ export class RecipeDtoService {
     return rows.map((row) => row.userId);
   }
 
-  /** SAVE-6: title and owner of the recipe a copy points at (soft-deleted ones included). */
+  /**
+   * SAVE-9: the source a copy came from. A user source carries its current title and
+   * owner and is linked only while the caller can still view it (REC-4); a TheMealDB
+   * source carries the meal name kept at save time.
+   */
   private async attributionFor(
-    recipeId: string | null,
+    userId: string,
+    recipe: RecipeEntity,
   ): Promise<RecipeAttributionDto | null> {
-    if (recipeId === null) return null;
+    if (!isCopy(recipe)) return null;
+    const sourceId = recipe.savedFromRecipeId ?? recipe.forkedFromRecipeId;
+    if (sourceId === null) {
+      return {
+        recipeId: null,
+        title: recipe.externalTitle ?? '',
+        ownerUsername: null,
+        source: 'themealdb',
+      };
+    }
     const source = await this.recipes.findOne({
-      where: { id: recipeId },
+      where: { id: sourceId },
       relations: { currentVersion: true, owner: true },
     });
     if (source === null) return null;
+    const viewable =
+      source.deletedAt === null &&
+      (await this.access.relationFor(userId, source)) !== 'none';
     return {
-      recipeId: source.id,
+      recipeId: viewable ? source.id : null,
       title: source.currentVersion?.title ?? '',
       ownerUsername: source.owner?.username ?? null,
+      source: 'user',
     };
+  }
+
+  /**
+   * DISC-10, SAVE-10 for many recipes with a fixed number of queries. On the caller's own
+   * copy of a user recipe: whether its source moved past `syncedVersionNumber` and is still
+   * viewable. On someone else's recipe: the caller's live copy (a saved copy or a fork) and
+   * whether that copy is behind this recipe's current version.
+   */
+  private async copyStatesOf(
+    userId: string,
+    recipes: RecipeEntity[],
+  ): Promise<Map<string, CopyState>> {
+    const states = new Map<string, CopyState>();
+    const mine = recipes.filter(
+      (recipe) => recipe.ownerId === userId && recipe.savedFromRecipeId !== null,
+    );
+    const others = recipes.filter((recipe) => recipe.ownerId !== userId);
+
+    if (mine.length > 0) {
+      const sourceIds = [
+        ...new Set(mine.map((recipe) => recipe.savedFromRecipeId as string)),
+      ];
+      const [sources, sharedIds] = await Promise.all([
+        this.recipes.find({
+          where: { id: In(sourceIds), deletedAt: IsNull() },
+          relations: { currentVersion: true },
+        }),
+        this.access.sharedRecipeIds(userId, sourceIds),
+      ]);
+      const sourceById = new Map(sources.map((source) => [source.id, source]));
+      for (const copy of mine) {
+        const source = sourceById.get(copy.savedFromRecipeId as string);
+        const updateAvailable =
+          source !== undefined &&
+          relationOf(userId, source, sharedIds.has(source.id)) !== 'none' &&
+          isBehind(copy.syncedVersionNumber, source.currentVersion?.versionNumber);
+        states.set(copy.id, { myCopyId: null, updateAvailable });
+      }
+    }
+
+    if (others.length > 0) {
+      const [copies, versionById] = await Promise.all([
+        this.recipes.find({
+          where: {
+            ownerId: userId,
+            savedFromRecipeId: In(others.map((recipe) => recipe.id)),
+            deletedAt: IsNull(),
+          },
+          select: { id: true, savedFromRecipeId: true, syncedVersionNumber: true },
+        }),
+        this.currentVersionsOf(others),
+      ]);
+      const copyBySourceId = new Map(
+        copies.map((copy) => [copy.savedFromRecipeId as string, copy]),
+      );
+      for (const recipe of others) {
+        const copy = copyBySourceId.get(recipe.id);
+        if (copy === undefined) continue;
+        states.set(recipe.id, {
+          myCopyId: copy.id,
+          updateAvailable: isBehind(
+            copy.syncedVersionNumber,
+            versionById.get(recipe.id)?.versionNumber,
+          ),
+        });
+      }
+    }
+    return states;
   }
 
   /** IMG-4: signed URLs for one version; an empty list when Firebase is unconfigured. */
@@ -234,7 +331,7 @@ export class RecipeDtoService {
     return urls.length === paths.length ? urls : [];
   }
 
-  /** The pure part of a card, with the image URL already decided. */
+  /** The pure part of a card, with the image URL and the copy state already decided. */
   private cardFrom(
     recipe: RecipeEntity,
     version: RecipeVersionEntity,
@@ -242,6 +339,7 @@ export class RecipeDtoService {
     ownerUsername: string,
     mine: number | null,
     imageUrl: string | null,
+    copyState: CopyState,
   ): RecipeCardDto {
     return {
       id: recipe.id,
@@ -269,12 +367,15 @@ export class RecipeDtoService {
           : null,
       versionNumber: version.versionNumber,
       updatedAt: new Date(recipe.updatedAt).toISOString(),
+      myCopyId: copyState.myCopyId,
+      updateAvailable: copyState.updateAvailable,
     };
   }
 
   /**
    * Builds many cards with a fixed number of queries: one for the missing versions, one
-   * for the owners, one for the caller's grades, and one signing call for every path.
+   * for the owners, one for the caller's grades, the copy-state queries, and one signing
+   * call for every path.
    */
   private async cardsWithRelations(
     userId: string,
@@ -289,6 +390,7 @@ export class RecipeDtoService {
       userId,
       recipes.filter((r) => r.visibility === 'public').map((r) => r.id),
     );
+    const copyStates = await this.copyStatesOf(userId, recipes);
 
     // IMG-4: one signing call for every path of the page, then sliced back per recipe.
     const paths: string[] = [];
@@ -320,6 +422,7 @@ export class RecipeDtoService {
           usernameById.get(recipe.ownerId) ?? '',
           starsByRecipeId.get(recipe.id) ?? null,
           firstUrl ?? null,
+          copyStates.get(recipe.id) ?? NO_COPY,
         ),
       );
     }
@@ -366,4 +469,16 @@ export class RecipeDtoService {
     });
     return new Map(rows.map((row) => [row.recipeId, row.stars]));
   }
+}
+
+/** SAVE-10: a copy whose recorded source version is unknown is never reported as behind. */
+function isBehind(
+  syncedVersionNumber: number | null,
+  sourceVersionNumber: number | undefined,
+): boolean {
+  return (
+    syncedVersionNumber !== null &&
+    sourceVersionNumber !== undefined &&
+    sourceVersionNumber > syncedVersionNumber
+  );
 }

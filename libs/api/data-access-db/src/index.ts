@@ -7,4 +7,5 @@ export {
   REQUIRED_DB_ENV_KEYS,
 } from './data-source-options';
 export { InitialSchema1759000000000 } from './migrations/1759000000000-InitialSchema';
+export { SaveOwnership1759100000000 } from './migrations/1759100000000-SaveOwnership';
 export { DbModule } from './lib/data-access-db.module';

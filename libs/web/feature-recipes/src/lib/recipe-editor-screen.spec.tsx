@@ -51,6 +51,8 @@ const CREATED: RecipeDetailDto = {
   rating: null,
   versionNumber: 1,
   updatedAt: '2026-09-28T10:00:00.000Z',
+  myCopyId: null,
+  updateAvailable: false,
   ingredients: [{ quantity: 3, unit: 'none', name: 'eggs' }],
   steps: [{ text: 'Fry the onion.' }],
   imageUrls: [],

@@ -121,13 +121,22 @@ export class RecipesController {
     return this.recipes.remove(user.id, id);
   }
 
-  /** SAVE-1, SAVE-4: copy a public recipe to the caller. */
+  /** SAVE-1, SAVE-4, SAVE-7: copy a public recipe to the caller. */
   @Post(':id/save')
   save(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<RecipeDetailDto> {
     return this.recipes.save(user.id, id);
+  }
+
+  /** SAVE-10: the caller's copy takes the source's current version. */
+  @Post(':id/sync')
+  sync(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<RecipeDetailDto> {
+    return this.recipes.sync(user.id, id);
   }
 
   /** IMG-3, IMG-6: multipart field `file`, at most MAX_IMAGE_BYTES. */

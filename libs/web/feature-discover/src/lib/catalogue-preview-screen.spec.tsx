@@ -1,6 +1,8 @@
 // SPEC.md CAT-3: a catalogue entry is pulled into the database when the user
-// saves it, and the shell opens the copy the API created. The thumbnail fixture
-// is a local path: renderer code holds no provider URL (§11.3).
+// saves it, and the shell opens the copy the API created. CAT-7 / DISC-10 /
+// UI-14: when the caller already has a copy of the meal (`myCopyId`), the preview
+// shows "In your recipes" and a Cook button on that copy in place of Save. The
+// thumbnail fixture is a local path: renderer code holds no provider URL (§11.3).
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type {
   CataloguePreviewDto,
@@ -50,21 +52,31 @@ const PREVIEW: CataloguePreviewDto = {
   servings: 2,
   ingredients: [{ quantity: 200, unit: 'g', name: 'lasagna sheets' }],
   steps: [{ text: 'Layer and bake.', durationMinutes: 40 }],
+  myCopyId: null,
 };
 
+/** DISC-10: the same meal when the caller already holds a live copy of it. */
+const PREVIEW_WITH_COPY: CataloguePreviewDto = {
+  ...PREVIEW,
+  myCopyId: 'copy-7',
+};
+
+/** SAVE-7 / CAT-7: a saved TheMealDB meal is a saved copy until its first edit. */
 const COPY: RecipeDetailDto = {
   id: 'copy-7',
   title: 'Vegan Lasagna',
   category: 'Vegan',
   servings: 2,
   visibility: 'private',
-  relation: 'own',
+  relation: 'saved',
   ownerUsername: 'rotem',
   source: 'themealdb',
   imageUrl: null,
   rating: null,
   versionNumber: 1,
   updatedAt: '2026-09-28T10:00:00.000Z',
+  myCopyId: null,
+  updateAvailable: false,
   ingredients: PREVIEW.ingredients,
   steps: PREVIEW.steps,
   imageUrls: [],
@@ -75,10 +87,29 @@ const COPY: RecipeDetailDto = {
   hasVotes: false,
   versionCount: 1,
   forkedFrom: null,
-  savedFrom: null,
+  savedFrom: {
+    recipeId: null,
+    title: 'Vegan Lasagna',
+    ownerUsername: null,
+    source: 'themealdb',
+  },
   sharedWithUserIds: [],
   attribution: PREVIEW.attribution,
 };
+
+function show(handlers: {
+  onSaved?: (id: string) => void;
+  onCook?: (id: string) => void;
+}) {
+  return render(
+    <CataloguePreviewScreen
+      mealId="52944"
+      onBack={vi.fn()}
+      onSaved={handlers.onSaved ?? vi.fn()}
+      onCook={handlers.onCook ?? vi.fn()}
+    />,
+  );
+}
 
 describe('CataloguePreviewScreen', () => {
   beforeEach(() => {
@@ -88,13 +119,7 @@ describe('CataloguePreviewScreen', () => {
 
   it('CAT-3 saves the catalogue entry and reports the id of the copy', async () => {
     const onSaved = vi.fn();
-    render(
-      <CataloguePreviewScreen
-        mealId="52944"
-        onBack={vi.fn()}
-        onSaved={onSaved}
-      />,
-    );
+    show({ onSaved });
 
     fireEvent.click(
       await screen.findByRole('button', { name: /Save to my recipes/ }),
@@ -111,13 +136,7 @@ describe('CataloguePreviewScreen', () => {
     mocks.api.saveCatalogue.mockRejectedValue(
       new Error('Could not reach the catalogue'),
     );
-    render(
-      <CataloguePreviewScreen
-        mealId="52944"
-        onBack={vi.fn()}
-        onSaved={onSaved}
-      />,
-    );
+    show({ onSaved });
 
     fireEvent.click(
       await screen.findByRole('button', { name: /Save to my recipes/ }),
@@ -126,6 +145,41 @@ describe('CataloguePreviewScreen', () => {
     expect(
       await screen.findByText('Could not reach the catalogue'),
     ).toBeTruthy();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it('DISC-10 offers Save to my recipes and no Cook while the caller has no copy', async () => {
+    show({});
+
+    expect(
+      await screen.findByRole('button', { name: /Save to my recipes/ }),
+    ).toBeTruthy();
+    expect(screen.queryByText('In your recipes')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Cook$/ })).toBeNull();
+  });
+
+  it('DISC-10 replaces Save to my recipes with In your recipes and Cook when myCopyId is set', async () => {
+    mocks.api.cataloguePreview.mockResolvedValue(PREVIEW_WITH_COPY);
+    show({});
+
+    expect(await screen.findByText('In your recipes')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Cook$/ })).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: /Save to my recipes/ }),
+    ).toBeNull();
+  });
+
+  it("DISC-10 Cook opens cook mode on the caller's copy and saves nothing", async () => {
+    const onCook = vi.fn();
+    const onSaved = vi.fn();
+    mocks.api.cataloguePreview.mockResolvedValue(PREVIEW_WITH_COPY);
+    show({ onCook, onSaved });
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Cook$/ }));
+
+    expect(onCook).toHaveBeenCalledTimes(1);
+    expect(onCook).toHaveBeenCalledWith('copy-7');
+    expect(mocks.api.saveCatalogue).not.toHaveBeenCalled();
     expect(onSaved).not.toHaveBeenCalled();
   });
 });

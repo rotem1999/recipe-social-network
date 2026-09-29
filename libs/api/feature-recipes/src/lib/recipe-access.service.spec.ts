@@ -4,7 +4,12 @@ import type { Repository } from 'typeorm';
 import { In } from 'typeorm';
 import type { RecipeEntity, RecipeShareEntity } from '@rsn/api/data-access-db';
 import type { Visibility } from '@rsn/shared/util-domain';
-import { RecipeAccessService, relationOf } from './recipe-access.service';
+import {
+  RecipeAccessService,
+  isCopy,
+  isSavedCopy,
+  relationOf,
+} from './recipe-access.service';
 
 /**
  * `@nestjs/typeorm` 12.0.2, `@nestjs/jwt` 12.0.2 and `@nestjs/config` 5.x are published as
@@ -40,8 +45,11 @@ function recipeRow(overrides: Partial<RecipeEntity> = {}): RecipeEntity {
     currentVersionId: 'version-1',
     savedFromRecipeId: null,
     forkedFromRecipeId: null,
+    forkedAt: null,
+    syncedVersionNumber: null,
     source: 'user',
     externalId: null,
+    externalTitle: null,
     externalImageUrl: null,
     ratingAverage: null,
     ratingCount: 0,
@@ -85,6 +93,66 @@ describe('§11.6 relationOf', () => {
     ).toBe('saved');
   });
 
+  it('SAVE-7 calls an unforked copy of a user recipe "saved"', () => {
+    expect(
+      relationOf(
+        ME,
+        recipeRow({ ownerId: ME, savedFromRecipeId: 'source', forkedAt: null }),
+        false,
+      ),
+    ).toBe('saved');
+  });
+
+  it('SAVE-7 calls a fork of a user recipe "own"', () => {
+    expect(
+      relationOf(
+        ME,
+        recipeRow({
+          ownerId: ME,
+          savedFromRecipeId: 'source',
+          forkedFromRecipeId: 'source',
+          forkedAt: AT,
+        }),
+        false,
+      ),
+    ).toBe('own');
+  });
+
+  it('CAT-7 calls an unforked TheMealDB copy "saved"', () => {
+    expect(
+      relationOf(
+        ME,
+        recipeRow({ ownerId: ME, source: 'themealdb', externalId: '52772' }),
+        false,
+      ),
+    ).toBe('saved');
+  });
+
+  it('CAT-7 calls a forked TheMealDB copy "own"', () => {
+    expect(
+      relationOf(
+        ME,
+        recipeRow({
+          ownerId: ME,
+          source: 'themealdb',
+          externalId: '52772',
+          forkedAt: AT,
+        }),
+        false,
+      ),
+    ).toBe('own');
+  });
+
+  it('SAVE-7 calls someone else’s saved copy by its visibility, never "saved"', () => {
+    expect(
+      relationOf(
+        ME,
+        recipeRow({ savedFromRecipeId: 'source', visibility: 'private' }),
+        false,
+      ),
+    ).toBe('none');
+  });
+
   it('REC-8 calls someone else’s recipe shared with the caller "shared"', () => {
     expect(relationOf(ME, recipeRow({ visibility: 'shared' }), true)).toBe(
       'shared',
@@ -113,6 +181,44 @@ describe('§11.6 relationOf', () => {
     expect(
       relationOf(ME, recipeRow({ ownerId: ME, visibility: 'public' }), true),
     ).toBe('own');
+  });
+});
+
+describe('SAVE-7, CAT-7 isCopy and isSavedCopy', () => {
+  it('SAVE-7 counts a recipe written from scratch as neither a copy nor a saved copy', () => {
+    const recipe = recipeRow({ ownerId: ME });
+
+    expect(isCopy(recipe)).toBe(false);
+    expect(isSavedCopy(recipe)).toBe(false);
+  });
+
+  it('SAVE-7 counts a recipe saved from a user recipe as a copy', () => {
+    expect(isCopy(recipeRow({ savedFromRecipeId: 'source' }))).toBe(true);
+  });
+
+  it('CAT-7 counts a TheMealDB recipe as a copy even without saved_from_recipe_id', () => {
+    expect(
+      isCopy(recipeRow({ source: 'themealdb', savedFromRecipeId: null })),
+    ).toBe(true);
+  });
+
+  it('SAVE-7 counts a copy with forked_at null as a saved copy', () => {
+    expect(
+      isSavedCopy(recipeRow({ savedFromRecipeId: 'source', forkedAt: null })),
+    ).toBe(true);
+    expect(isSavedCopy(recipeRow({ source: 'themealdb', forkedAt: null }))).toBe(
+      true,
+    );
+  });
+
+  it('SAVE-7 counts a copy with forked_at set as a fork, not a saved copy', () => {
+    const fork = recipeRow({ savedFromRecipeId: 'source', forkedAt: AT });
+
+    expect(isCopy(fork)).toBe(true);
+    expect(isSavedCopy(fork)).toBe(false);
+    expect(isSavedCopy(recipeRow({ source: 'themealdb', forkedAt: AT }))).toBe(
+      false,
+    );
   });
 });
 
@@ -204,6 +310,56 @@ describe('RecipeAccessService', () => {
       await expect(
         service.assertCanCook(ME, recipeRow({ visibility: 'public' })),
       ).rejects.toThrow('Save this recipe before cooking it');
+    });
+  });
+
+  describe('SAVE-7, CAT-7 relationFor', () => {
+    it('SAVE-7 answers "saved" for the caller’s unforked copy without a share query', async () => {
+      const { service, shares } = harness();
+
+      await expect(
+        service.relationFor(
+          ME,
+          recipeRow({ ownerId: ME, savedFromRecipeId: 'source' }),
+        ),
+      ).resolves.toBe('saved');
+      expect(shares.exists).not.toHaveBeenCalled();
+    });
+
+    it('SAVE-7 answers "own" for the caller’s fork', async () => {
+      const { service } = harness();
+
+      await expect(
+        service.relationFor(
+          ME,
+          recipeRow({ ownerId: ME, savedFromRecipeId: 'source', forkedAt: AT }),
+        ),
+      ).resolves.toBe('own');
+    });
+
+    it('CAT-7 answers "saved" for an unforked TheMealDB copy and "own" once it is forked', async () => {
+      const { service } = harness();
+
+      await expect(
+        service.relationFor(ME, recipeRow({ ownerId: ME, source: 'themealdb' })),
+      ).resolves.toBe('saved');
+      await expect(
+        service.relationFor(
+          ME,
+          recipeRow({ ownerId: ME, source: 'themealdb', forkedAt: AT }),
+        ),
+      ).resolves.toBe('own');
+    });
+
+    it('SAVE-2 lets the caller cook their fork of a saved recipe', async () => {
+      const { service } = harness();
+
+      await expect(
+        service.canCook(
+          ME,
+          recipeRow({ ownerId: ME, savedFromRecipeId: 'source', forkedAt: AT }),
+        ),
+      ).resolves.toBe(true);
     });
   });
 

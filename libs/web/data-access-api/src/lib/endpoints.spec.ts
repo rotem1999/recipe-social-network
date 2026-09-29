@@ -146,6 +146,21 @@ describe('createEndpoints (§11.6)', () => {
     expect(init.method).toBe('DELETE');
   });
 
+  it('SAVE-10 syncs a copy with POST recipes/:id/sync and no body', async () => {
+    await api.syncRecipe('copy-1');
+
+    const [url, init] = call();
+    expect(url).toBe(`${BASE}/recipes/copy-1/sync`);
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+  });
+
+  it('SAVE-10 percent-encodes the copy id in the sync route', async () => {
+    await api.syncRecipe('copy/1 x');
+
+    expect(call()[0]).toBe(`${BASE}/recipes/copy%2F1%20x/sync`);
+  });
+
   it('§11.6 percent-encodes ids that reach a path segment', async () => {
     await api.cataloguePreview('52772/x y');
 

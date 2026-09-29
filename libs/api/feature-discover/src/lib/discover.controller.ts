@@ -24,12 +24,13 @@ export class DiscoverController {
     return this.discoverService.discover(user, query.category, query.page ?? 1);
   }
 
-  /** CAT-2 `GET /discover/catalogue/:mealId` — the live preview of one meal. */
+  /** CAT-2, DISC-10 `GET /discover/catalogue/:mealId` — the live preview of one meal. */
   @Get('discover/catalogue/:mealId')
   cataloguePreview(
+    @CurrentUser() user: AuthUser,
     @Param() params: CataloguePreviewParamsDto,
   ): Promise<CataloguePreviewDto> {
-    return this.discoverService.cataloguePreview(params.mealId);
+    return this.discoverService.cataloguePreview(user.id, params.mealId);
   }
 
   /** DISC-6 `PUT /me/favourite-categories` — at most 3, returns the updated user. */

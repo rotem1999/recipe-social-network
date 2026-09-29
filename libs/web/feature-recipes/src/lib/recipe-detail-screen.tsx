@@ -1,6 +1,6 @@
-// SPEC.md REC-4/REC-7, SAVE-1/2/6, RATE-1..4, COM-1..3, NUT-1..6, IMG-4 and
-// UI-12..UI-15, design guide §5: the recipe detail screen. All data goes through
-// `useApi()`; every mutation adopts the DTO the API returned (§11.6).
+// SPEC.md REC-4/REC-7, SAVE-1/2/6..10, DISC-10, RATE-1..4, COM-1..3, NUT-1..6,
+// IMG-4 and UI-12..UI-15, design guide §5: the recipe detail screen. All data goes
+// through `useApi()`; every mutation adopts the DTO the API returned (§11.6).
 import { useState } from 'react';
 import type { ReactElement } from 'react';
 import type {
@@ -61,7 +61,11 @@ function errorMessage(cause: unknown): string {
     : 'Something went wrong.';
 }
 
-/** SAVE-6: "Forked from …" / "Saved from …", linked when the source still exists. */
+/**
+ * SAVE-9: the one line under a copy's title — "Saved from …" on a saved copy,
+ * "Forked from …" on a fork. A user source links while the caller can still view
+ * it (`recipeId` set); a TheMealDB source is plain text ("<meal> on TheMealDB").
+ */
 function AttributionLine({
   prefix,
   attribution,
@@ -71,11 +75,13 @@ function AttributionLine({
   attribution: RecipeAttributionDto;
   onOpenRecipe: (id: string) => void;
 }): ReactElement {
-  const label =
-    attribution.ownerUsername === null
+  const isCatalogue = attribution.source === 'themealdb';
+  const label = isCatalogue
+    ? `${attribution.title} on TheMealDB`
+    : attribution.ownerUsername === null
       ? attribution.title
       : `${attribution.title} by ${attribution.ownerUsername}`;
-  const sourceId = attribution.recipeId;
+  const sourceId = isCatalogue ? null : attribution.recipeId;
   return (
     <p
       style={{
@@ -121,23 +127,50 @@ export function RecipeDetailScreen({
   } | null>(null);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [savingCopy, setSavingCopy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const shown = versionView?.recipe ?? data;
   const isVersionView = versionView !== null;
 
-  /** SAVE-1 + UI-14: the button flips before the request, and back on failure. */
+  /**
+   * SAVE-1 + UI-14 + DISC-10: the button flips to "In your recipes" before the request
+   * and back on failure. The screen keeps showing the original; Cook opens the new copy.
+   */
   const save = async (): Promise<void> => {
     if (data === null) {
       return;
     }
-    const previous = data;
     setActionError(null);
-    setData({ ...previous, canCook: true, relation: 'saved' });
+    setSavingCopy(true);
     try {
-      setData(await api.saveRecipe(previous.id));
+      const copy = await api.saveRecipe(data.id);
+      setData((current) =>
+        current === null
+          ? current
+          : { ...current, myCopyId: copy.id, updateAvailable: false },
+      );
     } catch (cause: unknown) {
-      setData(previous);
       setActionError(errorMessage(cause));
+    } finally {
+      setSavingCopy(false);
+    }
+  };
+
+  /** SAVE-10: the copy takes the source's current version; the API returns the copy. */
+  const sync = async (): Promise<void> => {
+    if (data === null) {
+      return;
+    }
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      setData(await api.syncRecipe(data.id));
+    } catch (cause: unknown) {
+      setSyncError(errorMessage(cause));
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -179,8 +212,24 @@ export function RecipeDetailScreen({
     );
   }
 
+  // DISC-10: someone else's recipe the caller already has a live copy of.
+  const myCopyId = shown.myCopyId;
   const needsSave =
-    !shown.canCook && shown.visibility === 'public' && shown.relation !== 'own';
+    myCopyId === null &&
+    !savingCopy &&
+    !shown.canCook &&
+    shown.visibility === 'public' &&
+    shown.relation !== 'own';
+  // SAVE-9: the API sends at most one of the two (saved copy or fork).
+  const copySource = shown.savedFrom ?? shown.forkedFrom;
+  // SAVE-9/SAVE-10: set only while the caller can still view the source.
+  const originalId = copySource?.recipeId ?? null;
+  // SAVE-10: the banner is for the caller's own copy, never a version view.
+  const showUpdateBanner =
+    !isVersionView &&
+    shown.updateAvailable &&
+    (shown.relation === 'saved' || shown.relation === 'own') &&
+    copySource !== null;
 
   return (
     <main className="screen" style={{ maxWidth: '880px' }} aria-label="Recipe">
@@ -239,20 +288,19 @@ export function RecipeDetailScreen({
               {shown.description}
             </p>
           )}
-          {shown.forkedFrom === null ? null : (
-            <AttributionLine
-              prefix="Forked from"
-              attribution={shown.forkedFrom}
-              onOpenRecipe={onOpenRecipe}
-            />
-          )}
-          {shown.savedFrom === null ? null : (
+          {shown.savedFrom !== null ? (
             <AttributionLine
               prefix="Saved from"
               attribution={shown.savedFrom}
               onOpenRecipe={onOpenRecipe}
             />
-          )}
+          ) : shown.forkedFrom !== null ? (
+            <AttributionLine
+              prefix="Forked from"
+              attribution={shown.forkedFrom}
+              onOpenRecipe={onOpenRecipe}
+            />
+          ) : null}
         </div>
 
         {isVersionView ? null : (
@@ -264,7 +312,25 @@ export function RecipeDetailScreen({
               gap: 'var(--space-2)',
             }}
           >
-            {shown.canCook ? (
+            {myCopyId !== null || savingCopy ? (
+              // DISC-10 / UI-14: already in the caller's recipes; cook the copy.
+              <>
+                <Tag tone="neutral">In your recipes</Tag>
+                <Button
+                  variant="primary"
+                  style={{ fontSize: '16px', padding: '11px var(--space-6)' }}
+                  disabled={myCopyId === null}
+                  onClick={() => {
+                    if (myCopyId !== null) {
+                      onCook(myCopyId);
+                    }
+                  }}
+                >
+                  <Icon.Play size={17} />
+                  Start cooking
+                </Button>
+              </>
+            ) : shown.canCook ? (
               <Button
                 variant="primary"
                 style={{ fontSize: '16px', padding: '11px var(--space-6)' }}
@@ -297,6 +363,46 @@ export function RecipeDetailScreen({
       </div>
 
       {actionError === null ? null : <InlineError>{actionError}</InlineError>}
+
+      {/* SAVE-10: the source moved on; Sync appends its current content as a new version. */}
+      {showUpdateBanner ? (
+        <div
+          role="status"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--space-3)',
+            flexWrap: 'wrap',
+            marginTop: 'var(--space-3)',
+            padding: 'var(--space-3) var(--space-4)',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--color-accent-2-100)',
+            color: 'var(--color-accent-2-900)',
+          }}
+        >
+          <span style={{ fontSize: '14px', flex: 1 }}>
+            The original has changed since you saved it
+          </span>
+          {originalId === null ? null : (
+            <Button variant="ghost" onClick={() => onOpenRecipe(originalId)}>
+              View the original
+            </Button>
+          )}
+          <Button
+            variant="secondary"
+            loading={syncing}
+            onClick={() => void sync()}
+          >
+            <Icon.Download size={14} />
+            Sync
+          </Button>
+          {syncError === null ? null : (
+            <div style={{ flexBasis: '100%' }}>
+              <InlineError>{syncError}</InlineError>
+            </div>
+          )}
+        </div>
+      ) : null}
 
       {versionView === null ? null : (
         <div

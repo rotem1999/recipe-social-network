@@ -50,6 +50,8 @@ const OWN: RecipeCardDto = {
   rating: null,
   versionNumber: 1,
   updatedAt: '2026-09-20T18:00:00.000Z',
+  myCopyId: null,
+  updateAvailable: false,
 };
 
 const SAVED: RecipeCardDto = {

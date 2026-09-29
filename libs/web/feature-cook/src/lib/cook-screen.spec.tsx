@@ -57,6 +57,8 @@ const RECIPE: RecipeDetailDto = {
   rating: null,
   versionNumber: 1,
   updatedAt: '2026-09-20T18:00:00.000Z',
+  myCopyId: null,
+  updateAvailable: false,
   ingredients: [{ quantity: 2, unit: 'piece', name: 'eggs' }],
   steps: [
     { text: 'Fry the onion.', durationMinutes: 5 },

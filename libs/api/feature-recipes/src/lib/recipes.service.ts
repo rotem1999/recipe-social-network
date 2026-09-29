@@ -1,4 +1,4 @@
-// §3 (REC-1..8, IMG-3/6, SAVE-1..6, CAT-3/4): every write and read of a recipe.
+// §3 (REC-1..8, IMG-3/6, SAVE-1..10, CAT-3/4/7): every write and read of a recipe.
 import {
   BadRequestException,
   Injectable,
@@ -29,7 +29,11 @@ import type {
   RecipeListResponse,
   RecipeVersionsResponse,
 } from '@rsn/shared/util-contracts';
-import { RecipeAccessService } from './recipe-access.service';
+import {
+  RecipeAccessService,
+  isSavedCopy,
+  relationOf,
+} from './recipe-access.service';
 import { RecipeDtoService } from './recipe-dto.service';
 
 /** WX-4: at most this many of the caller's recipes are offered to the recommender. */
@@ -126,7 +130,10 @@ export class RecipesService {
           currentVersionId: null,
           savedFromRecipeId: null,
           forkedFromRecipeId: null,
+          forkedAt: null,
+          syncedVersionNumber: null,
           externalId: null,
+          externalTitle: null,
           externalImageUrl: null,
           ratingAverage: null,
           ratingCount: 0,
@@ -151,8 +158,8 @@ export class RecipesService {
   }
 
   /**
-   * REC-6/7: only the owner edits, and every edit adds a version. SAVE-5/6: the first
-   * edit of a saved copy records the fork it came from.
+   * REC-6/7: only the owner edits, and every edit adds a version. SAVE-5/6/7: the first
+   * edit of a saved copy makes it a fork and records the recipe it came from.
    */
   async update(
     userId: string,
@@ -173,9 +180,14 @@ export class RecipesService {
         content,
         nextNumber,
         previous.imagePaths ?? [],
-        recipe.savedFromRecipeId !== null && recipe.forkedFromRecipeId === null
-          ? recipe.savedFromRecipeId
-          : undefined,
+        isSavedCopy(recipe)
+          ? {
+              forkedAt: new Date(),
+              ...(recipe.savedFromRecipeId === null
+                ? {}
+                : { forkedFromRecipeId: recipe.savedFromRecipeId }),
+            }
+          : {},
       );
     });
     return this.get(userId, id);
@@ -190,6 +202,12 @@ export class RecipesService {
   ): Promise<RecipeDetailDto> {
     const recipe = await this.access.loadOrThrow(id);
     this.access.assertIsOwner(userId, recipe);
+    // SAVE-8: a saved copy stays private until its first edit makes it a fork.
+    if (isSavedCopy(recipe) && visibility !== 'private') {
+      throw new BadRequestException(
+        'A saved recipe stays private until you edit it',
+      );
+    }
 
     if (visibility === 'shared') {
       const wanted = [...new Set(sharedWithUserIds ?? [])];
@@ -226,13 +244,13 @@ export class RecipesService {
   }
 
   /**
-   * REC-6, SAVE-4, §12.1: an own recipe is soft-deleted so saved copies keep their
-   * attribution; a saved copy is removed outright.
+   * REC-6, SAVE-4, SAVE-7, §12.1: an own recipe or a fork is soft-deleted so saved copies
+   * keep their attribution; a saved copy is removed outright.
    */
   async remove(userId: string, id: string): Promise<void> {
     const recipe = await this.access.loadOrThrow(id);
     this.access.assertIsOwner(userId, recipe);
-    if (recipe.savedFromRecipeId !== null) {
+    if (isSavedCopy(recipe)) {
       await this.dataSource.transaction(async (manager) => {
         // current_version_id points at a version, so it is cleared before the cascade.
         await manager.update(
@@ -247,7 +265,10 @@ export class RecipesService {
     await this.recipes.update({ id: recipe.id }, { deletedAt: new Date() });
   }
 
-  /** SAVE-1, SAVE-4: a public recipe becomes a private copy of the caller's, once. */
+  /**
+   * SAVE-1, SAVE-4, SAVE-7: a public recipe becomes a private saved copy of the caller's,
+   * once; a live fork of it counts as that copy. SAVE-10 records the version it took.
+   */
   async save(userId: string, id: string): Promise<RecipeDetailDto> {
     const source = await this.access.loadOrThrow(id);
     if (source.visibility !== 'public') {
@@ -277,7 +298,10 @@ export class RecipesService {
           currentVersionId: null,
           savedFromRecipeId: source.id,
           forkedFromRecipeId: null,
+          forkedAt: null,
+          syncedVersionNumber: sourceVersion.versionNumber,
           externalId: source.externalId,
+          externalTitle: source.externalTitle,
           externalImageUrl: source.externalImageUrl,
           ratingAverage: null,
           ratingCount: 0,
@@ -296,7 +320,7 @@ export class RecipesService {
     return this.get(userId, copyId);
   }
 
-  /** CAT-3, CAT-4: a TheMealDB meal is pulled into the database when it is saved. */
+  /** CAT-3, CAT-4, CAT-7: a TheMealDB meal is pulled into the database as a saved copy. */
   async saveCatalogue(
     userId: string,
     mealId: string,
@@ -307,6 +331,8 @@ export class RecipesService {
         ownerId: userId,
         source: 'themealdb',
         externalId: mealId,
+        // A copy of another user's TheMealDB fork carries the idMeal too; it is not the meal's copy.
+        savedFromRecipeId: IsNull(),
         deletedAt: IsNull(),
       },
     });
@@ -329,7 +355,12 @@ export class RecipesService {
           currentVersionId: null,
           savedFromRecipeId: null,
           forkedFromRecipeId: null,
+          forkedAt: null,
+          // SAVE-10: TheMealDB copies are never checked for updates.
+          syncedVersionNumber: null,
           externalId: mealId,
+          // SAVE-9: the meal name at save time, for "Saved from … on TheMealDB".
+          externalTitle: content.title,
           // CAT-6: TheMealDB hosts the image; nothing is uploaded to Firebase.
           externalImageUrl: meal.strMealThumb ?? null,
           ratingAverage: null,
@@ -341,6 +372,51 @@ export class RecipesService {
       return recipe.id;
     });
     return this.get(userId, recipeId);
+  }
+
+  /**
+   * SAVE-10, `POST /recipes/:id/sync`: the caller's copy of a user recipe takes the
+   * source's current content as a new version. A saved copy stays saved, a fork stays a fork.
+   */
+  async sync(userId: string, id: string): Promise<RecipeDetailDto> {
+    const copy = await this.access.loadOrThrow(id);
+    this.access.assertIsOwner(userId, copy);
+    const source =
+      copy.savedFromRecipeId === null
+        ? null
+        : await this.recipes.findOne({
+            where: { id: copy.savedFromRecipeId, deletedAt: IsNull() },
+            relations: { currentVersion: true },
+          });
+    const isShared =
+      source === null
+        ? false
+        : await this.shares.exists({
+            where: { recipeId: source.id, userId },
+          });
+    if (
+      source === null ||
+      relationOf(userId, source, isShared) === 'none' ||
+      source.currentVersion == null ||
+      copy.syncedVersionNumber === null ||
+      source.currentVersion.versionNumber <= copy.syncedVersionNumber
+    ) {
+      throw new BadRequestException('This recipe has no update to take');
+    }
+    const sourceVersion = source.currentVersion;
+
+    await this.dataSource.transaction(async (manager) => {
+      const nextNumber = (await this.maxVersionNumber(manager, copy.id)) + 1;
+      await this.appendVersion(
+        manager,
+        copy,
+        contentOf(sourceVersion),
+        nextNumber,
+        sourceVersion.imagePaths ?? [],
+        { syncedVersionNumber: sourceVersion.versionNumber },
+      );
+    });
+    return this.get(userId, id);
   }
 
   /** REC-7: the version history, oldest first; visibility applies to the whole history. */
@@ -452,7 +528,12 @@ export class RecipesService {
     content: RecipeContent,
     versionNumber: number,
     imagePaths: string[],
-    forkedFromRecipeId?: string,
+    recipeColumns: Partial<
+      Pick<
+        RecipeEntity,
+        'forkedAt' | 'forkedFromRecipeId' | 'syncedVersionNumber'
+      >
+    > = {},
   ): Promise<RecipeVersionEntity> {
     const version = await manager.save(
       manager.create(RecipeVersionEntity, {
@@ -467,8 +548,8 @@ export class RecipesService {
       { id: recipe.id },
       {
         currentVersionId: version.id,
-        // SAVE-5/6: the first edit of a saved copy records its origin.
-        ...(forkedFromRecipeId === undefined ? {} : { forkedFromRecipeId }),
+        // SAVE-7: the first edit of a saved copy forks it; SAVE-10: a sync records its version.
+        ...recipeColumns,
       },
     );
     return version;

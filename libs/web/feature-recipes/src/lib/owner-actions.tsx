@@ -1,6 +1,7 @@
-// SPEC.md REC-6, REC-2/REC-3, SAVE-4 and UI-12: the owner row on the recipe
-// detail screen — Edit, Visibility, Share…, Delete, and Remove from my recipes
-// on a saved copy. Every mutation adopts the DTO the API returned (§11.6).
+// SPEC.md REC-6, REC-2/REC-3, SAVE-4, SAVE-7/SAVE-8 and UI-12: the owner row on
+// the recipe detail screen — Edit, Visibility, Share…, Delete; a saved copy gets
+// only Edit and Remove from my recipes, since it stays private until its first
+// edit makes it a fork. Every mutation adopts the DTO the API returned (§11.6).
 import { useState } from 'react';
 import type { ReactElement } from 'react';
 import type { RecipeDetailDto } from '@rsn/shared/util-contracts';
@@ -102,7 +103,8 @@ export function OwnerActions({
         </Button>
       ) : null}
 
-      {recipe.canEdit ? (
+      {/* SAVE-8: a saved copy cannot be shared or published, so no Visibility or Share…. */}
+      {recipe.canEdit && !isSavedCopy ? (
         <Select
           aria-label="Visibility"
           value={recipe.visibility}
@@ -112,7 +114,7 @@ export function OwnerActions({
         />
       ) : null}
 
-      {recipe.canEdit && recipe.visibility === 'shared' ? (
+      {recipe.canEdit && !isSavedCopy && recipe.visibility === 'shared' ? (
         <Button variant="secondary" onClick={() => setSharing(true)}>
           <Icon.Share2 size={14} />
           Share…
