@@ -381,7 +381,7 @@ recipe-social-network/
 ├── design_handoff_cookbook_ui/     UI design guide (§11.5), not code
 ├── docker/                         PostgreSQL compose files (§12)
 ├── docs/
-│   └── reviews/                    app-critic QA reviews (QA-REVIEW-<date>.md), their screenshots and the fix task lists, not code (Rotem, chat 2026-09-29)
+│   └── reviews/                    app-critic QA reviews (QA-REVIEW-<date>.md), their screenshots, test data and the fix task lists; gitignored, kept only on Rotem's machine (Rotem, chat 2026-09-30)
 ├── INTENT.txt
 ├── SPEC.md
 ├── README.md                       short overview, setup and run commands, derived from SPEC.md (Rotem, chat 2026-09-29)
@@ -447,7 +447,7 @@ Details decided on 2026-09-28 (Rotem delegated, "finish the app"):
 | UI-16 | Navigation is in-app state (no URL router): `auth`, `home`, `discover`, `friends`, `recipe/:id`, `editor`, `cook/:id`. The renderer reads `window.cookbook.timezone` from the preload and falls back to `Intl.DateTimeFormat().resolvedOptions().timeZone` in a plain browser (web-e2e). |
 | UI-17 | Data access: a small `fetch` client in `libs/web/data-access-api` with the base URL from `VITE_API_BASE_URL`, tokens in `localStorage` (`cookbook.accessToken`, `cookbook.refreshToken`), automatic refresh on 401 once, and one React hook per endpoint group; no third-party data library. |
 
-Details decided on 2026-09-29 from the QA review `docs/reviews/QA-REVIEW-2026-09-29.md` (Rotem delegated, chat 2026-09-29: "create tasks according to the review and start working through them"):
+Details decided on 2026-09-29 from the QA review `docs/reviews/QA-REVIEW-2026-09-29.md` (a local, gitignored file) (Rotem delegated, chat 2026-09-29: "create tasks according to the review and start working through them"):
 
 | ID | Requirement |
 |---|---|

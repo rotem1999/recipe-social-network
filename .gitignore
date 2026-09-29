@@ -57,3 +57,5 @@ log/
 *-firebase-adminsdk-*.json
 # Claude desktop app dev-server launcher (local tooling)
 .claude/launch.json
+# app-critic QA reviews, screenshots and fix task lists stay on Rotem's machine (Rotem, chat 2026-09-30)
+docs/reviews/
