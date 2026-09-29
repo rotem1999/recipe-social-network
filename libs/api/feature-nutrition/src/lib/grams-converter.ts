@@ -20,8 +20,8 @@ const GRAMS_PER_UNIT: Readonly<
 };
 
 /**
- * NUT-6: grams for one ingredient. `portionGramWeight` is the food's first
- * `foodPortions[].gramWeight` and is only read for the `piece` unit. Returns
+ * NUT-6: grams for one ingredient. `portionGramWeight` is the NUT-9 weight of
+ * one piece and is only read for the `piece` unit. Returns
  * null when the quantity is empty ("to taste"), when the unit is `none`, or
  * when a `piece` quantity has no portion weight — all unmatched (NUT-5).
  */

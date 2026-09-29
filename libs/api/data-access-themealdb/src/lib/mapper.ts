@@ -9,6 +9,7 @@ import {
   Step,
   Unit,
   isCategory,
+  readLeadingNumber,
 } from '@rsn/shared/util-domain';
 import {
   CatalogueItemDto,
@@ -106,66 +107,11 @@ const FOREIGN_UNIT_WORDS: ReadonlySet<string> = new Set([
   'mm',
 ]);
 
-/** CAT-6: the unicode fractions TheMealDB measures use. */
-const UNICODE_FRACTIONS: Readonly<Record<string, number>> = {
-  '½': 0.5,
-  '¼': 0.25,
-  '¾': 0.75,
-};
-
 /** CAT-6: "1." / "1)" / "STEP 1" / "Step 1:" prefixes are dropped from a step. */
 const STEP_NUMBER_PREFIX = /^(?:step\s*\d+\s*[.):\-–]?\s*|\d+\s*[.):\-–]\s*)/i;
 
 function round(value: number): number {
   return Math.round(value * 100) / 100;
-}
-
-interface ParsedNumber {
-  value: number;
-  rest: string;
-}
-
-/** CAT-6: reads a leading integer, decimal, fraction, mixed number or unicode fraction. */
-function readNumber(text: string): ParsedNumber | null {
-  const mixedAscii = /^(\d+)\s+(\d+)\s*\/\s*(\d+)/.exec(text);
-  if (mixedAscii && Number(mixedAscii[3]) !== 0) {
-    return {
-      value:
-        Number(mixedAscii[1]) + Number(mixedAscii[2]) / Number(mixedAscii[3]),
-      rest: text.slice(mixedAscii[0].length),
-    };
-  }
-
-  const mixedUnicode = /^(\d+)\s*([½¼¾])/.exec(text);
-  if (mixedUnicode) {
-    return {
-      value: Number(mixedUnicode[1]) + UNICODE_FRACTIONS[mixedUnicode[2]],
-      rest: text.slice(mixedUnicode[0].length),
-    };
-  }
-
-  const fraction = /^(\d+)\s*\/\s*(\d+)/.exec(text);
-  if (fraction && Number(fraction[2]) !== 0) {
-    return {
-      value: Number(fraction[1]) / Number(fraction[2]),
-      rest: text.slice(fraction[0].length),
-    };
-  }
-
-  const unicode = /^([½¼¾])/.exec(text);
-  if (unicode) {
-    return {
-      value: UNICODE_FRACTIONS[unicode[1]],
-      rest: text.slice(unicode[0].length),
-    };
-  }
-
-  const decimal = /^(\d+(?:\.\d+)?)/.exec(text);
-  if (decimal) {
-    return { value: Number(decimal[1]), rest: text.slice(decimal[0].length) };
-  }
-
-  return null;
 }
 
 /**
@@ -179,7 +125,7 @@ export function parseMeasure(
   const raw = (rawMeasure ?? '').trim();
   if (raw.length === 0) return { quantity: null, unit: 'none' };
 
-  const parsed = readNumber(raw);
+  const parsed = readLeadingNumber(raw);
   if (parsed) {
     const afterNumber = parsed.rest.trimStart();
     const word = /^([a-zA-Z]+)\.?/.exec(afterNumber);

@@ -6,7 +6,7 @@ import {
 
 import type { RecipeVersionEntity } from '@rsn/api/data-access-db';
 import { UsdaService } from '@rsn/api/data-access-usda';
-import type { UsdaDataType } from '@rsn/api/data-access-usda';
+import type { UsdaDataType, UsdaFoodHit } from '@rsn/api/data-access-usda';
 import type { AuthUser } from '@rsn/api/feature-auth';
 import { RecipeAccessService } from '@rsn/api/feature-recipes';
 import type {
@@ -17,7 +17,11 @@ import type {
 import type { Ingredient } from '@rsn/shared/util-domain';
 import { toTwoDecimals } from '@rsn/shared/util-domain';
 
+import { chooseFood, strictQuery } from './food-matcher';
 import { gramsFor } from './grams-converter';
+import { pickPieceGrams } from './portion-picker';
+import { SEASONING_DESCRIPTION, isSeasoning } from './seasonings';
+import { gramsFromWeightNote } from './weight-note';
 
 /** NUT-6: ingredient search order, best analytical data first. */
 const INGREDIENT_DATA_TYPES: UsdaDataType[] = [
@@ -63,7 +67,7 @@ async function mapWithConcurrency<TItem, TResult>(
 }
 
 /**
- * SPEC §9 NUT-1..NUT-6: calories for a recipe, from its ingredients (default)
+ * SPEC §9 NUT-1..NUT-10: calories for a recipe, from its ingredients (default)
  * or from its title as a composite dish, through FoodData Central.
  */
 @Injectable()
@@ -96,7 +100,8 @@ export class NutritionService {
   }
 
   /**
-   * NUT-6 ingredients mode: one USDA search per ingredient, kcal/100 g scaled
+   * NUT-6 ingredients mode: per ingredient a seasoning (no search) or a food
+   * chosen by NUT-8 (one or two searches), kcal/100 g scaled
    * by the ingredient's grams, summed over the ingredients that matched.
    */
   private async computeIngredients(
@@ -137,9 +142,10 @@ export class NutritionService {
   }
 
   /**
-   * NUT-5, NUT-6: one ingredient. An empty quantity or the `none` unit is
-   * unmatched without a lookup; a USDA outage for this ingredient (503) leaves
-   * it unmatched too, while a 429 propagates and fails the request.
+   * NUT-5..NUT-10: one ingredient. A seasoning is 0 kcal without a lookup; an
+   * empty quantity, or the `none` unit without a weight note, is unmatched
+   * without a lookup; a USDA outage for this ingredient (503) leaves it
+   * unmatched too, while a 429 propagates and fails the request.
    */
   private async nutritionForIngredient(
     ingredient: Ingredient,
@@ -150,30 +156,44 @@ export class NutritionService {
       kcal: null,
       matchedDescription: null,
     };
+    if (ingredient.name.trim() === '') {
+      return unavailable;
+    }
+    if (isSeasoning(ingredient.name)) {
+      return {
+        ...unavailable,
+        kcal: 0,
+        matchedDescription: SEASONING_DESCRIPTION,
+      };
+    }
+
+    // NUT-10: "1 lb" / "4 oz" kept as a `none` note by CAT-6 is a weight.
+    const weightGrams =
+      ingredient.unit === 'none' ? gramsFromWeightNote(ingredient.note) : null;
     if (
-      ingredient.quantity === null ||
-      ingredient.unit === 'none' ||
-      ingredient.name.trim() === ''
+      (ingredient.unit === 'none' && weightGrams === null) ||
+      (ingredient.unit !== 'none' && ingredient.quantity === null)
     ) {
       return unavailable;
     }
 
     try {
-      const hit = (
-        await this.usda.searchFoods(ingredient.name, INGREDIENT_DATA_TYPES)
-      )[0];
-      if (hit === undefined) {
+      const hit = await this.findFood(ingredient.name);
+      if (hit === null) {
         return unavailable;
       }
 
-      // NUT-6: `piece` needs the food's own first portion weight.
+      // NUT-9: `piece` needs the weight of one piece of the chosen food.
       let portionGramWeight: number | null = null;
       if (ingredient.unit === 'piece') {
         const detail = await this.usda.getFood(hit.fdcId);
-        portionGramWeight = detail?.portions[0]?.gramWeight ?? null;
+        portionGramWeight =
+          detail === null
+            ? null
+            : pickPieceGrams(detail.portions, ingredient.name, ingredient.note);
       }
 
-      const grams = gramsFor(ingredient, portionGramWeight);
+      const grams = weightGrams ?? gramsFor(ingredient, portionGramWeight);
       const kcal =
         grams === null || hit.kcalPer100g === null
           ? null
@@ -190,6 +210,23 @@ export class NutritionService {
       }
       throw error;
     }
+  }
+
+  /**
+   * NUT-8: search with every name word required and `raw` ranked higher,
+   * then rank the hits; when none survives, search once more with the name.
+   */
+  private async findFood(name: string): Promise<UsdaFoodHit | null> {
+    const strict = await this.usda.searchFoods(
+      strictQuery(name),
+      INGREDIENT_DATA_TYPES,
+    );
+    const chosen = chooseFood(name, strict);
+    if (chosen !== null) {
+      return chosen;
+    }
+    const loose = await this.usda.searchFoods(name, INGREDIENT_DATA_TYPES);
+    return chooseFood(name, loose);
   }
 
   /**

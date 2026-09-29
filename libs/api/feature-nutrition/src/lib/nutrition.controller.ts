@@ -7,7 +7,7 @@ import type { NutritionResponse } from '@rsn/shared/util-contracts';
 import { NutritionQueryDto } from './dto/nutrition-query.dto';
 import { NutritionService } from './nutrition.service';
 
-/** §11.6: `GET /recipes/:id/nutrition?mode=` (NUT-1..NUT-6). */
+/** §11.6: `GET /recipes/:id/nutrition?mode=` (NUT-1..NUT-10). */
 @Controller('recipes')
 export class NutritionController {
   constructor(private readonly nutrition: NutritionService) {}

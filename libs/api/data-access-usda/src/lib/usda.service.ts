@@ -21,8 +21,8 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
-/** NUT-6: five hits are enough; the callers use the first match. */
-const SEARCH_PAGE_SIZE = 5;
+/** NUT-8: 25 hits give the food choice enough candidates to rank. */
+const SEARCH_PAGE_SIZE = 25;
 
 /**
  * SPEC §9: energy is nutrient 1008 (kcal), then 2047 and 2048 (Atwater kcal on
@@ -95,7 +95,11 @@ function readFirstMeasureGramWeight(foodMeasures: unknown): number | null {
   return first === null ? null : asFiniteNumber(first['gramWeight']);
 }
 
-/** NUT-6: `foodPortions[]`, described by `portionDescription` or `modifier`. */
+/**
+ * NUT-6, NUT-9: `foodPortions[]`, described by `portionDescription` or else
+ * `modifier`, followed by `measureUnit.name` unless it is "undetermined"
+ * (Foundation foods name the unit there: "egg", "RACC").
+ */
 function readPortions(foodPortions: unknown): UsdaFoodPortion[] {
   const portions: UsdaFoodPortion[] = [];
   for (const entry of asArray(foodPortions)) {
@@ -107,9 +111,27 @@ function readPortions(foodPortions: unknown): UsdaFoodPortion[] {
     if (gramWeight === null) {
       continue;
     }
-    const description =
-      asText(record['portionDescription']) || asText(record['modifier']);
-    portions.push({ gramWeight, description });
+    // NUT-9 (§16 U14): FNDDS text is in portionDescription and its amount is
+    // undefined; SR Legacy text is in modifier, with the count in amount.
+    const portionDescription = asText(record['portionDescription']);
+    const modifier = asText(record['modifier']);
+    const unitRecord = asRecord(record['measureUnit']);
+    const unitName = unitRecord === null ? '' : asText(unitRecord['name']);
+    const description = [
+      portionDescription || modifier,
+      unitName.toLowerCase() === 'undetermined' ? '' : unitName,
+    ]
+      .filter((part) => part !== '')
+      .join(' ');
+    portions.push({
+      gramWeight,
+      description,
+      amount:
+        portionDescription === '' && modifier !== ''
+          ? asFiniteNumber(record['amount'])
+          : null,
+      sequenceNumber: asFiniteNumber(record['sequenceNumber']),
+    });
   }
   return portions;
 }
@@ -149,7 +171,8 @@ export class UsdaService {
 
   /**
    * NUT-6: `POST /foods/search` with a JSON body (a GET with a `dataType`
-   * filter returns 400). Returns at most five hits, first one first.
+   * filter returns 400). Returns at most 25 hits in USDA's order. The query is
+   * sent as given, so it may carry search operators such as `+word` (NUT-8).
    */
   async searchFoods(
     query: string,
