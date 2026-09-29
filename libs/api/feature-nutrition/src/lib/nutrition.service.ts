@@ -1,0 +1,270 @@
+import {
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+
+import type { RecipeVersionEntity } from '@rsn/api/data-access-db';
+import { UsdaService } from '@rsn/api/data-access-usda';
+import type { UsdaDataType } from '@rsn/api/data-access-usda';
+import type { AuthUser } from '@rsn/api/feature-auth';
+import { RecipeAccessService } from '@rsn/api/feature-recipes';
+import type {
+  IngredientNutritionDto,
+  NutritionMode,
+  NutritionResponse,
+} from '@rsn/shared/util-contracts';
+import type { Ingredient } from '@rsn/shared/util-domain';
+import { toTwoDecimals } from '@rsn/shared/util-domain';
+
+import { gramsFor } from './grams-converter';
+
+/** NUT-6: ingredient search order, best analytical data first. */
+const INGREDIENT_DATA_TYPES: UsdaDataType[] = [
+  'SR Legacy',
+  'Foundation',
+  'Survey (FNDDS)',
+];
+
+/** NUT-6: meal-name lookup uses the FNDDS composite dishes only. */
+const MEAL_DATA_TYPES: UsdaDataType[] = ['Survey (FNDDS)'];
+
+/** §9 (U1): the USDA limit is 1,000 requests/hour, so ingredients go 4 at a time. */
+const USDA_CONCURRENCY = 4;
+
+/** NUT-2: the only data source named in the response. */
+const NUTRITION_SOURCE = 'USDA FoodData Central';
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+/**
+ * Runs `worker` over every item with at most `limit` in flight, awaiting the
+ * whole set with a single `Promise.all` (§9: stay inside the USDA rate limit).
+ */
+async function mapWithConcurrency<TItem, TResult>(
+  items: readonly TItem[],
+  limit: number,
+  worker: (item: TItem) => Promise<TResult>,
+): Promise<TResult[]> {
+  const results: TResult[] = new Array<TResult>(items.length);
+  let next = 0;
+  const lanes = Array.from(
+    { length: Math.min(limit, items.length) },
+    async (): Promise<void> => {
+      for (let index = next++; index < items.length; index = next++) {
+        results[index] = await worker(items[index]);
+      }
+    },
+  );
+  await Promise.all(lanes);
+  return results;
+}
+
+/**
+ * SPEC §9 NUT-1..NUT-6: calories for a recipe, from its ingredients (default)
+ * or from its title as a composite dish, through FoodData Central.
+ */
+@Injectable()
+export class NutritionService {
+  constructor(
+    private readonly access: RecipeAccessService,
+    private readonly usda: UsdaService,
+  ) {}
+
+  /**
+   * NUT-1, NUT-3: nutrition for a recipe the caller may view. `mode` picks the
+   * ingredient sum (NUT-4 default) or the meal-name lookup.
+   */
+  async compute(
+    user: AuthUser,
+    recipeId: string,
+    mode: NutritionMode,
+  ): Promise<NutritionResponse> {
+    const recipe = await this.access.loadOrThrow(recipeId);
+    await this.access.assertCanView(user.id, recipe);
+
+    const version = recipe.currentVersion;
+    if (version === null || version === undefined) {
+      throw new NotFoundException('Recipe has no current version');
+    }
+
+    return mode === 'meal'
+      ? this.computeMeal(version)
+      : this.computeIngredients(version);
+  }
+
+  /**
+   * NUT-6 ingredients mode: one USDA search per ingredient, kcal/100 g scaled
+   * by the ingredient's grams, summed over the ingredients that matched.
+   */
+  private async computeIngredients(
+    version: RecipeVersionEntity,
+  ): Promise<NutritionResponse> {
+    const ingredients = version.ingredients ?? [];
+    const rows = await mapWithConcurrency(
+      ingredients,
+      USDA_CONCURRENCY,
+      (ingredient: Ingredient): Promise<IngredientNutritionDto> =>
+        this.nutritionForIngredient(ingredient),
+    );
+
+    // NUT-5, NUT-6: the total sums what matched; `partial` flags the rest.
+    let sum = 0;
+    let anyAvailable = false;
+    let partial = false;
+    for (const row of rows) {
+      if (row.kcal === null) {
+        partial = true;
+      } else {
+        sum += row.kcal;
+        anyAvailable = true;
+      }
+    }
+
+    const kcalTotal = anyAvailable ? round1(sum) : null;
+    return {
+      mode: 'ingredients',
+      servings: version.servings,
+      kcalPerPortion: this.perPortion(kcalTotal, version.servings),
+      kcalTotal,
+      partial,
+      ingredients: rows,
+      matchedDescription: null,
+      source: NUTRITION_SOURCE,
+    };
+  }
+
+  /**
+   * NUT-5, NUT-6: one ingredient. An empty quantity or the `none` unit is
+   * unmatched without a lookup; a USDA outage for this ingredient (503) leaves
+   * it unmatched too, while a 429 propagates and fails the request.
+   */
+  private async nutritionForIngredient(
+    ingredient: Ingredient,
+  ): Promise<IngredientNutritionDto> {
+    const unavailable: IngredientNutritionDto = {
+      name: ingredient.name,
+      grams: null,
+      kcal: null,
+      matchedDescription: null,
+    };
+    if (
+      ingredient.quantity === null ||
+      ingredient.unit === 'none' ||
+      ingredient.name.trim() === ''
+    ) {
+      return unavailable;
+    }
+
+    try {
+      const hit = (
+        await this.usda.searchFoods(ingredient.name, INGREDIENT_DATA_TYPES)
+      )[0];
+      if (hit === undefined) {
+        return unavailable;
+      }
+
+      // NUT-6: `piece` needs the food's own first portion weight.
+      let portionGramWeight: number | null = null;
+      if (ingredient.unit === 'piece') {
+        const detail = await this.usda.getFood(hit.fdcId);
+        portionGramWeight = detail?.portions[0]?.gramWeight ?? null;
+      }
+
+      const grams = gramsFor(ingredient, portionGramWeight);
+      const kcal =
+        grams === null || hit.kcalPer100g === null
+          ? null
+          : round1((hit.kcalPer100g * grams) / 100);
+      return {
+        name: ingredient.name,
+        grams: grams === null ? null : toTwoDecimals(grams),
+        kcal,
+        matchedDescription: hit.description,
+      };
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException) {
+        return unavailable;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * NUT-3, NUT-6 meal mode: the title is searched in FNDDS; the first hit's
+   * kcal/100 g and a portion weight (`foodMeasures[0].gramWeight`, else the
+   * first `foodPortions[].gramWeight`) give kcal per portion. With no portion
+   * weight only the kcal/100 g basis is reported and the answer stays partial.
+   */
+  private async computeMeal(
+    version: RecipeVersionEntity,
+  ): Promise<NutritionResponse> {
+    const hit = (
+      await this.usda.searchFoods(version.title, MEAL_DATA_TYPES)
+    )[0];
+    if (hit === undefined) {
+      return {
+        mode: 'meal',
+        servings: version.servings,
+        kcalPerPortion: null,
+        kcalTotal: null,
+        partial: true,
+        ingredients: [],
+        matchedDescription: null,
+        source: NUTRITION_SOURCE,
+      };
+    }
+
+    let portionGrams = hit.gramWeightPerMeasure;
+    if (portionGrams === null) {
+      const detail = await this.usda.getFood(hit.fdcId);
+      portionGrams = detail?.portions[0]?.gramWeight ?? null;
+    }
+
+    const kcalPer100g = hit.kcalPer100g;
+    // With no portion weight the basis falls back to 100 g so kcal/100 g shows.
+    const basisGrams = portionGrams ?? (kcalPer100g === null ? null : 100);
+    const kcalForBasis =
+      basisGrams === null || kcalPer100g === null
+        ? null
+        : round1((kcalPer100g * basisGrams) / 100);
+    const kcalPerPortion =
+      portionGrams === null || kcalPer100g === null
+        ? null
+        : Math.round((kcalPer100g * portionGrams) / 100);
+
+    return {
+      mode: 'meal',
+      servings: version.servings,
+      kcalPerPortion,
+      kcalTotal:
+        kcalPerPortion === null
+          ? null
+          : Math.round(kcalPerPortion * version.servings),
+      partial: kcalPerPortion === null,
+      ingredients: [
+        {
+          name: version.title,
+          grams: basisGrams === null ? null : toTwoDecimals(basisGrams),
+          kcal: kcalForBasis,
+          matchedDescription: hit.description,
+        },
+      ],
+      matchedDescription: hit.description,
+      source: NUTRITION_SOURCE,
+    };
+  }
+
+  /** NUT-6: total ÷ servings, whole kcal; null when nothing matched. */
+  private perPortion(
+    kcalTotal: number | null,
+    servings: number,
+  ): number | null {
+    if (kcalTotal === null || servings < 1) {
+      return null;
+    }
+    return Math.round(kcalTotal / servings);
+  }
+}

@@ -1,67 +1,68 @@
 # MEM.md — session handoff notes
 
-Written 2026-09-08 at the end of the first session; updated 2026-09-08 at the end of the tooling session (the third). Read this, SPEC.md, and `.claude/README.md` before doing anything. INTENT.txt is history: everything in it is reflected in SPEC.md (Rotem, 2026-09-08).
+Written 2026-09-08 at the end of the first session; updated 2026-09-28 at the end of the fifth session (the first full build). Read this, SPEC.md, and `.claude/README.md` before doing anything. INTENT.txt is history: everything in it is reflected in SPEC.md (Rotem, 2026-09-08).
 
 ## Working rules (from Rotem, non-negotiable)
 
 1. **SPEC.md is the scaffolding.** Never write code from a chat prompt. A request first changes SPEC.md; code is built from SPEC.md.
 2. **Never assume.** If SPEC.md does not say it, ask Rotem directly in chat. Do not write questions, "open", "proposed", or "TBD" markers into SPEC.md. SPEC.md holds only settled architecture and requirements.
-3. **Verify online before presenting.** Every third-party fact (versions, limits, licences, endpoints) needs a source URL fetched that day. SPEC.md §16 is the source list; re-verify before scaffolding, the facts there were checked on 2026-09-08.
+3. **Verify online before presenting.** Every third-party fact (versions, limits, licences, endpoints) needs a source URL fetched that day. SPEC.md §16 is the source list (checked 2026-09-08 twice and, for the packages added, 2026-09-28).
 4. Deleted files (the old README.md and docs/ARCHITECTURE.md from git history) are out of scope. Do not use them as a source.
-5. Per-folder CLAUDE.md constraints are Rotem's. They exist now (written 2026-09-08 in the second session); do not invent or edit constraints, ask Rotem for the sentence.
-6. **Commits go through the local git CLI**, configured with Rotem's identity, so they count as Rotem's contributions on GitHub. No Co-Authored-By or "Generated with" lines anywhere. PRs, if needed, are opened through the GitKraken MCP tools. (Rotem, 2026-09-08)
+5. Per-folder CLAUDE.md constraints are Rotem's. Do not invent or edit constraints, ask Rotem for the sentence. `libs/web/feature-friends/` still has no CLAUDE.md; Rotem writes it.
+6. **Commits go through the local git CLI**, configured with Rotem's identity, so they count as Rotem's contributions on GitHub. No Co-Authored-By or "Generated with" lines anywhere. PRs, if needed, are opened through the GitKraken MCP tools (its server failed to connect on 2026-09-28; no PR was needed). (Rotem, 2026-09-08)
 7. **Every subagent runs on Claude Opus 4.8** (`claude-opus-4-8`), never Fable. Enforced by the `env` block in `.claude/settings.json` and by `model:` in every `.claude/agents/*.md`. (Rotem, 2026-09-08)
-8. **Unit tests are written only by the `test-writer` subagent.** The main session never writes or edits a `*.spec.ts(x)` file; the PreToolUse guard denies it. (Rotem, 2026-09-08)
+8. **Unit tests are written only by the `test-writer` subagent.** The main session never writes or edits a `*.spec.ts(x)` file; the PreToolUse guard denies it. When a production fix invalidates a pinned test, hand the test back to test-writer (done twice on 2026-09-28). (Rotem, 2026-09-08)
+9. **Delegated choices.** On 2026-09-08 Rotem said "choose actions yourself" for toolchain flags and UI details, and on 2026-09-28 "finish the app. report when you're done according to SPEC.md". Every detail SPEC.md did not settle was decided, written into SPEC.md with "Rotem delegated, chat 2026-09-28", and built. Product behaviour that changes what the app does is still asked, not assumed. (Rotem, 2026-09-08, 2026-09-28)
+10. **Claude never touches `.env` or `.env.local`** (guard + CLAUDE.md). Rotem asked on 2026-09-28 for the env file to be written; the answer is `.env.example`, regenerated with every key and comments, which Rotem copies to `.env.local` and fills.
 
 ## App name
 
-Working name is **CookBook** (Rotem, 2026-09-08), chosen as a placeholder after a search found every short cooking word (Ladle, Mise, Simmer, Stovetop, Potluck, Foodkin, PanPal) already taken by existing apps. Names that came back clean if a rename is wanted later: Supperkin, Forkfolk, Tablekin (no app, no npm package found on 2026-09-08). Repo name and the `@rsn` alias are unchanged.
+**CookBook** (Rotem, 2026-09-08). Brand text everywhere (SPEC UI-2). Design guide folder: `design_handoff_cookbook_ui/` (a guidebook, SPEC §11.5 UI-1). Repo name and the `@rsn` alias unchanged.
 
 ## State of the repository
 
-- Branch `master`, remote `origin` = https://github.com/rotem1999/recipe-social-network.git. Last pushed commit `67c1412` (docs: set working app name to CookBook).
-- Committed: INTENT.txt, SPEC.md (Draft 2, complete, no open items, title CookBook), .env.example (predates SPEC; regenerate from SPEC §14 when keys are settled), .gitignore, root CLAUDE.md, this file, and the folder skeleton of SPEC §11.3 (`apps/`, `libs/`, `docker/`) holding only a CLAUDE.md per folder.
-- **Uncommitted:** `.claude/` (the Claude Code tooling, see below) and `design_handoff_potluck_ui/` (appeared 2026-09-08; Rotem said to ignore it for now, it is not part of the build).
-- No application code exists yet. No `package.json`, `nx.json` or `tsconfig.base.json` yet.
-- Six commits before `534cb8d` carry `Co-Authored-By` trailers from before rule 6 existed. History is pushed and was left alone.
+- Branch **`Dev`**, remote `origin` = https://github.com/rotem1999/recipe-social-network.git. `master` is behind Dev; merging is Rotem's call.
+- Commits: `b7b6abf` design handoff, `a1cb9af` SPEC Draft 3, `d9204d8` Nx scaffold, `24a0224` MEM handoff (all 2026-09-08); then on 2026-09-28 the build commit that carries this file (`feat: build the CookBook API, renderer and desktop shell from SPEC.md Draft 4`).
+- **The application is fully written from SPEC.md Draft 4.** Every §11.6 route exists once; every §11.3 library holds real code; `apps/api` wires ConfigModule (`.env.local` then `.env`), DbModule and the eight feature modules; `apps/web` is the CookBook renderer (auth, home, discover, friends, recipe detail, editor, catalogue preview, cook mode); `apps/desktop` loads it in Electron with the timezone preload and ships the OFL/ISC licences; `docker/docker-compose.yml` exists.
+- Verified on 2026-09-28: lint 30/30 (one pre-existing warning in the api-e2e generator support file), typecheck 9/9 web projects plus `tsc` on every API library and app, unit tests 27/27 projects (about 700 tests: shared 71, API 478 including the app, web 149 including the app), builds of api, web and desktop, arch-reviewer 14-point checklist (two blockers fixed, `git diff -- '**/CLAUDE.md'` empty).
+- **Not verified, blocked on credentials:** nothing has run against PostgreSQL, OpenRouter, TheMealDB, USDA, Open-Meteo or Firebase. The migration was only load-tested (`migration:show` reached the local PostgreSQL and failed on auth, as expected). The e2e suites (`apps/api-e2e` Jest + axios, `apps/web-e2e` Playwright with every API call stubbed, `apps/desktop-e2e` WebdriverIO) compile and lint but were not executed: api-e2e needs the database and a running API, web-e2e needs `pnpm exec playwright install`, desktop-e2e needs the built app. `apps/desktop` has no unit spec (nothing beyond the bootstrap to test).
+- Two production defects found by test-writer were fixed the same day (auth refresh-secret message swallowed; the caller's own row in friend search inheriting flags from other requests).
+- `.env.example` is regenerated per SPEC §14 (2026-09-28). No `.env.local` exists on this machine as far as Claude can tell (Claude cannot look).
 
 ## Tooling (`.claude/`, added 2026-09-08)
 
-Full description and the doc sources in `.claude/README.md`. In short: five subagents (`spec-guardian`, `fact-verifier`, `arch-reviewer`, `test-runner`, `test-writer`), five skills (`/spec-change`, `/reverify-sources`, `/nx-project`, `/commit`, `/handoff`), and a PreToolUse guard (`.claude/hooks/guard.js`, Node via Git Bash) that denies env-file access, signed commits, `gh pr create`, TBD or questions in SPEC.md, provider keys or URLs in web, desktop and shared code, and spec files written outside `test-writer`; it asks before CLAUDE.md edits, amends and force pushes. Skills and hooks load at session start, so `/handoff` and the others are usable from the next session on. The guard was tested with 30 cases on 2026-09-08 and is active.
+Full description in `.claude/README.md`. Guard behaviours learned: a Bash command is denied if it mentions `.env` anywhere or a `*.spec.*` name with a redirect; any Write to `apps/web`, `apps/desktop`, `libs/web`, `libs/shared` containing a provider host (even in a comment or constant) is denied, so the TheMealDB attribution string lives only in `libs/api/data-access-themealdb` and travels in API responses. Subagent workflow that worked on 2026-09-28: a rules file plus an inter-library contract file in the scratchpad, builders launched in waves (data-access → API features → web features), test-writers per batch, arch-reviewer at the end. `pnpm prettier --write <folder>` reformats CLAUDE.md and project.json; always scope it to `src`.
 
-## Next step (Rotem's plan)
+## Next step (Rotem, 2026-09-28: "then we'll run the program and test what and if needs changes")
 
-Rotem: the tooling was "the last step before writing code" (2026-09-08). In order:
-
-1. Commit `.claude/` (`/commit`), leaving `design_handoff_potluck_ui/` untracked.
-2. `/reverify-sources all`: re-check SPEC §16 and §11.1 and the four items under "Things to re-check".
-3. Ask Rotem the generator flags SPEC.md does not settle (buildable or publishable libraries, linter, strictness, e2e options, compiler) and write the answers into SPEC §11.2 before the first `/nx-project`.
-4. Create the workspace (`npx create-nx-workspace@latest`, pnpm) and generate the projects of SPEC §11.3 with `/nx-project`, one at a time, CLAUDE.md files untouched.
+1. Rotem fills `.env.local` (copy `.env.example`; the values to complete are listed in the 2026-09-28 session report: DB password chosen in docker/setup-database.sql (run once in pgAdmin as postgres), two JWT secrets, TheMealDB v2 key, USDA key, OpenRouter key, optional Firebase trio).
+2. `pnpm nx run api-data-access-db:migrate`, then `pnpm nx serve api` and `pnpm nx run desktop:dev` (or `pnpm nx serve web` for a browser at http://localhost:4200).
+3. Run `pnpm nx e2e api-e2e` against the running API; `pnpm exec playwright install` then `pnpm nx e2e web-e2e`; `pnpm nx run desktop:build` then `pnpm nx e2e desktop-e2e`.
+4. Fix what the live run shows, SPEC-first.
 
 ## Decisions that live only in chat history (all are also in SPEC.md, listed here for speed)
 
-- Auth: username + password in PostgreSQL, backend JWT. Firebase Auth and Google sign-in dropped.
-- Images: Cloud Storage for Firebase, Blaze plan already active, backend-only through the Admin SDK, signed URLs for display, no Firebase SDK or key in the desktop app.
-- AI: paid `minimax/minimax-m3` on OpenRouter through one server key (account has about $11 credits). 100 requests per user per day. No chat history saved. Prompts written to conserve tokens. Every prompt and response logged to `<project root>/log/`, one JSON file per day.
-- Weather: Open-Meteo. Location from the OS timezone only (city segment geocoded). No IP lookup, no browser geolocation.
-- Recipes: title + short description, structured ingredients, steps with optional timer, optional prep/cook minutes, one category from TheMealDB's 14, servings (default 2 for TheMealDB imports). Owner has full control; versioning, all versions public if the recipe is public; saved public recipes are local copies that fork on edit with attribution; shared recipes are view-only but cookable.
-- Social: mutual friend requests, find by username or email; whole-star 1–5 ratings, average shown in quarter steps with decimal on hover; Reddit-style up/down comment votes; up to 3 favourite categories pinned in Discover.
-- Toolchain: Nx 23 monorepo, pnpm, alias `@rsn/<scope>/<type>-<name>`, NestJS 11.2.3 CommonJS + Jest (NestJS 12 is outside `@nx/nest`'s peer range), electron-vite via `nx:run-commands` (`nx-electron` is pinned to Nx 22), Vitest 5 + React Testing Library for the renderer, `@wdio/electron-service` for Electron e2e, targets Windows/macOS/Linux, API and Postgres on Rotem's PC for now.
+- Auth: username + password, scrypt N=2¹⁷ from `node:crypto` (no native module), backend JWT access 15m / refresh 30d, stateless refresh, sign-out client-side (AUTH-5..8).
+- Images: firebase-admin 14.5.0 only, bucket path `recipes/<id>/<uuid>.<ext>`, 3 images × 5 MB, signed URLs 6 h, unconfigured Firebase → 503 on upload and no URLs (IMG-6).
+- AI: paid `minimax/minimax-m3`, 100/user/day counted atomically in `ai_daily_usage` before the call, JSON-Lines log in `log/YYYY-MM-DD.json`, `cost` in credits, no `response_format` parameter (COOK-10, WX-10, LOG-5).
+- Weather: Open-Meteo, city from the timezone segment, 30-minute cache, recommendations still work without weather (WX-10).
+- Recipes: versions table, saved copy = own private row with `savedFromRecipeId`, first edit sets `forkedFromRecipeId`, own originals soft-delete, copies hard-delete; catalogue saves keep TheMealDB's image URL (§12.1, CAT-6).
+- Social: whole-star ratings only on public recipes, average recomputed per write; comments on public and shared, votes on public only (RATE-4, COM-3).
+- Toolchain (2026-09-28): `@nestjs/config` 4.0.4, `@nestjs/jwt` 11.0.2, `@nestjs/typeorm` 11.0.3 because the 12.x lines are ESM-only and Jest in the CommonJS workspace cannot load them (§16 V19); class-validator 0.15.1; lucide-react 1.48.0; TypeScript 6, Vite 7, Vitest 5.0.0 unchanged.
+- UI: in-app state routing, fetch client with localStorage tokens and one refresh retry, 23 guide details settled as UI-9..UI-17.
 
-Decisions of 2026-09-08 (tooling session) that are not product decisions and therefore live in `.claude/README.md`, not SPEC.md: subagent model Opus 4.8 (rule 7), unit tests by subagent only (rule 8), the guard rules, the pre-allowed read-only commands.
+## Local machine facts (checked 2026-09-28)
 
-## Local machine facts (checked 2026-09-08)
+- PostgreSQL 18.6 service running on 5432; `psql` needs a password Claude does not have; no application role or database created yet.
+- Node v26.5.0, npm 11.17.0, pnpm 12.3.4 (global), git 2.54.0.windows.1. Playwright browsers not installed. Electron 44.2.0 binary downloaded by pnpm.
+- Shell PowerShell 5.1 with Git Bash; long heredocs fail (ENAMETOOLONG); use the Write tool.
+- Git identity `Rotem <akunu11@gmail.com>` set locally.
 
-- PostgreSQL 18.6 at `C:\Program Files\PostgreSQL\18`, service `postgresql-x64-18` running, port 5432. `psql` is not on PATH.
-- Node v26.5.0 (Current line, not LTS; SPEC names Node 24 Active LTS as the reference; re-confirmed 2026-09-08 in the tooling session), npm 11.17.0, git 2.54.0.windows.1.
-- pnpm is not installed. No global `nx`.
-- Shell is PowerShell 5.1; Git Bash is also available. Long heredocs through Bash fail with ENAMETOOLONG on this machine, use the Write tool for large files. A Bash command that redirects output and mentions a spec file name anywhere is denied by the guard; use the Write tool there too.
-- Git identity `Rotem <akunu11@gmail.com>` is set locally and matches the commit history.
+## Things to re-check before the next code
 
-## Things to re-check before scaffolding
-
-- Whether `@nx/nest`, NestJS 11, and electron-vite work under TypeScript 7.0 (native compiler); not verified.
-- Whether Nx 23 supports Node 26, or whether Rotem wants Node 24 LTS installed.
-- `minimax/minimax-m3` provider list and pricing on OpenRouter (changes often).
-- TheMealDB v2 key: Rotem adds it to `.env` later; `.env.example` still points at v1.
-- Claude Opus 4.8 is a legacy model, retirement not before 2027-05-28 (platform.claude.com, 2026-09-08); rule 7 needs a new ID when it retires.
+- Everything under "Not verified, blocked on credentials" above, especially the migration on a real database and the OpenRouter answer format of `minimax/minimax-m3` for WX-10.
+- The two live USDA checks (§16 U6, U7) with Rotem's real key.
+- OpenRouter provider list and pricing for `minimax/minimax-m3` (changes often).
+- Nx 24 removes `nxViteTsPaths` and `nxCopyAssetsPlugin` (deprecation warnings on every Vite task).
+- TypeScript 7, Vite 8, NestJS 12 (with the three ESM-only companion packages): all recorded in SPEC §11.1 and §16 V19.
+- Claude Opus 4.8 retirement not before 2027-05-28; rule 7 needs a new ID when it retires.

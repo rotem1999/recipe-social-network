@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "../../dist/out-tsc",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "strict": true,
+    // `browser.execute` callbacks run in the renderer, so the specs need the DOM lib.
+    "lib": ["ES2022", "DOM"],
+    "types": [
+      "node",
+      "@wdio/globals/types",
+      "@wdio/mocha-framework",
+      "@wdio/electron-service"
+    ]
+  },
+  "include": ["wdio.conf.ts", "src/**/*.ts"]
+}

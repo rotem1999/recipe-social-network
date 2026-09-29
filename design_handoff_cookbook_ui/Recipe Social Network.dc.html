@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/organic-a2f58494-e42c-4054-8f82-12e22132329c/styles.css">
+  <script src="_ds/organic-a2f58494-e42c-4054-8f82-12e22132329c/_ds_bundle.js"></script>
+  <style>
+    body { margin: 0; }
+    a { color: var(--color-accent); } a:hover { color: var(--color-accent-600); }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    @keyframes pulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
+  </style>
+</helmet>
+<div style="min-height:100vh;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body)">
+
+  <sc-if value="{{ notCook }}" hint-placeholder-val="{{ true }}">
+    <header class="nav" style="max-width:1100px;margin:0 auto;padding-top:22px">
+      <span class="nav-brand" style="display:inline-flex;align-items:center;gap:9px;font-size:20px">
+        <span style="width:34px;height:34px;border-radius:50%;background:var(--color-accent);color:var(--color-bg);display:inline-flex;align-items:center;justify-content:center">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21a1 1 0 0 0 1-1v-5.35c0-.457.316-.844.727-1.041a4 4 0 0 0-2.134-7.589 5 5 0 0 0-9.186 0 4 4 0 0 0-2.134 7.588c.411.198.727.585.727 1.041V20a1 1 0 0 0 1 1Z"></path><path d="M6 17h12"></path></svg>
+        </span>
+        CookBook
+      </span>
+      <a href="#" onClick="{{ goHome }}" aria-current="{{ homeCur }}">Home</a>
+      <a href="#" onClick="{{ goDiscover }}" aria-current="{{ discCur }}">Discover</a>
+      <a href="#" onClick="{{ goFriends }}" aria-current="{{ frCur }}">Friends</a>
+      <button class="btn btn-primary" onClick="{{ openNew }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg>
+        New recipe
+      </button>
+      <span style="width:34px;height:34px;border-radius:50%;background:var(--color-accent-2-200);color:var(--color-accent-2-800);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:13px" title="Rotem">R</span>
+    </header>
+  </sc-if>
+
+  <sc-if value="{{ isHome }}" hint-placeholder-val="{{ true }}">
+    <main data-screen-label="Home" style="max-width:1100px;margin:0 auto;padding:14px 26px 70px;animation:fadeUp .3s ease">
+      <h1 style="margin-bottom:4px">{{ greeting }}</h1>
+      <p class="text-muted" style="font-size:14px;margin-bottom:26px">{{ weatherLine }}</p>
+
+      <section style="background:var(--color-accent-2-100);border-radius:calc(var(--radius-lg) * 1.15);padding:26px 30px;display:flex;gap:26px;align-items:center;flex-wrap:wrap;margin-bottom:44px">
+        <span style="width:64px;height:64px;flex:none;border-radius:50%;background:var(--color-accent-2-200);color:var(--color-accent-2-700);display:inline-flex;align-items:center;justify-content:center">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"></path><path d="M12 3a5 5 0 0 1 5 5c0 2-1 3-2 4h-6c-1-1-2-2-2-4a5 5 0 0 1 5-5Z"></path></svg>
+        </span>
+        <div style="flex:1;min-width:220px">
+          <div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent-2-700);margin-bottom:4px">{{ recKicker }}</div>
+          <h3 style="margin-bottom:2px">{{ recTitle }}</h3>
+          <p style="margin:0;font-size:14px;color:var(--color-accent-2-800)">{{ recWhy }}</p>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <button class="btn btn-ghost" style="color:var(--color-accent-2-700)" onClick="{{ recNext }}">Show another</button>
+          <button class="btn btn-primary" onClick="{{ recCook }}">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>
+            Cook it
+          </button>
+        </div>
+      </section>
+
+      <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:16px">
+        <h4 style="margin:0">Your recipes</h4>
+        <span class="text-muted" style="font-size:12px">{{ homeCount }}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:18px">
+        <sc-for list="{{ homeList }}" as="r" hint-placeholder-count="6">
+          <article class="card elev-sm" style="cursor:pointer;padding:0;overflow:hidden;gap:0;transition:box-shadow .15s ease, transform .15s ease" style-hover="box-shadow:var(--shadow-md);transform:translateY(-2px)" onClick="{{ r.open }}">
+            <div class="washed" style="height:110px;background:{{ r.tint }};display:flex;align-items:center;justify-content:center;color:{{ r.tintInk }}">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"></path><path d="M7 2v20"></path><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"></path></svg>
+            </div>
+            <div style="padding:15px 17px 17px;display:flex;flex-direction:column;gap:7px">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+                <span class="card-title">{{ r.title }}</span>
+                <span class="tag tag-neutral" style="flex:none">{{ r.cat }}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px" onMouseEnter="{{ r.hovOn }}" onMouseLeave="{{ r.hovOff }}">
+                <span style="position:relative;display:inline-block;font-size:13px;line-height:1;letter-spacing:1px">
+                  <span style="color:var(--color-neutral-400)">★★★★★</span>
+                  <span style="position:absolute;left:0;top:0;overflow:hidden;white-space:nowrap;color:var(--color-accent);width:{{ r.starPct }}%">★★★★★</span>
+                </span>
+                <sc-if value="{{ r.showDec }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:var(--color-accent-700)">{{ r.avgLabel }}</span></sc-if>
+              </div>
+              <div class="card-meta">{{ r.meta }}</div>
+            </div>
+          </article>
+        </sc-for>
+      </div>
+    </main>
+  </sc-if>
+
+  <sc-if value="{{ isDiscover }}" hint-placeholder-val="{{ false }}">
+    <main data-screen-label="Discover" style="max-width:1100px;margin:0 auto;padding:14px 26px 40px;animation:fadeUp .3s ease">
+      <h1 style="margin-bottom:4px">Discover</h1>
+      <p class="text-muted" style="font-size:14px;margin-bottom:22px">{{ discSub }}</p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:30px">
+        <sc-for list="{{ catChips }}" as="ch" hint-placeholder-count="8">
+          <button style="display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;padding:6px 14px;border-radius:999px;cursor:pointer;border:1px solid {{ ch.border }};background:{{ ch.bg }};color:{{ ch.ink }};transition:background .12s ease" onClick="{{ ch.pick }}">
+            <sc-if value="{{ ch.isFav }}" hint-placeholder-val="{{ false }}"><span style="color:var(--color-accent);font-size:12px">★</span></sc-if>
+            {{ ch.name }}
+            <span title="{{ ch.favTip }}" onClick="{{ ch.toggleFav }}" style="font-size:12px;opacity:{{ ch.starOp }};color:var(--color-neutral-500)" style-hover="color:var(--color-accent)">{{ ch.starSym }}</span>
+          </button>
+        </sc-for>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:18px">
+        <sc-for list="{{ discList }}" as="r" hint-placeholder-count="8">
+          <article class="card elev-sm" style="padding:0;overflow:hidden;gap:0;transition:box-shadow .15s ease" style-hover="box-shadow:var(--shadow-md)">
+            <div class="washed" style="height:120px;cursor:pointer;background:{{ r.tint }};display:flex;align-items:center;justify-content:center;color:{{ r.tintInk }}" onClick="{{ r.open }}">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="4"></circle></svg>
+            </div>
+            <div style="padding:15px 17px 17px;display:flex;flex-direction:column;gap:7px">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+                <span class="card-title" style="cursor:pointer" onClick="{{ r.open }}">{{ r.title }}</span>
+                <span class="tag tag-neutral" style="flex:none">{{ r.cat }}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px" onMouseEnter="{{ r.hovOn }}" onMouseLeave="{{ r.hovOff }}">
+                <span style="position:relative;display:inline-block;font-size:13px;line-height:1;letter-spacing:1px">
+                  <span style="color:var(--color-neutral-400)">★★★★★</span>
+                  <span style="position:absolute;left:0;top:0;overflow:hidden;white-space:nowrap;color:var(--color-accent);width:{{ r.starPct }}%">★★★★★</span>
+                </span>
+                <sc-if value="{{ r.showDec }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:var(--color-accent-700)">{{ r.avgLabel }}</span></sc-if>
+              </div>
+              <div class="card-meta" style="justify-content:space-between">
+                <span>{{ r.byline }}</span>
+                <sc-if value="{{ r.saved }}" hint-placeholder-val="{{ false }}">
+                  <button class="btn btn-ghost" style="font-size:12px;padding-block:4px" onClick="{{ r.cook }}">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>
+                    Cook
+                  </button>
+                </sc-if>
+                <sc-if value="{{ r.notSaved }}" hint-placeholder-val="{{ true }}">
+                  <button class="btn btn-secondary" style="font-size:12px;padding-block:4px" onClick="{{ r.save }}">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg>
+                    Save
+                  </button>
+                </sc-if>
+              </div>
+            </div>
+          </article>
+        </sc-for>
+      </div>
+      <p class="text-muted" style="font-size:11px;margin-top:34px">Recipe data and imagery: <a href="https://www.themealdb.com/" style="color:inherit">TheMealDB</a></p>
+    </main>
+  </sc-if>
+
+  <sc-if value="{{ isFriends }}" hint-placeholder-val="{{ false }}">
+    <main data-screen-label="Friends" style="max-width:640px;margin:0 auto;padding:14px 26px 70px;animation:fadeUp .3s ease">
+      <h1 style="margin-bottom:4px">Friends</h1>
+      <p class="text-muted" style="font-size:14px;margin-bottom:22px">Share recipes without publishing them.</p>
+      <div style="display:flex;gap:10px;margin-bottom:28px">
+        <input class="input" placeholder="Find by username or email" value="{{ frQuery }}" onChange="{{ setFrQuery }}">
+        <button class="btn btn-primary" style="flex:none" onClick="{{ frSend }}">{{ frSendLabel }}</button>
+      </div>
+      <div style="display:flex;flex-direction:column">
+        <sc-for list="{{ friendList }}" as="f" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:14px;padding:13px 4px;border-bottom:1px solid color-mix(in srgb, var(--color-text) 8%, transparent)">
+            <span style="width:38px;height:38px;flex:none;border-radius:50%;background:{{ f.tint }};color:{{ f.tintInk }};display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px">{{ f.initial }}</span>
+            <div style="flex:1">
+              <div style="font-weight:600;font-size:14px">{{ f.name }}</div>
+              <div class="text-muted" style="font-size:12px">{{ f.sub }}</div>
+            </div>
+            <sc-if value="{{ f.pending }}" hint-placeholder-val="{{ false }}">
+              <button class="btn btn-primary" style="font-size:12px;padding-block:5px" onClick="{{ f.accept }}">Accept</button>
+              <button class="btn btn-secondary" style="font-size:12px;padding-block:5px" onClick="{{ f.decline }}">Decline</button>
+            </sc-if>
+            <sc-if value="{{ f.isFriend }}" hint-placeholder-val="{{ true }}"><span class="tag tag-accent-2">Friends</span></sc-if>
+            <sc-if value="{{ f.requested }}" hint-placeholder-val="{{ false }}"><span class="tag tag-neutral">Request sent</span></sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </main>
+  </sc-if>
+
+  <sc-if value="{{ isRecipe }}" hint-placeholder-val="{{ false }}">
+    <main data-screen-label="Recipe detail" style="max-width:880px;margin:0 auto;padding:6px 26px 70px;animation:fadeUp .3s ease">
+      <button class="btn btn-ghost" style="margin-bottom:14px" onClick="{{ back }}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg>
+        {{ backLabel }}
+      </button>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;margin-bottom:6px">
+        <div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+            <span class="tag tag-neutral">{{ d.cat }}</span>
+            <span class="tag {{ d.visCls }}">{{ d.visLabel }}</span>
+            <span class="tag tag-outline" title="Editing creates a new version. Every version of a public recipe stays viewable.">{{ d.version }}</span>
+          </div>
+          <h1 style="margin-bottom:4px">{{ d.title }}</h1>
+          <p class="text-muted" style="font-size:15px;max-width:520px">{{ d.desc }}</p>
+          <sc-if value="{{ d.hasFork }}" hint-placeholder-val="{{ false }}">
+            <p style="font-size:12px;color:var(--color-accent-2-700);margin:0">
+              Forked from <a href="#" style="color:inherit">{{ d.forkOf }}</a>
+            </p>
+          </sc-if>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:10px">
+          <sc-if value="{{ d.cookable }}" hint-placeholder-val="{{ true }}">
+            <button class="btn btn-primary" style="font-size:16px;padding:11px 24px" onClick="{{ d.cook }}">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>
+              Start cooking
+            </button>
+          </sc-if>
+          <sc-if value="{{ d.needsSave }}" hint-placeholder-val="{{ false }}">
+            <button class="btn btn-primary" style="font-size:16px;padding:11px 24px" onClick="{{ d.save }}">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg>
+              Save to cook
+            </button>
+          </sc-if>
+          <div style="display:flex;align-items:center;gap:8px" onMouseEnter="{{ d.hovOn }}" onMouseLeave="{{ d.hovOff }}">
+            <span style="position:relative;display:inline-block;font-size:17px;line-height:1;letter-spacing:1px">
+              <span style="color:var(--color-neutral-400)">★★★★★</span>
+              <span style="position:absolute;left:0;top:0;overflow:hidden;white-space:nowrap;color:var(--color-accent);width:{{ d.starPct }}%">★★★★★</span>
+            </span>
+            <span style="font-size:13px;color:var(--color-accent-700);opacity:{{ d.decOp }};transition:opacity .12s ease">{{ d.avgLabel }}</span>
+            <span class="text-muted" style="font-size:12px">{{ d.votes }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:minmax(220px,5fr) minmax(0,7fr);gap:44px;margin-top:30px">
+        <section>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h4 style="margin:0">Ingredients</h4>
+            <span style="display:inline-flex;align-items:center;gap:8px">
+              <button class="btn btn-secondary btn-icon" style="width:28px;height:28px" onClick="{{ d.servDown }}">−</button>
+              <span style="font-size:13px;min-width:76px;text-align:center">{{ d.servLabel }}</span>
+              <button class="btn btn-secondary btn-icon" style="width:28px;height:28px" onClick="{{ d.servUp }}">+</button>
+            </span>
+          </div>
+          <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column">
+            <sc-for list="{{ d.ing }}" as="i" hint-placeholder-count="5">
+              <li style="display:flex;gap:10px;padding:8px 2px;font-size:14px;border-bottom:1px solid color-mix(in srgb, var(--color-text) 7%, transparent)">
+                <span style="min-width:64px;color:var(--color-accent-700);font-weight:600">{{ i.qty }}</span>
+                <span>{{ i.name }} <span class="text-muted" style="font-size:12px">{{ i.note }}</span></span>
+              </li>
+            </sc-for>
+          </ul>
+          <div style="margin-top:20px;padding:16px 18px;border-radius:var(--radius-lg);background:var(--color-neutral-100)">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+              <div>
+                <div style="font-size:20px;font-family:var(--font-heading)">{{ d.kcal }}</div>
+                <div class="text-muted" style="font-size:11px">kcal per portion · USDA FoodData Central</div>
+              </div>
+              <span class="seg" style="font-size:11px">
+                <label class="seg-opt" style="padding:5px 10px;font-size:11px"><input type="radio" name="nut" checked="{{ d.nutIng }}" onChange="{{ d.nutByIng }}">Ingredients</label>
+                <label class="seg-opt" style="padding:5px 10px;font-size:11px"><input type="radio" name="nut" checked="{{ d.nutMeal }}" onChange="{{ d.nutByMeal }}">Meal name</label>
+              </span>
+            </div>
+            <sc-if value="{{ d.nutNote }}" hint-placeholder-val="{{ false }}">
+              <p class="text-muted" style="font-size:11px;margin:8px 0 0">{{ d.nutNoteText }}</p>
+            </sc-if>
+          </div>
+        </section>
+
+        <section>
+          <h4 style="margin-bottom:12px">Steps</h4>
+          <ol style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:14px">
+            <sc-for list="{{ d.steps }}" as="s" hint-placeholder-count="5">
+              <li style="display:flex;gap:14px;align-items:flex-start">
+                <span style="width:26px;height:26px;flex:none;border-radius:50%;background:var(--color-accent-100);color:var(--color-accent-800);display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700">{{ s.n }}</span>
+                <div style="font-size:14px;line-height:1.55;padding-top:2px">
+                  {{ s.text }}
+                  <sc-if value="{{ s.hasTimer }}" hint-placeholder-val="{{ false }}">
+                    <span class="tag tag-accent-2" style="margin-left:8px;vertical-align:1px">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2 2"></path><path d="M10 2h4"></path></svg>
+                      {{ s.timerLabel }}
+                    </span>
+                  </sc-if>
+                </div>
+              </li>
+            </sc-for>
+          </ol>
+
+          <div class="hr" style="margin:30px 0 22px"></div>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+            <h4 style="margin:0">Your rating</h4>
+            <span style="display:inline-flex;gap:2px;font-size:20px;line-height:1">
+              <sc-for list="{{ d.rateStars }}" as="rs" hint-placeholder-count="5">
+                <span style="cursor:pointer;color:{{ rs.col }};transition:color .1s ease, transform .1s ease" style-hover="transform:scale(1.2)" onClick="{{ rs.set }}">★</span>
+              </sc-for>
+            </span>
+            <sc-if value="{{ d.rated }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:var(--color-accent-2-700)">Counted in the average</span></sc-if>
+          </div>
+          <p class="text-muted" style="font-size:12px;margin-bottom:22px">Whole stars only — the average shows in quarter steps.</p>
+
+          <h4 style="margin-bottom:12px">{{ d.comTitle }}</h4>
+          <div style="display:flex;flex-direction:column;gap:14px;margin-bottom:16px">
+            <sc-for list="{{ d.comments }}" as="c" hint-placeholder-count="2">
+              <div style="display:flex;gap:12px">
+                <span style="display:flex;flex-direction:column;align-items:center;gap:1px;flex:none">
+                  <button style="border:0;background:none;cursor:pointer;font-size:13px;line-height:1;padding:2px;color:{{ c.upCol }};transition:transform .1s ease" style-hover="transform:translateY(-1px)" onClick="{{ c.up }}">▲</button>
+                  <span style="font-size:12px;font-weight:700;color:{{ c.ptsCol }}">{{ c.pts }}</span>
+                  <button style="border:0;background:none;cursor:pointer;font-size:13px;line-height:1;padding:2px;color:{{ c.dnCol }};transition:transform .1s ease" style-hover="transform:translateY(1px)" onClick="{{ c.dn }}">▼</button>
+                </span>
+                <div>
+                  <div style="font-size:12px;font-weight:700;margin-bottom:2px">{{ c.author }}</div>
+                  <div style="font-size:14px">{{ c.text }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display:flex;gap:10px">
+            <input class="input" placeholder="Add a comment" value="{{ d.comDraft }}" onChange="{{ d.setComDraft }}">
+            <button class="btn btn-secondary" style="flex:none" onClick="{{ d.postCom }}">Post</button>
+          </div>
+        </section>
+      </div>
+    </main>
+  </sc-if>
+
+  <sc-if value="{{ isCook }}" hint-placeholder-val="{{ false }}">
+    <main data-screen-label="Cook mode" style="min-height:100vh;display:flex;flex-direction:column;max-width:760px;margin:0 auto;padding:26px;animation:fadeUp .3s ease">
+      <div style="display:flex;align-items:center;gap:14px">
+        <button class="btn btn-secondary btn-icon" onClick="{{ exitCook }}" title="Leave cook mode">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+        </button>
+        <span style="font-family:var(--font-heading);font-size:17px;flex:1">{{ c.title }}</span>
+        <span class="text-muted" style="font-size:12px" title="Shared AI budget — counted before each call">{{ c.quota }}</span>
+      </div>
+      <div style="height:5px;border-radius:999px;background:var(--color-neutral-200);margin:20px 0 0;overflow:hidden">
+        <div style="height:100%;border-radius:999px;background:var(--color-accent);width:{{ c.progPct }}%;transition:width .3s ease"></div>
+      </div>
+
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;padding:40px 0">
+        <div style="font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:14px">{{ c.stepLabel }}</div>
+        <h2 style="font-size:36px;line-height:1.2;max-width:600px;margin-bottom:24px">{{ c.text }}</h2>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <sc-if value="{{ c.showStart }}" hint-placeholder-val="{{ false }}">
+            <button class="btn btn-secondary" onClick="{{ c.startTimer }}">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2 2"></path><path d="M10 2h4"></path></svg>
+              {{ c.timerBtn }}
+            </button>
+          </sc-if>
+          <sc-if value="{{ c.showCountdown }}" hint-placeholder-val="{{ false }}">
+            <button class="btn" style="background:var(--color-accent-2-200);color:var(--color-accent-2-900);font-size:15px" onClick="{{ c.stopTimer }}">
+              <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--color-accent-2-700);animation:pulse 1.2s ease infinite"></span>
+              {{ c.countdown }}
+            </button>
+          </sc-if>
+          <button class="btn btn-secondary" onClick="{{ c.askAi }}">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"></path></svg>
+            Ask about this step
+          </button>
+        </div>
+        <sc-if value="{{ c.aiLoading }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:22px;font-size:14px;color:var(--color-accent-2-700);animation:pulse 1.1s ease infinite">Reading the recipe…</div>
+        </sc-if>
+        <sc-if value="{{ c.hasAnswer }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:22px;max-width:560px;background:var(--color-accent-2-100);border-radius:var(--radius-lg);padding:16px 20px;animation:fadeUp .25s ease">
+            <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-2-700);margin-bottom:6px">Tip for this step</div>
+            <div style="font-size:15px;line-height:1.55;color:var(--color-accent-2-900)">{{ c.answer }}</div>
+          </div>
+        </sc-if>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:14px">
+        <button class="btn btn-ghost" style="opacity:{{ c.backOp }}" onClick="{{ c.prev }}">Back</button>
+        <span style="display:inline-flex;gap:6px">
+          <sc-for list="{{ c.dots }}" as="dt" hint-placeholder-count="6">
+            <span style="width:8px;height:8px;border-radius:50%;cursor:pointer;background:{{ dt.bg }};transition:background .15s ease" onClick="{{ dt.go }}"></span>
+          </sc-for>
+        </span>
+        <button class="btn btn-primary" style="font-size:15px;padding:10px 26px" onClick="{{ c.next }}">{{ c.nextLabel }}</button>
+      </div>
+    </main>
+  </sc-if>
+
+  <sc-if value="{{ showNew }}" hint-placeholder-val="{{ false }}">
+    <div class="dialog-backdrop" style="z-index:30" onClick="{{ closeNew }}">
+      <div class="dialog" onClick="{{ eatClick }}">
+        <div class="dialog-title">New recipe</div>
+        <div class="field">
+          <label>Title</label>
+          <input class="input" placeholder="What are you making?" value="{{ newTitle }}" onChange="{{ setNewTitle }}">
+        </div>
+        <div class="field">
+          <label>Category</label>
+          <select class="input" value="{{ newCat }}" onChange="{{ setNewCat }}" style="appearance:none">
+            <sc-for list="{{ allCats }}" as="ct" hint-placeholder-count="4"><option value="{{ ct.name }}">{{ ct.name }}</option></sc-for>
+          </select>
+        </div>
+        <p class="text-muted" style="font-size:12px;margin:0">Starts private — share or publish it whenever you like.</p>
+        <div class="dialog-actions">
+          <button class="btn btn-secondary" onClick="{{ closeNew }}">Cancel</button>
+          <button class="btn btn-primary" onClick="{{ createNew }}">Create</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;weather&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;default&quot;: &quot;Cold night&quot;, &quot;options&quot;: [&quot;Cold night&quot;, &quot;Hot afternoon&quot;, &quot;Rainy morning&quot;], &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Context&quot;}}">
+class Component extends DCLogic {
+  state = {
+    screen: 'home', activeId: null, cameFrom: 'home',
+    savedIds: {}, favCats: { Pasta: 1, Vegan: 1 },
+    catFilter: null, hovId: null, recIdx: 0,
+    ratings: {}, votes: {}, extraComments: {}, comDraft: '',
+    servings: {}, nutMode: {},
+    cookStep: 0, tLeft: null, tRun: false,
+    aiLoading: false, aiAnswer: null, asked: 18,
+    showNew: false, newTitle: '', newCat: 'Miscellaneous',
+    friends: [
+      { name: 'Noa', sub: 'noa@gmail.com · 12 recipes shared', st: 'friend' },
+      { name: 'Avi', sub: 'wants to be friends', st: 'pending' },
+      { name: 'Maya', sub: 'maya.k · 4 recipes shared', st: 'friend' },
+    ],
+    frQuery: '', frSent: false, createdCount: 0, extraRecipes: [],
+  };
+
+  CATS = ['Beef','Breakfast','Chicken','Dessert','Goat','Lamb','Miscellaneous','Pasta','Pork','Seafood','Side','Starter','Vegan','Vegetarian'];
+  TINTS = [['var(--color-accent-200)','var(--color-accent-700)'],['var(--color-accent-2-200)','var(--color-accent-2-700)'],['var(--color-neutral-200)','var(--color-neutral-600)']];
+
+  DATA = [
+    { id:'ramen', mine:true, title:'Miso Ramen', desc:'Weeknight ramen with a rich miso broth, a jammy egg and chili oil.', cat:'Miscellaneous', avg:4.75, votes:23, servings:2, prep:15, cook:25, vis:'shared', version:'v3', kcal:540, kcalMeal:610,
+      ing:[[1,'l','chicken stock',''],[3,'tbsp','miso paste','white or red'],[200,'g','ramen noodles',''],[2,'','eggs','soft-boiled'],[1,'tbsp','soy sauce',''],[2,'','scallions','sliced'],[null,'','chili oil','to taste']],
+      steps:[['Bring the stock to a gentle simmer.',5],['Take the pot off the heat and whisk in the miso paste.',null],['Soft-boil the eggs, then move them to cold water.',7],['Cook the noodles in salted water.',3],['Divide the noodles between bowls and ladle the broth over.',null],['Halve the eggs, add scallions and finish with chili oil.',null]] },
+    { id:'shak', mine:true, title:'Shakshuka', desc:'Eggs poached in a spiced tomato and pepper sauce.', cat:'Breakfast', avg:4.5, votes:14, servings:2, prep:10, cook:20, vis:'private', version:'v1', kcal:320, kcalMeal:350,
+      ing:[[1,'tbsp','olive oil',''],[1,'','onion','diced'],[1,'','red pepper','diced'],[400,'g','crushed tomatoes',''],[1,'tsp','cumin',''],[4,'','eggs',''],[null,'','feta','to taste']],
+      steps:[['Soften the onion and pepper in olive oil.',6],['Add tomatoes and cumin; simmer until thick.',10],['Make wells and crack in the eggs.',null],['Cover and cook until the whites set.',5],['Crumble feta over and serve from the pan.',null]] },
+    { id:'chick', mine:true, title:'Lemon Herb Chicken', desc:'Roast chicken thighs with lemon, garlic and thyme.', cat:'Chicken', avg:4.25, votes:9, servings:4, prep:10, cook:35, vis:'public', version:'v2', kcal:430, kcalMeal:470,
+      ing:[[8,'','chicken thighs','bone-in'],[2,'','lemons','one juiced, one sliced'],[4,'','garlic cloves','crushed'],[2,'tbsp','olive oil',''],[1,'tbsp','thyme','fresh']],
+      steps:[['Heat the oven to 200°C.',null],['Toss the thighs with oil, lemon juice, garlic and thyme.',null],['Roast skin-side up with the lemon slices.',35],['Rest before serving.',5]] },
+    { id:'cacio', mine:true, title:'Cacio e Pepe', desc:'Three ingredients, one glossy sauce.', cat:'Pasta', avg:5, votes:31, servings:2, prep:5, cook:12, vis:'public', version:'v1', kcal:520, kcalMeal:560,
+      ing:[[200,'g','spaghetti',''],[80,'g','pecorino romano','finely grated'],[2,'tsp','black pepper','coarsely ground']],
+      steps:[['Toast the pepper in a dry pan.',2],['Cook the spaghetti; keep a cup of pasta water.',10],['Off heat, toss pasta with pecorino and splashes of pasta water until glossy.',null]] },
+    { id:'cauli', mine:true, title:'Charred Cauliflower', desc:'Whole-roasted with tahini and pine nuts.', cat:'Vegan', avg:4, votes:7, servings:4, prep:10, cook:40, vis:'private', version:'v1', kcal:210, kcalMeal:240,
+      ing:[[1,'','cauliflower','whole'],[3,'tbsp','olive oil',''],[2,'tbsp','tahini',''],[1,'tbsp','pine nuts','toasted'],[null,'','flaky salt','to taste']],
+      steps:[['Heat the oven to 220°C.',null],['Rub the cauliflower with oil and salt.',null],['Roast until deeply charred.',40],['Drizzle with tahini and scatter pine nuts.',null]] },
+    { id:'stew', mine:true, title:'Slow Beef Stew', desc:'Sunday stew with root vegetables and red wine.', cat:'Beef', avg:4.5, votes:11, servings:6, prep:20, cook:150, vis:'shared', version:'v4', kcal:480, kcalMeal:520, forkOf:"Grandma Dalia's Stew",
+      ing:[[1,'kg','beef chuck','cubed'],[2,'','carrots','chunked'],[2,'','potatoes','chunked'],[1,'','onion','diced'],[250,'ml','red wine',''],[500,'ml','beef stock',''],[2,'tbsp','flour','']],
+      steps:[['Brown the beef in batches.',10],['Soften the onion, stir in flour.',5],['Deglaze with wine, return the beef, add stock.',null],['Simmer low with the vegetables.',150],['Season and rest before serving.',10]] },
+    { id:'katsu', mine:false, by:'Noa', src:'user', title:'Chicken Katsu Curry', desc:'Crispy cutlets over a mellow curry sauce.', cat:'Chicken', avg:4.75, votes:18, servings:2, prep:20, cook:25, vis:'public', version:'v2', kcal:640, kcalMeal:690,
+      ing:[[2,'','chicken breasts','butterflied'],[100,'g','panko',''],[1,'','egg','beaten'],[400,'ml','curry sauce',''],[300,'g','rice','cooked']],
+      steps:[['Bread the cutlets: flour, egg, panko.',null],['Shallow-fry until golden.',8],['Warm the curry sauce.',5],['Slice over rice and pour the sauce.',null]] },
+    { id:'babka', mine:false, by:'Avi', src:'user', title:'Chocolate Babka', desc:'Twisted brioche with dark chocolate swirl.', cat:'Dessert', avg:4.5, votes:26, servings:8, prep:40, cook:45, vis:'public', version:'v1', kcal:390, kcalMeal:410,
+      ing:[[500,'g','flour',''],[7,'g','yeast',''],[200,'ml','milk','warm'],[100,'g','butter',''],[150,'g','dark chocolate','chopped']],
+      steps:[['Make and knead the dough.',10],['Let it rise until doubled.',60],['Roll, fill with chocolate, twist.',null],['Bake until deep brown.',45]] },
+    { id:'salmon', mine:false, src:'mealdb', title:'Teriyaki Salmon', desc:'Glazed fillets with sesame and greens.', cat:'Seafood', avg:4.25, votes:12, servings:2, prep:10, cook:15, vis:'public', version:'v1', kcal:450, kcalMeal:480,
+      ing:[[2,'','salmon fillets',''],[3,'tbsp','teriyaki sauce',''],[1,'tsp','sesame seeds',''],[200,'g','broccoli','steamed']],
+      steps:[['Marinate the fillets in teriyaki.',10],['Pan-sear skin-side down.',6],['Glaze and finish with sesame.',4]] },
+    { id:'tagine', mine:false, src:'mealdb', title:'Lamb Tagine', desc:'Slow spiced lamb with apricots.', cat:'Lamb', avg:4.75, votes:21, servings:4, prep:20, cook:120, vis:'public', version:'v1', kcal:510, kcalMeal:550,
+      ing:[[800,'g','lamb shoulder','cubed'],[1,'','onion','sliced'],[2,'tsp','ras el hanout',''],[100,'g','dried apricots',''],[400,'ml','stock','']],
+      steps:[['Brown the lamb.',8],['Soften onion with the spices.',5],['Add stock and apricots; cover.',null],['Simmer very low until tender.',120]] },
+    { id:'risotto', mine:false, by:'Maya', src:'user', title:'Mushroom Risotto', desc:'Slow-stirred arborio with porcini.', cat:'Vegetarian', avg:4,  votes:8, servings:2, prep:10, cook:30, vis:'public', version:'v1', kcal:470, kcalMeal:500,
+      ing:[[200,'g','arborio rice',''],[20,'g','dried porcini','soaked'],[1,'l','vegetable stock','warm'],[50,'g','parmesan',''],[1,'','shallot','minced']],
+      steps:[['Soften the shallot; toast the rice.',4],['Add stock a ladle at a time, stirring.',20],['Fold in mushrooms and parmesan.',null]] },
+    { id:'gyoza', mine:false, src:'mealdb', title:'Pork Gyoza', desc:'Pan-fried dumplings with a crisp base.', cat:'Pork', avg:4.5, votes:15, servings:3, prep:30, cook:10, vis:'public', version:'v1', kcal:380, kcalMeal:400,
+      ing:[[250,'g','ground pork',''],[100,'g','cabbage','minced'],[24,'','gyoza wrappers',''],[1,'tbsp','soy sauce','']],
+      steps:[['Mix the filling.',null],['Fill and pleat the wrappers.',20],['Fry, then steam with a splash of water.',8]] },
+    { id:'brus', mine:false, by:'Noa', src:'user', title:'Tomato Bruschetta', desc:'Grilled bread, ripe tomatoes, good oil.', cat:'Starter', avg:4.25, votes:6, servings:4, prep:10, cook:5, vis:'public', version:'v1', kcal:180, kcalMeal:200,
+      ing:[[4,'','tomatoes','diced'],[1,'','baguette','sliced'],[2,'tbsp','olive oil',''],[1,'','garlic clove',''],[null,'','basil','torn']],
+      steps:[['Grill the bread slices.',3],['Rub with garlic.',null],['Top with tomatoes, oil and basil.',null]] },
+    { id:'kimchi', mine:false, src:'mealdb', title:'Kimchi Fried Rice', desc:'Day-old rice, kimchi and a fried egg.', cat:'Miscellaneous', avg:4.5, votes:19, servings:2, prep:5, cook:10, vis:'public', version:'v1', kcal:520, kcalMeal:540,
+      ing:[[300,'g','cooked rice','day-old'],[150,'g','kimchi','chopped'],[2,'','eggs',''],[1,'tbsp','gochujang',''],[2,'tsp','sesame oil','']],
+      steps:[['Fry the kimchi in sesame oil.',3],['Add rice and gochujang; toss on high heat.',5],['Top each bowl with a fried egg.',3]] },
+  ];
+
+  COMMENTS = {
+    ramen: [ {a:'Noa', t:'Swapped the stock for dashi — even better.', p:12}, {a:'Avi', t:'The 7-minute egg is the move.', p:8}, {a:'Maya', t:'Kids asked for seconds.', p:3} ],
+    cacio: [ {a:'Avi', t:'Pasta water is the whole trick. Trust it.', p:15} ],
+    katsu: [ {a:'Rotem', t:'Doubled the sauce, no regrets.', p:5} ],
+  };
+
+  TIPS = [
+    'Keep it just below a boil — hard boiling makes the broth cloudy and dulls the miso.',
+    'If it looks too thick, loosen it with a splash of hot water; if too thin, let it reduce a minute longer.',
+    'Set a bowl of iced water ready before you start — it stops the cooking instantly.',
+    'Salt the water like the sea; taste one piece a minute early rather than trusting the clock.',
+    'Warm the bowls with hot tap water first — it keeps everything hot twice as long.',
+    'Add acid or heat at the very end, off the flame, so the aroma stays bright.',
+  ];
+
+  find(id) { const extra = this.state.extraRecipes.find(r => r.id === id); return extra || this.DATA.find(r => r.id === id); }
+  tintFor(r) { const i = (r.title.length + r.cat.length) % 3; return this.TINTS[i]; }
+  starPct(avg) { return Math.round(avg * 4) / 4 / 5 * 100; }
+
+  cardView(r) {
+    const s = this.state, setS = (p) => this.setState(p);
+    const rated = s.ratings[r.id];
+    let avg = r.avg, n = r.votes;
+    if (rated) { avg = (r.avg * r.votes + rated) / (r.votes + 1); n = r.votes + 1; }
+    const [tint, tintInk] = this.tintFor(r);
+    return {
+      id: r.id, title: r.title, cat: r.cat, tint, tintInk,
+      starPct: this.starPct(avg), avgLabel: avg.toFixed(2), showDec: s.hovId === 'card-' + r.id,
+      hovOn: () => setS({ hovId: 'card-' + r.id }), hovOff: () => setS({ hovId: null }),
+      meta: (r.prep + r.cook) + ' min · serves ' + r.servings,
+      open: () => setS({ screen: 'recipe', activeId: r.id, cameFrom: s.screen, comDraft: '' }),
+    };
+  }
+
+  enterCook(id) {
+    this.stopT();
+    this.setState({ screen: 'cook', activeId: id, cookStep: 0, tLeft: null, tRun: false, aiAnswer: null, aiLoading: false });
+  }
+
+  stopT() { if (this._int) { clearInterval(this._int); this._int = null; } }
+  componentWillUnmount() { this.stopT(); if (this._ai) clearTimeout(this._ai); }
+
+  renderVals() {
+    const s = this.state, setS = (p) => this.setState(p);
+    const nav = (screen) => (e) => { e.preventDefault(); this.stopT(); setS({ screen, catFilter: null }); };
+    const mine = this.DATA.filter(r => r.mine).concat(s.extraRecipes);
+    const pub = this.DATA.filter(r => !r.mine);
+    const weather = this.props.weather ?? 'Cold night';
+
+    const W = {
+      'Cold night': { line: '9° and clear tonight in Tel Aviv — city read from your clock\u2019s timezone, nothing tracked.', greet: 'Good evening, Rotem', pick: 'ramen', why: 'Cold night outside — a hot broth from your saved recipes.' },
+      'Hot afternoon': { line: '31° and sunny in Tel Aviv — city read from your clock\u2019s timezone, nothing tracked.', greet: 'Good afternoon, Rotem', pick: 'cauli', why: 'Too hot for the stovetop — the oven does the work on this one.' },
+      'Rainy morning': { line: '14° and raining in Tel Aviv — city read from your clock\u2019s timezone, nothing tracked.', greet: 'Good morning, Rotem', pick: 'shak', why: 'A slow rainy morning — one pan, eggs, no rush.' },
+    }[weather] || {};
+
+    const ranked = [W.pick, 'cacio', 'stew', 'shak', 'chick', 'cauli', 'ramen'].filter((v, i, a) => a.indexOf(v) === i);
+    const rec = this.find(ranked[s.recIdx % ranked.length]) || mine[0];
+
+    const cats = this.CATS.map(name => {
+      const isFav = !!s.favCats[name], active = s.catFilter === name;
+      return {
+        name, isFav,
+        bg: active ? 'var(--color-accent)' : (isFav ? 'var(--color-accent-100)' : 'transparent'),
+        ink: active ? 'var(--color-bg)' : (isFav ? 'var(--color-accent-800)' : 'var(--color-text)'),
+        border: active ? 'var(--color-accent)' : 'var(--color-divider)',
+        starSym: isFav ? '' : '☆', starOp: isFav ? 0 : 0.6,
+        favTip: isFav ? '' : 'Pin as a favourite (up to 3)',
+        pick: () => setS({ catFilter: active ? null : name }),
+        toggleFav: (e) => {
+          e.stopPropagation();
+          const f = { ...s.favCats };
+          if (f[name]) delete f[name]; else if (Object.keys(f).length < 3) f[name] = 1;
+          setS({ favCats: f });
+        },
+      };
+    }).sort((a, b) => (b.isFav ? 1 : 0) - (a.isFav ? 1 : 0));
+
+    const discSrc = pub.filter(r => !s.catFilter || r.cat === s.catFilter);
+    const discList = discSrc.map(r => {
+      const v = this.cardView(r);
+      const saved = !!s.savedIds[r.id];
+      return { ...v, saved, notSaved: !saved,
+        byline: r.src === 'mealdb' ? 'TheMealDB' : 'by ' + r.by,
+        save: (e) => { e.stopPropagation(); setS({ savedIds: { ...s.savedIds, [r.id]: 1 } }); },
+        cook: (e) => { e.stopPropagation(); this.enterCook(r.id); },
+      };
+    });
+
+    // detail
+    const d0 = this.find(s.activeId) || this.DATA[0];
+    const dSaved = d0.mine || !!s.savedIds[d0.id];
+    const dRated = s.ratings[d0.id];
+    let dAvg = d0.avg, dVotes = d0.votes;
+    if (dRated) { dAvg = (d0.avg * d0.votes + dRated) / (d0.votes + 1); dVotes = d0.votes + 1; }
+    const servings = s.servings[d0.id] || d0.servings;
+    const scale = servings / d0.servings;
+    const fmtQty = (q, u) => {
+      if (q == null) return u || '';
+      let v = q * scale;
+      v = Math.round(v * 100) / 100;
+      if (v >= 10) v = Math.round(v);
+      return v + (u ? ' ' + u : '');
+    };
+    const nutMode = s.nutMode[d0.id] || 'ing';
+    const baseComments = (this.COMMENTS[d0.id] || []).concat(s.extraComments[d0.id] || []);
+    const visMap = { private: ['tag-neutral', 'Private'], shared: ['tag-accent-2', 'Shared with 3 friends'], public: ['tag-accent', 'Public'] };
+    const [visCls, visLabel] = visMap[d0.vis];
+
+    const d = {
+      title: d0.title, desc: d0.desc, cat: d0.cat, visCls, visLabel, version: d0.version,
+      hasFork: !!d0.forkOf, forkOf: d0.forkOf,
+      cookable: dSaved, needsSave: !dSaved,
+      cook: () => this.enterCook(d0.id),
+      save: () => setS({ savedIds: { ...s.savedIds, [d0.id]: 1 } }),
+      starPct: this.starPct(dAvg), avgLabel: dAvg.toFixed(2), votes: dVotes + ' ratings',
+      decOp: s.hovId === 'detail' ? 1 : 0,
+      hovOn: () => setS({ hovId: 'detail' }), hovOff: () => setS({ hovId: null }),
+      servLabel: servings + ' servings', 
+      servUp: () => setS({ servings: { ...s.servings, [d0.id]: servings + 1 } }),
+      servDown: () => setS({ servings: { ...s.servings, [d0.id]: Math.max(1, servings - 1) } }),
+      ing: (d0.ing || []).map(([q, u, name, note]) => ({ qty: fmtQty(q, u) || '—', name, note: note ? '· ' + note : '' })),
+      steps: (d0.steps || []).map(([text, dur], i) => ({ n: i + 1, text, hasTimer: !!dur, timerLabel: dur ? dur + ' min' : '' })),
+      kcal: '≈ ' + Math.round((nutMode === 'ing' ? d0.kcal : d0.kcalMeal) * 1) , 
+      nutIng: nutMode === 'ing', nutMeal: nutMode === 'meal',
+      nutByIng: () => setS({ nutMode: { ...s.nutMode, [d0.id]: 'ing' } }),
+      nutByMeal: () => setS({ nutMode: { ...s.nutMode, [d0.id]: 'meal' } }),
+      nutNote: nutMode === 'meal', nutNoteText: 'Matched "' + d0.title + '" in the USDA survey foods (per 100 g, scaled to a portion).',
+      rated: !!dRated,
+      rateStars: [1,2,3,4,5].map(n => ({
+        col: dRated && n <= dRated ? 'var(--color-accent)' : 'var(--color-neutral-400)',
+        set: () => setS({ ratings: { ...s.ratings, [d0.id]: n } }),
+      })),
+      comTitle: baseComments.length ? 'Comments · ' + baseComments.length : 'Comments',
+      comments: baseComments.map((c, i) => {
+        const key = d0.id + '-' + i, v = s.votes[key] || 0;
+        return {
+          author: c.a, text: c.t, pts: c.p + v,
+          upCol: v > 0 ? 'var(--color-accent)' : 'var(--color-neutral-500)',
+          dnCol: v < 0 ? 'var(--color-accent-2-700)' : 'var(--color-neutral-500)',
+          ptsCol: v !== 0 ? 'var(--color-accent-700)' : 'var(--color-text)',
+          up: () => setS({ votes: { ...s.votes, [key]: v === 1 ? 0 : 1 } }),
+          dn: () => setS({ votes: { ...s.votes, [key]: v === -1 ? 0 : -1 } }),
+        };
+      }),
+      comDraft: s.comDraft,
+      setComDraft: (e) => setS({ comDraft: e.target.value }),
+      postCom: () => {
+        if (!s.comDraft.trim()) return;
+        const ex = { ...s.extraComments };
+        ex[d0.id] = (ex[d0.id] || []).concat([{ a: 'Rotem', t: s.comDraft.trim(), p: 1 }]);
+        setS({ extraComments: ex, comDraft: '' });
+      },
+    };
+
+    // cook mode
+    const cr = this.find(s.activeId) || this.DATA[0];
+    const steps = cr.steps || [];
+    const idx = Math.min(s.cookStep, steps.length - 1);
+    const [stText, stDur] = steps[idx] || ['', null];
+    const last = idx === steps.length - 1;
+    const mm = s.tLeft != null ? Math.floor(s.tLeft / 60) : 0, ss = s.tLeft != null ? s.tLeft % 60 : 0;
+    const c = {
+      title: cr.title,
+      quota: (100 - s.asked) + ' of 100 AI asks left today',
+      progPct: ((idx + 1) / steps.length) * 100,
+      stepLabel: 'Step ' + (idx + 1) + ' of ' + steps.length,
+      text: stText,
+      showStart: !!stDur && s.tLeft == null,
+      timerBtn: 'Start ' + stDur + ' min timer',
+      showCountdown: s.tLeft != null,
+      countdown: (s.tLeft === 0 ? 'Done — ' : '') + mm + ':' + String(ss).padStart(2, '0'),
+      startTimer: () => {
+        this.stopT();
+        this.setState({ tLeft: stDur * 60, tRun: true });
+        this._int = setInterval(() => {
+          this.setState(st => {
+            if (st.tLeft == null || st.tLeft <= 0) { this.stopT(); return { tRun: false }; }
+            return { tLeft: st.tLeft - 1 };
+          });
+        }, 1000);
+      },
+      stopTimer: () => { this.stopT(); setS({ tLeft: null, tRun: false }); },
+      askAi: () => {
+        if (s.aiLoading) return;
+        setS({ aiLoading: true, aiAnswer: null, asked: s.asked + 1 });
+        this._ai = setTimeout(() => this.setState({ aiLoading: false, aiAnswer: this.TIPS[(idx + this.state.asked) % this.TIPS.length] }), 900);
+      },
+      aiLoading: s.aiLoading, hasAnswer: !!s.aiAnswer && !s.aiLoading, answer: s.aiAnswer,
+      backOp: idx === 0 ? 0.35 : 1,
+      prev: () => { this.stopT(); setS({ cookStep: Math.max(0, idx - 1), tLeft: null, aiAnswer: null, aiLoading: false }); },
+      next: () => {
+        this.stopT();
+        if (last) { setS({ screen: 'recipe', tLeft: null, aiAnswer: null, aiLoading: false }); }
+        else setS({ cookStep: idx + 1, tLeft: null, aiAnswer: null, aiLoading: false });
+      },
+      nextLabel: last ? 'Finish' : 'Next step',
+      dots: steps.map((_, i) => ({
+        bg: i === idx ? 'var(--color-accent)' : (i < idx ? 'var(--color-accent-300)' : 'var(--color-neutral-300)'),
+        go: () => { this.stopT(); setS({ cookStep: i, tLeft: null, aiAnswer: null, aiLoading: false }); },
+      })),
+    };
+
+    const friendList = s.friends.map((f, i) => {
+      const [tint, tintInk] = this.TINTS[i % 3];
+      return {
+        name: f.name, sub: f.sub, initial: f.name[0], tint, tintInk,
+        pending: f.st === 'pending', isFriend: f.st === 'friend', requested: f.st === 'requested',
+        accept: () => { const fr = s.friends.slice(); fr[i] = { ...f, st: 'friend', sub: 'Just joined your circle' }; setS({ friends: fr }); },
+        decline: () => setS({ friends: s.friends.filter((_, j) => j !== i) }),
+      };
+    });
+
+    return {
+      isHome: s.screen === 'home', isDiscover: s.screen === 'discover',
+      isRecipe: s.screen === 'recipe', isCook: s.screen === 'cook', isFriends: s.screen === 'friends',
+      notCook: s.screen !== 'cook',
+      goHome: nav('home'), goDiscover: nav('discover'), goFriends: nav('friends'),
+      homeCur: s.screen === 'home' ? 'page' : undefined,
+      discCur: s.screen === 'discover' ? 'page' : undefined,
+      frCur: s.screen === 'friends' ? 'page' : undefined,
+      greeting: W.greet, weatherLine: W.line,
+      recKicker: 'From your saved recipes', recTitle: rec.title, recWhy: s.recIdx === 0 ? W.why : 'Another idea — ' + rec.desc.toLowerCase(),
+      recNext: () => setS({ recIdx: s.recIdx + 1 }),
+      recCook: () => this.enterCook(rec.id),
+      homeList: mine.map(r => this.cardView(r)),
+      homeCount: mine.length + ' saved',
+      discSub: 'Public recipes from the network and TheMealDB catalogue.',
+      catChips: cats, discList,
+      back: () => setS({ screen: s.cameFrom }),
+      backLabel: s.cameFrom === 'discover' ? 'Discover' : 'Home',
+      d, c, friendList,
+      exitCook: () => { this.stopT(); setS({ screen: 'recipe', tLeft: null, tRun: false, aiAnswer: null, aiLoading: false }); },
+      frQuery: s.frQuery, setFrQuery: (e) => setS({ frQuery: e.target.value }),
+      frSendLabel: s.frSent ? 'Request sent' : 'Send request',
+      frSend: () => {
+        if (!s.frQuery.trim() || s.frSent) return;
+        setS({ frSent: true, friends: s.friends.concat([{ name: s.frQuery.trim(), sub: 'waiting for them to accept', st: 'requested' }]) });
+        setTimeout(() => this.setState({ frSent: false, frQuery: '' }), 1200);
+      },
+      showNew: s.showNew,
+      openNew: () => setS({ showNew: true }),
+      closeNew: () => setS({ showNew: false }),
+      eatClick: (e) => e.stopPropagation(),
+      newTitle: s.newTitle, setNewTitle: (e) => setS({ newTitle: e.target.value }),
+      newCat: s.newCat, setNewCat: (e) => setS({ newCat: e.target.value }),
+      allCats: this.CATS.map(name => ({ name })),
+      createNew: () => {
+        const t = s.newTitle.trim(); if (!t) return;
+        const nr = { id: 'new' + s.createdCount, mine: true, title: t, desc: 'Your new recipe — add ingredients and steps.', cat: s.newCat, avg: 0, votes: 0, servings: 2, prep: 0, cook: 0, vis: 'private', version: 'v1', kcal: 0, kcalMeal: 0,
+          ing: [[null, '', 'Add your first ingredient', '']], steps: [['Add your first step.', null]] };
+        setS({ extraRecipes: s.extraRecipes.concat([nr]), createdCount: s.createdCount + 1, showNew: false, newTitle: '', screen: 'recipe', activeId: nr.id, cameFrom: 'home' });
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

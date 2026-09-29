@@ -1,0 +1,32 @@
+{
+  "name": "api-data-access-db",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/api/data-access-db/src",
+  "projectType": "library",
+  "tags": ["scope:api", "type:data-access"],
+  "// targets": "to see all targets run: nx show project data-access-db --web",
+  "targets": {
+    "migrate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm exec typeorm-ts-node-commonjs migration:run -d libs/api/data-access-db/src/data-source.ts",
+        "cwd": "{workspaceRoot}",
+        "env": {
+          "TS_NODE_PROJECT": "libs/api/data-access-db/tsconfig.lib.json",
+          "TS_NODE_TRANSPILE_ONLY": "true"
+        }
+      }
+    },
+    "migrate:revert": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm exec typeorm-ts-node-commonjs migration:revert -d libs/api/data-access-db/src/data-source.ts",
+        "cwd": "{workspaceRoot}",
+        "env": {
+          "TS_NODE_PROJECT": "libs/api/data-access-db/tsconfig.lib.json",
+          "TS_NODE_TRANSPILE_ONLY": "true"
+        }
+      }
+    }
+  }
+}

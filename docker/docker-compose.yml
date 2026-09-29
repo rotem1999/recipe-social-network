@@ -1,0 +1,24 @@
+# SPEC.md §12 DB-2, DB-6: PostgreSQL for moving the database off the local install later.
+# Reads the same DB_* keys as the API. Not used in development yet (docker/CLAUDE.md).
+#   docker compose --env-file ../.env.local -f docker/docker-compose.yml up -d
+services:
+  postgres:
+    image: postgres:18
+    container_name: cookbook-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-recipe_app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-recipe_social_network}
+    ports:
+      - '${DB_PORT:-5432}:5432'
+    volumes:
+      - cookbook-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME:-recipe_app} -d ${DB_NAME:-recipe_social_network}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  cookbook-pgdata:

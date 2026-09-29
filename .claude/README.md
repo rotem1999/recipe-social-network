@@ -26,13 +26,13 @@ All four are pinned to Claude Opus 4.8 (`model: claude-opus-4-8`). Subagents can
 
 ## Hooks and permissions (`settings.json`, `hooks/guard.js`)
 
-`guard.js` runs on every Bash, Edit, Write and MultiEdit call (Node, via Git Bash on Windows). It:
+`guard.js` runs on every Bash, Edit, Write and MultiEdit call (Node, via Git Bash on Windows, or PowerShell where Git Bash is not installed, source C3). It:
 
 - denies any command or edit touching `.env`, `.env.local`, `.env.*.local`;
 - denies `git commit` messages with `Co-Authored-By`, "Generated with" or an emoji signature; asks on `--amend`, `--no-verify` and force push; denies `gh pr create`;
 - denies SPEC.md edits that add TBD, TODO or a line ending in "?";
 - asks before any edit to a `CLAUDE.md`;
-- denies any write to a `*.spec.*` or `*.test.*` file from the main session (Edit, Write, MultiEdit, and Bash redirects, `sed -i`, `tee`, `cp`, `mv`); allows it from `test-writer`; asks for any other subagent. The hook input's `agent_id` and `agent_type` fields tell the two apart (source C3);
+- denies any write to a `*.spec.*` or `*.test.*` file from the main session (Edit, Write, MultiEdit, and Bash redirects, `sed -i`, `tee`, `cp`, `mv`); allows it from `test-writer`; asks for any other subagent. The hook input's `agent_id` and `agent_type` fields tell the two apart (source C3b);
 - denies provider keys, SDKs, URLs or `navigator.geolocation` in `apps/web`, `apps/desktop`, `libs/web`, `libs/shared`.
 
 Permissions deny reading the env files and pre-allow read-only git commands and the `pnpm nx` lint, test, build, graph, show and affected targets.
@@ -41,11 +41,12 @@ Known gaps: an edit made with `sed` through Bash is not inspected for SPEC.md or
 
 The `env` block in `settings.json` (`CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-4-8`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`) pins every subagent, including the built-in Explore, Plan and general-purpose agents, to Opus 4.8 (Rotem, 2026-09-08). The per-agent `model:` lines document the same intent.
 
-## Sources (fetched 2026-09-08)
+## Sources (fetched 2026-09-08, re-verified 2026-09-08 in the fourth session)
 
-- C1 https://code.claude.com/docs/en/sub-agents.md — frontmatter fields; `model` accepts a full model ID; AskUserQuestion removed from subagents; project agents override built-ins by name; `CLAUDE_CODE_SUBAGENT_MODEL` and `_FORCE`.
+- C1 https://code.claude.com/docs/en/sub-agents.md — frontmatter fields; `model` accepts a full model ID; AskUserQuestion removed from subagents; project agents override built-ins by name; `CLAUDE_CODE_SUBAGENT_MODEL` and `_FORCE` (`_FORCE` needs Claude Code ≥ v2.1.257).
 - C2 https://code.claude.com/docs/en/skills.md — SKILL.md fields, `$ARGUMENTS`, `disable-model-invocation`, `context: fork`; `.claude/commands` still works but skills take precedence.
-- C3 https://code.claude.com/docs/en/hooks-guide.md — hook JSON schema, stdin fields, exit codes, `permissionDecision` allow/deny/ask, Git Bash on Windows, `$CLAUDE_PROJECT_DIR`.
-- C4 https://code.claude.com/docs/en/permissions.md — `Read(./.env)` rules also block Edit/Write; Read deny rules apply to `cat`/`head`/`tail`/`sed` in recent versions; `Bash(cmd *)` patterns.
-- C5 https://code.claude.com/docs/en/model-config.md and https://code.claude.com/docs/en/settings-reference.md — `env` key in settings; subagent model resolution order.
+- C3 https://code.claude.com/docs/en/hooks-guide.md — hook JSON schema, stdin fields, exit codes, `permissionDecision` allow/deny/ask, Git Bash on Windows (PowerShell when Git Bash is absent), `$CLAUDE_PROJECT_DIR`.
+- C3b https://code.claude.com/docs/en/hooks.md — `agent_id` and `agent_type` on the hook stdin, present only inside a subagent call.
+- C4 https://code.claude.com/docs/en/permissions.md — `Read(./.env)` rules also block Edit/Write (v2.1.208+ / v2.1.228+); Read deny rules apply to `cat`/`head`/`tail`/`sed`; NotebookEdit is not covered; `Bash(cmd *)` patterns.
+- C5 https://code.claude.com/docs/en/settings-reference.md and https://code.claude.com/docs/en/model-config.md (with C1) — `env` key applies to every session and its subprocesses; a per-agent `model:` wins unless `_FORCE` is set.
 - C6 https://platform.claude.com/docs/en/models/opus-4-8/overview — Claude Opus 4.8 model ID `claude-opus-4-8`, legacy but active, retirement not before 2027-05-28.

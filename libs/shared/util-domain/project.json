@@ -1,0 +1,12 @@
+{
+  "name": "shared-util-domain",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/shared/util-domain/src",
+  "projectType": "library",
+  "tags": [
+    "scope:shared",
+    "type:util"
+  ],
+  "// targets": "to see all targets run: nx show project util-domain --web",
+  "targets": {}
+}

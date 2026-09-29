@@ -39,3 +39,21 @@ Thumbs.db
 npm-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Nx (added 2026-09-08)
+.nx/polygraph
+.nx/self-healing
+.nx/migrate-runs
+
+vite.config.*.timestamp*
+vitest.config.*.timestamp*
+# electron-vite output (apps/desktop, SPEC §11.2.2)
+apps/desktop/out/
+
+# AI prompt log (SPEC §10 LOG-3/LOG-4): full prompts and responses, never committed
+log/
+
+# FirebaseSDK
+cooking-sn-firebase-adminsdk-fbsvc-6f5d96395b.json
+# Claude desktop app dev-server launcher (local tooling)
+.claude/launch.json
