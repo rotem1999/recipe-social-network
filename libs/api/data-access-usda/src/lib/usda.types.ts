@@ -24,10 +24,16 @@ export interface UsdaFoodHit {
   gramWeightPerMeasure: number | null;
 }
 
-/** One household portion of a food detail (NUT-6). */
+/** One household portion of a food detail (NUT-6, NUT-9). */
 export interface UsdaFoodPortion {
+  /** Weight of `amount` units of this portion. */
   gramWeight: number;
+  /** `portionDescription`, or else `modifier`, followed by `measureUnit.name` unless it is "undetermined" (NUT-9). */
   description: string;
+  /** How many units `gramWeight` covers ("3 cloves" = 9 g); kept only when `portionDescription` is empty and `modifier` is not (NUT-9, §16 U14), else null. */
+  amount: number | null;
+  /** USDA's display order; null when absent. */
+  sequenceNumber: number | null;
 }
 
 /** One `GET /food/{fdcId}` result (NUT-6). */
