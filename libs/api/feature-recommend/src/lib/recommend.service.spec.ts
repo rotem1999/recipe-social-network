@@ -76,6 +76,8 @@ function card(id: string, title = `Recipe ${id}`): RecipeCardDto {
     rating: null,
     versionNumber: 1,
     updatedAt: '2026-09-20T08:00:00.000Z',
+    myCopyId: null,
+    updateAvailable: false,
   };
 }
 

@@ -5,9 +5,12 @@ import { describe, expect, it } from 'vitest';
 
 import type {
   ApiErrorResponse,
+  CatalogueItemDto,
+  CataloguePreviewDto,
   CookAskResponse,
   NutritionResponse,
   QuotaDto,
+  RecipeAttributionDto,
   RecipeCardDto,
   RecipeDetailDto,
   RecommendRequest,
@@ -31,6 +34,8 @@ const card: RecipeCardDto = {
   rating: { average: 4.33, count: 3, mine: 5 },
   versionNumber: 2,
   updatedAt: '2026-09-28T09:00:00.000Z',
+  myCopyId: null,
+  updateAvailable: false,
 };
 
 describe('RecipeDetailDto', () => {
@@ -53,7 +58,7 @@ describe('RecipeDetailDto', () => {
     hasVotes: true,
     versionCount: 2,
     forkedFrom: null,
-    savedFrom: { recipeId: null, title: 'Shakshuka', ownerUsername: null },
+    savedFrom: { recipeId: null, title: 'Shakshuka', ownerUsername: null, source: 'themealdb' },
     sharedWithUserIds: [],
     attribution: 'Recipe data from TheMealDB',
   };
@@ -96,12 +101,61 @@ describe('RecipeDetailDto', () => {
     expect(detail).toMatchObject({
       versionCount: 2,
       forkedFrom: null,
-      savedFrom: { recipeId: null, title: 'Shakshuka', ownerUsername: null },
+      savedFrom: { recipeId: null, title: 'Shakshuka', ownerUsername: null, source: 'themealdb' },
     });
+  });
+
+  it('SAVE-9 tells a TheMealDB source from a user source on the attribution', () => {
+    const fromUser: RecipeAttributionDto = {
+      recipeId: '0b7d6c5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f',
+      title: 'Original shakshuka',
+      ownerUsername: 'mika',
+      source: 'user',
+    };
+    expect(detail.savedFrom?.source).toBe('themealdb');
+    expect(fromUser.source).toBe('user');
+  });
+
+  it('DISC-10, SAVE-10 carry the caller’s copy id and the update flag on every card', () => {
+    const someoneElses: RecipeCardDto = {
+      ...card,
+      relation: 'public',
+      myCopyId: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',
+      updateAvailable: true,
+    };
+    expect(detail).toMatchObject({ myCopyId: null, updateAvailable: false });
+    expect(someoneElses).toMatchObject({ updateAvailable: true });
+    expect(someoneElses.myCopyId).not.toBeNull();
   });
 
   it('RATE-2 carries the two-decimal average with the caller’s own stars', () => {
     expect(detail.rating).toMatchObject({ average: 4.33, count: 3, mine: 5 });
+  });
+});
+
+describe('Catalogue DTOs', () => {
+  it('DISC-10 carries myCopyId on a catalogue tile and on the TheMealDB preview', () => {
+    const tile: CatalogueItemDto = {
+      mealId: '52772',
+      name: 'Teriyaki Chicken Casserole',
+      thumbnailUrl: 'https://www.themealdb.com/images/media/meals/wvpsxx1468256321.jpg',
+      category: 'Chicken',
+      myCopyId: null,
+    };
+    const preview: CataloguePreviewDto = {
+      mealId: '52772',
+      title: 'Teriyaki Chicken Casserole',
+      category: 'Chicken',
+      servings: 2,
+      ingredients: [{ quantity: 0.75, unit: 'cup', name: 'soy sauce' }],
+      steps: [{ text: 'Preheat oven to 175C.' }],
+      thumbnailUrl: 'https://www.themealdb.com/images/media/meals/wvpsxx1468256321.jpg',
+      area: 'Japanese',
+      attribution: 'Recipe data and imagery: TheMealDB (https://www.themealdb.com/)',
+      myCopyId: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',
+    };
+    expect(tile.myCopyId).toBeNull();
+    expect(preview.myCopyId).toBe('9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d');
   });
 });
 

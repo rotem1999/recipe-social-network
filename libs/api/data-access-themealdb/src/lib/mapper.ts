@@ -227,6 +227,8 @@ export function toCatalogueItem(
     name: (row.strMeal ?? '').trim(),
     thumbnailUrl: row.strMealThumb ?? '',
     category,
+    // DISC-10: filled in for the caller by feature-discover.
+    myCopyId: null,
   };
 }
 
@@ -241,5 +243,7 @@ export function toCataloguePreview(meal: MealRecord): CataloguePreviewDto {
         ? meal.strArea.trim()
         : null,
     attribution: THEMEALDB_ATTRIBUTION,
+    // DISC-10: filled in for the caller by feature-discover.
+    myCopyId: null,
   };
 }

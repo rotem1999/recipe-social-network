@@ -1,4 +1,5 @@
-// SPEC.md §11.5 UI-10 (meta line) and UI-13 (star row). The card is
+// SPEC.md §11.5 UI-10 (meta line), UI-13 (star row) and SAVE-10 (the Home
+// card's "Update available" tag on a copy that is behind its source). The card is
 // presentational, so it needs no API mock (libs/web/CLAUDE.md).
 import { render, screen } from '@testing-library/react';
 import type { RecipeCardDto } from '@rsn/shared/util-contracts';
@@ -19,6 +20,8 @@ const BASE: RecipeCardDto = {
   rating: { average: 4.5, count: 2, mine: null },
   versionNumber: 1,
   updatedAt: '2026-09-20T18:00:00.000Z',
+  myCopyId: null,
+  updateAvailable: false,
 };
 
 function card(patch: Partial<RecipeCardDto> = {}): RecipeCardDto {
@@ -62,5 +65,59 @@ describe('RecipeCard', () => {
     );
 
     expect(container.querySelector('.stars-row')).toBeNull();
+  });
+
+  it('SAVE-10 tags a saved copy that is behind its source with Update available', () => {
+    render(
+      <RecipeCard
+        recipe={card({
+          relation: 'saved',
+          visibility: 'private',
+          ownerUsername: 'rotem',
+          updateAvailable: true,
+        })}
+        onOpen={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Update available')).toBeTruthy();
+  });
+
+  it('SAVE-10 tags a fork (relation own) that is behind its source with Update available', () => {
+    render(
+      <RecipeCard
+        recipe={card({
+          relation: 'own',
+          visibility: 'private',
+          ownerUsername: 'rotem',
+          updateAvailable: true,
+        })}
+        onOpen={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Update available')).toBeTruthy();
+  });
+
+  it('SAVE-10 shows no Update available tag on a copy that is up to date', () => {
+    render(
+      <RecipeCard
+        recipe={card({ relation: 'saved', updateAvailable: false })}
+        onOpen={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('Update available')).toBeNull();
+  });
+
+  it("SAVE-10 leaves the tag of someone else's recipe to the Discover action slot", () => {
+    render(
+      <RecipeCard
+        recipe={card({ myCopyId: 'copy-1', updateAvailable: true })}
+        onOpen={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('Update available')).toBeNull();
   });
 });

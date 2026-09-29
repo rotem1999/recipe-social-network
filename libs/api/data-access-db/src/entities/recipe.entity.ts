@@ -14,7 +14,7 @@ import { numericTransformer } from './numeric.transformer';
 import { RecipeVersionEntity } from './recipe-version.entity';
 import { UserEntity } from './user.entity';
 
-/** §12.1 `recipes` — REC-1..8, SAVE-4..6, CAT-3, RATE-2. */
+/** §12.1 `recipes` — REC-1..8, SAVE-4..10, CAT-3, CAT-7, RATE-2. */
 @Entity({ name: 'recipes' })
 @Index('idx_recipes_owner_id', ['ownerId'])
 @Index('idx_recipes_visibility', ['visibility'])
@@ -61,6 +61,14 @@ export class RecipeEntity {
   @JoinColumn({ name: 'forked_from_recipe_id' })
   forkedFromRecipe?: RecipeEntity | null;
 
+  /** SAVE-7: set on the first edit of a copy, which makes it a fork; null on a saved copy. */
+  @Column({ name: 'forked_at', type: 'timestamptz', nullable: true })
+  forkedAt!: Date | null;
+
+  /** SAVE-10: the source version number a copy of a user recipe last took. */
+  @Column({ name: 'synced_version_number', type: 'int', nullable: true })
+  syncedVersionNumber!: number | null;
+
   /** CAT-3: user | themealdb. */
   @Column({ name: 'source', type: 'text' })
   source!: RecipeSource;
@@ -68,6 +76,10 @@ export class RecipeEntity {
   /** CAT-3: TheMealDB `idMeal` of the recipe this copy was pulled from. */
   @Column({ name: 'external_id', type: 'text', nullable: true })
   externalId!: string | null;
+
+  /** SAVE-9: TheMealDB `strMeal` at save time, for the attribution line. */
+  @Column({ name: 'external_title', type: 'text', nullable: true })
+  externalTitle!: string | null;
 
   /** CAT-6: `strMealThumb`, hosted by TheMealDB (no Firebase upload). */
   @Column({ name: 'external_image_url', type: 'text', nullable: true })

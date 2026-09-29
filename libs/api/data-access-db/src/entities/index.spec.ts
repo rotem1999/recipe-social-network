@@ -147,6 +147,27 @@ describe('entity columns of §12.1', () => {
     expect(columnOptionsOf(CommentEntity, 'deletedAt')['nullable']).toBe(true);
   });
 
+  it('SAVE-7 stores forked_at as a nullable timestamptz on recipes', () => {
+    const options = columnOptionsOf(RecipeEntity, 'forkedAt');
+    expect(options['name']).toBe('forked_at');
+    expect(options['type']).toBe('timestamptz');
+    expect(options['nullable']).toBe(true);
+  });
+
+  it('SAVE-10 stores synced_version_number as a nullable int on recipes', () => {
+    const options = columnOptionsOf(RecipeEntity, 'syncedVersionNumber');
+    expect(options['name']).toBe('synced_version_number');
+    expect(options['type']).toBe('int');
+    expect(options['nullable']).toBe(true);
+  });
+
+  it('SAVE-9 stores external_title as nullable text on recipes', () => {
+    const options = columnOptionsOf(RecipeEntity, 'externalTitle');
+    expect(options['name']).toBe('external_title');
+    expect(options['type']).toBe('text');
+    expect(options['nullable']).toBe(true);
+  });
+
   it('§3.1.1 stores ingredients and steps as jsonb on a recipe version', () => {
     expect(columnOptionsOf(RecipeVersionEntity, 'ingredients')['type']).toBe(
       'jsonb',

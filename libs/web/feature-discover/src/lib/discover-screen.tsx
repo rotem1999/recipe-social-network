@@ -1,7 +1,8 @@
-// SPEC.md §5 (DISC-1..DISC-9), §3.2 SAVE-1/2, §3.3 CAT-2, §11.5 (guide §3).
-// The Discover tab: the category chip row, the split view of GET /discover, the
-// filtered view with Load more, the optimistic Save action (UI-14) and the
-// TheMealDB attribution footer.
+// SPEC.md §5 (DISC-1..DISC-10), §3.2 SAVE-1/2/10, §3.3 CAT-2/CAT-7, §11.5
+// (guide §3, UI-14). The Discover tab: the category chip row, the split view of
+// GET /discover, the filtered view with Load more, the optimistic Save action, the
+// "In your recipes" + Cook state of items the caller already has a copy of, and
+// the TheMealDB attribution footer.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CSSProperties, ReactElement, ReactNode } from 'react';
 import type {
@@ -190,19 +191,36 @@ export function DiscoverScreen({
   }, [api, category, filtered]);
 
   /**
-   * SAVE-2: the card action. Save downloads the public recipe (SAVE-1) and the
-   * button then becomes the ghost Cook button of the guide, pointed at the copy
-   * the API returned — cook mode never runs on the public original.
+   * SAVE-2 / DISC-10 / UI-14: the card action. Save downloads the public recipe
+   * (SAVE-1); once saved, or when GET /discover already carries the caller's copy
+   * (`myCopyId`), the card shows "In your recipes" and the ghost Cook button of the
+   * guide, pointed at the copy — cook mode never runs on the public original.
    */
   const actionSlot = (recipe: RecipeCardDto): ReactNode => {
     const state = saves[recipe.id];
+    const copyId = state?.status === 'saved' ? state.savedId : recipe.myCopyId;
     let action: ReactNode;
-    if (state?.status === 'saved') {
+    if (copyId !== null && state?.status !== 'saving') {
       action = (
-        <Button variant="ghost" onClick={() => onCook(state.savedId)}>
-          <Icon.Play size={13} />
-          Cook
-        </Button>
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 'var(--space-2)',
+            flexWrap: 'wrap',
+            justifyContent: 'flex-end',
+          }}
+        >
+          <Tag tone="neutral">In your recipes</Tag>
+          {/* SAVE-10: the caller's copy is behind this recipe. */}
+          {recipe.updateAvailable ? (
+            <Tag tone="accent">Update available</Tag>
+          ) : null}
+          <Button variant="ghost" onClick={() => onCook(copyId)}>
+            <Icon.Play size={13} />
+            Cook
+          </Button>
+        </span>
       );
     } else if (state?.status === 'saving') {
       action = (
@@ -219,8 +237,7 @@ export function DiscoverScreen({
         </Button>
       );
     } else if (recipe.relation === 'saved' || recipe.relation === 'shared') {
-      // The copy has its own id, which GET /discover does not carry, so the card
-      // states the fact instead of offering a cook button that has nothing to open.
+      // SAVE-3: a recipe shared with the caller is already listed on their Home.
       action = <Tag tone="neutral">In your recipes</Tag>;
     } else {
       action = (
@@ -264,7 +281,12 @@ export function DiscoverScreen({
       ))}
       {/* DISC-4 / CAT-2: then the TheMealDB entries of the same category. */}
       {entry.catalogue.map((item) => (
-        <CatalogueTile key={item.mealId} item={item} onOpen={onOpenCatalogue} />
+        <CatalogueTile
+          key={item.mealId}
+          item={item}
+          onOpen={onOpenCatalogue}
+          onCook={onCook}
+        />
       ))}
     </div>
   );

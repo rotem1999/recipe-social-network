@@ -75,6 +75,7 @@ export interface Endpoints {
   deleteRecipe(id: string): Promise<void>;
   saveRecipe(id: string): Promise<RecipeDetailDto>;
   saveCatalogue(mealId: string): Promise<RecipeDetailDto>;
+  syncRecipe(id: string): Promise<RecipeDetailDto>;
   uploadImage(id: string, file: File): Promise<ImageUploadResponse>;
   deleteImage(id: string, index: number): Promise<ImageUploadResponse>;
   listVersions(id: string): Promise<RecipeVersionsResponse>;
@@ -160,11 +161,14 @@ export function createEndpoints(client: ApiClient = apiClient): Endpoints {
     // SAVE-1, SAVE-4
     saveRecipe: (id) =>
       client.post<RecipeDetailDto>(`/recipes/${encodeURIComponent(id)}/save`),
-    // CAT-3, CAT-4
+    // CAT-3, CAT-4, CAT-7
     saveCatalogue: (mealId) =>
       client.post<RecipeDetailDto>(
         `/recipes/catalogue/${encodeURIComponent(mealId)}/save`,
       ),
+    // SAVE-10
+    syncRecipe: (id) =>
+      client.post<RecipeDetailDto>(`/recipes/${encodeURIComponent(id)}/sync`),
     // IMG-3
     uploadImage: (id, file) =>
       client.upload<ImageUploadResponse>(

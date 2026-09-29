@@ -1,6 +1,8 @@
-// CAT-2 / CAT-3 / CAT-4 + §11.5: the read-only preview of a TheMealDB entry,
-// reached from the Discover grid. The only action is "Save to my recipes", which
-// pulls the meal into the database as the caller's own copy.
+// CAT-2 / CAT-3 / CAT-4 / CAT-7 + §11.5: the read-only preview of a TheMealDB
+// entry, reached from the Discover grid. The only action is "Save to my recipes",
+// which pulls the meal into the database as the caller's saved copy (SAVE-7); when
+// the caller already has a copy (`myCopyId`, DISC-10) it becomes "In your recipes"
+// and a Cook button on that copy.
 import { useCallback, useState } from 'react';
 import type { CSSProperties, ReactElement } from 'react';
 import type { Ingredient } from '@rsn/shared/util-domain';
@@ -14,6 +16,8 @@ export interface CataloguePreviewScreenProps {
   onBack(): void;
   /** CAT-3: the id of the copy the API created, so the shell can open it. */
   onSaved(recipeId: string): void;
+  /** DISC-10: opens cook mode on the caller's existing copy of this meal. */
+  onCook(recipeId: string): void;
 }
 
 const COLUMNS: CSSProperties = {
@@ -45,6 +49,7 @@ export function CataloguePreviewScreen({
   mealId,
   onBack,
   onSaved,
+  onCook,
 }: CataloguePreviewScreenProps): ReactElement {
   const api = useApi();
   const preview = useRequest(() => api.cataloguePreview(mealId), [mealId]);
@@ -67,6 +72,7 @@ export function CataloguePreviewScreen({
 
   const meal = preview.data;
   const minutes = meal === null ? undefined : totalMinutes(meal);
+  const copyId = meal === null ? null : meal.myCopyId;
 
   return (
     <main className="screen">
@@ -140,11 +146,28 @@ export function CataloguePreviewScreen({
                 flex: 'none',
               }}
             >
-              {/* SAVE-1/CAT-3: the only action a catalogue preview offers. */}
-              <Button variant="primary" loading={saving} onClick={save}>
-                <Icon.Download size={15} />
-                Save to my recipes
-              </Button>
+              {copyId === null ? (
+                // SAVE-1/CAT-3: the only action a catalogue preview offers.
+                <Button variant="primary" loading={saving} onClick={save}>
+                  <Icon.Download size={15} />
+                  Save to my recipes
+                </Button>
+              ) : (
+                // DISC-10 / UI-14: already saved; cook the caller's copy.
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)',
+                  }}
+                >
+                  <Tag tone="neutral">In your recipes</Tag>
+                  <Button variant="primary" onClick={() => onCook(copyId)}>
+                    <Icon.Play size={15} />
+                    Cook
+                  </Button>
+                </div>
+              )}
               {saveError === null ? null : (
                 <InlineError>{saveError}</InlineError>
               )}

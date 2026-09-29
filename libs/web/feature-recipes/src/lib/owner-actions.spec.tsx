@@ -1,0 +1,165 @@
+// SPEC.md UI-12 (the "Owner" row on the recipe detail screen), SAVE-7 (a saved
+// copy is removed with "Remove from my recipes") and SAVE-8 (a saved copy stays
+// private, so its row has no Visibility select and no Share…).
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
+import type { RecipeDetailDto } from '@rsn/shared/util-contracts';
+import { OwnerActions } from './owner-actions';
+
+const mocks = vi.hoisted(() => ({
+  api: {
+    setVisibility: vi.fn(),
+    deleteRecipe: vi.fn(),
+    listFriends: vi.fn(),
+    shareRecipe: vi.fn(),
+  },
+}));
+
+vi.mock('@rsn/web/data-access-api', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@rsn/web/data-access-api')>();
+  return {
+    ...actual,
+    useApi: () => mocks.api,
+  };
+});
+
+/** A recipe the caller wrote (or a fork, SAVE-7): relation `own`. */
+const OWN: RecipeDetailDto = {
+  id: 'r1',
+  title: 'Shakshuka',
+  category: 'Breakfast',
+  servings: 2,
+  prepMinutes: 10,
+  cookMinutes: 30,
+  visibility: 'private',
+  relation: 'own',
+  ownerUsername: 'rotem',
+  source: 'user',
+  imageUrl: null,
+  rating: null,
+  versionNumber: 1,
+  updatedAt: '2026-09-20T18:00:00.000Z',
+  myCopyId: null,
+  updateAvailable: false,
+  description: 'Eggs poached in tomato.',
+  ingredients: [{ quantity: 200, unit: 'g', name: 'flour' }],
+  steps: [{ text: 'Fry the onion.', durationMinutes: 5 }],
+  imageUrls: [],
+  canCook: true,
+  canEdit: true,
+  canRate: false,
+  hasComments: false,
+  hasVotes: false,
+  versionCount: 1,
+  forkedFrom: null,
+  savedFrom: null,
+  sharedWithUserIds: [],
+  attribution: null,
+};
+
+/** SAVE-7: a copy saved from a public recipe, not yet edited — relation `saved`. */
+const SAVED_COPY: RecipeDetailDto = {
+  ...OWN,
+  id: 'copy-1',
+  title: 'Lentil soup',
+  relation: 'saved',
+  savedFrom: {
+    recipeId: 'r9',
+    title: 'Lentil soup',
+    ownerUsername: 'noa',
+    source: 'user',
+  },
+};
+
+function show(
+  recipe: RecipeDetailDto,
+  handlers: { onEdit?: (id: string) => void; onDeleted?: () => void } = {},
+) {
+  return render(
+    <OwnerActions
+      recipe={recipe}
+      onEdit={handlers.onEdit ?? vi.fn()}
+      onChanged={vi.fn()}
+      onDeleted={handlers.onDeleted ?? vi.fn()}
+    />,
+  );
+}
+
+describe('OwnerActions', () => {
+  beforeEach(() => {
+    mocks.api.setVisibility.mockReset();
+    mocks.api.deleteRecipe.mockReset().mockResolvedValue(undefined);
+    mocks.api.listFriends.mockReset().mockResolvedValue({ friends: [] });
+    mocks.api.shareRecipe.mockReset();
+  });
+
+  it('UI-12 shows Edit, Visibility and Delete on a recipe the caller wrote', () => {
+    show(OWN);
+
+    expect(screen.getByRole('button', { name: /Edit/ })).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'Visibility' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Delete$/ })).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: /Remove from my recipes/ }),
+    ).toBeNull();
+  });
+
+  it('UI-12 shows Share… on a recipe the caller wrote when it is shared', () => {
+    show({ ...OWN, visibility: 'shared' });
+
+    expect(screen.getByRole('button', { name: /Share…/ })).toBeTruthy();
+  });
+
+  it('UI-12 SAVE-8 shows Edit and Remove from my recipes on a saved copy, with no Visibility or Share…', () => {
+    show(SAVED_COPY);
+
+    expect(screen.getByRole('button', { name: /Edit/ })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: /Remove from my recipes/ }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('combobox', { name: 'Visibility' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Share…/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Delete$/ })).toBeNull();
+  });
+
+  it('SAVE-8 offers no Share… on a saved copy even if its visibility reads shared', () => {
+    show({ ...SAVED_COPY, visibility: 'shared' });
+
+    expect(screen.queryByRole('combobox', { name: 'Visibility' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Share…/ })).toBeNull();
+  });
+
+  it('UI-12 Edit on a saved copy hands its id to the editor', () => {
+    const onEdit = vi.fn();
+    show(SAVED_COPY, { onEdit });
+
+    fireEvent.click(screen.getByRole('button', { name: /Edit/ }));
+
+    expect(onEdit).toHaveBeenCalledWith('copy-1');
+  });
+
+  it('SAVE-7 removes a saved copy only after the confirm dialog', async () => {
+    const onDeleted = vi.fn();
+    show(SAVED_COPY, { onDeleted });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /Remove from my recipes/ }),
+    );
+    expect(mocks.api.deleteRecipe).not.toHaveBeenCalled();
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Remove from my recipes?')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() =>
+      expect(mocks.api.deleteRecipe).toHaveBeenCalledWith('copy-1'),
+    );
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
+  });
+});
