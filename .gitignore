@@ -54,6 +54,6 @@ apps/desktop/out/
 log/
 
 # FirebaseSDK
-cooking-sn-firebase-adminsdk-fbsvc-6f5d96395b.json
+*-firebase-adminsdk-*.json
 # Claude desktop app dev-server launcher (local tooling)
 .claude/launch.json

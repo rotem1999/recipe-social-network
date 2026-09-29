@@ -7,7 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { UserEntity } from '@rsn/api/data-access-db';
 import type { AuthResponse } from '@rsn/shared/util-contracts';
-import { PasswordService } from './password.service';
+import { DUMMY_PASSWORD_HASH, PasswordService } from './password.service';
 import { UsersService } from './users.service';
 import { normaliseEmail, normaliseUsername } from './normalise';
 import { asTtl } from './token-ttl';
@@ -72,10 +72,13 @@ export class AuthService {
     return this.issueTokens(user);
   }
 
-  /** AUTH-5, AUTH-6: same 401 for an unknown user and for a wrong password. */
+  /** AUTH-5, AUTH-6: same 401, and the same time, for an unknown user and a wrong password. */
   async signIn(body: SignInDto): Promise<AuthResponse> {
     const user = await this.users.findByUsername(body.username);
     if (user === null) {
+      // AUTH-6: the same scrypt derivation runs against a fixed dummy hash; its result
+      // is ignored, so an unknown username never signs in.
+      await this.passwords.verify(body.password, DUMMY_PASSWORD_HASH);
       throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
     const ok = await this.passwords.verify(body.password, user.passwordHash);

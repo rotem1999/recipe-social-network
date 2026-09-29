@@ -141,24 +141,14 @@ export function AuthScreen(): ReactElement {
 
   return (
     <main className="screen screen-narrow">
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '9px',
-          marginBottom: 'var(--space-1)',
-        }}
-      >
+      <div className="brand mb-1">
         <span className="nav-mark">
           <Icon.ChefHat size={18} />
         </span>
         {/* UI-2: the app is branded CookBook everywhere. */}
-        <h1 style={{ margin: 0 }}>CookBook</h1>
+        <h1 className="m-0">CookBook</h1>
       </div>
-      <p
-        className="text-muted"
-        style={{ fontSize: '14px', marginBottom: 'var(--space-6)' }}
-      >
+      <p className="text-muted page-lead">
         Recipes for family and friends.
       </p>
 
@@ -174,12 +164,7 @@ export function AuthScreen(): ReactElement {
           void submit(event);
         }}
         noValidate
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 'var(--space-4)',
-          marginTop: 'var(--space-6)',
-        }}
+        className="stack gap-4 mt-6"
       >
         <Field
           label="Username"

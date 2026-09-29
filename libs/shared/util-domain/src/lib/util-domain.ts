@@ -62,6 +62,33 @@ export type RecipeSource = (typeof RECIPE_SOURCES)[number];
 export const RECIPE_RELATIONS = ['own', 'saved', 'shared', 'public', 'none'] as const;
 export type RecipeRelation = (typeof RECIPE_RELATIONS)[number];
 
+/** §3.1.1 title and description lengths (Rotem delegated, 2026-09-28). */
+export const RECIPE_TITLE_MAX_LENGTH = 200;
+export const RECIPE_DESCRIPTION_MAX_LENGTH = 500;
+
+/**
+ * §3.1.1 upper limits (Rotem, chat 2026-09-30), enforced by the API's create and update
+ * DTOs (400) and by `maxLength`/`max` in the editor. Rows saved before them keep their
+ * values until their next edit.
+ */
+export const MIN_SERVINGS = 1;
+export const MAX_SERVINGS = 6;
+/** `prepMinutes` and `cookMinutes`: 0–1440. */
+export const MIN_PREP_COOK_MINUTES = 0;
+export const MAX_PREP_COOK_MINUTES = 1440;
+/** ingredients[]: at most 50; `name` 1–120, `note` at most 120, `quantity` above 0 and at most 10000. */
+export const MAX_INGREDIENTS = 50;
+export const INGREDIENT_NAME_MAX_LENGTH = 120;
+export const INGREDIENT_NOTE_MAX_LENGTH = 120;
+export const MAX_INGREDIENT_QUANTITY = 10000;
+/** steps[]: at most 60; `text` 1–1000, `durationMinutes` 1–1440. */
+export const MAX_STEPS = 60;
+export const STEP_TEXT_MAX_LENGTH = 1000;
+export const MIN_STEP_DURATION_MINUTES = 1;
+export const MAX_STEP_DURATION_MINUTES = 1440;
+/** UI-15, §3.1.1: cook mode offers a step timer only up to 120 minutes (Rotem, chat 2026-09-30). */
+export const MAX_COOK_TIMER_MINUTES = 120;
+
 /** RATE-1: whole stars 1–5. RATE-2: average 1.00–5.00. */
 export const MIN_STARS = 1;
 export const MAX_STARS = 5;

@@ -7,17 +7,28 @@ import { useApi, useAuth, useRequest } from '@rsn/web/data-access-api';
 import { Button, EmptyState, Icon, InlineError } from '@rsn/web/ui';
 import { RecipeCard } from './recipe-card';
 
+/** What Home knows that the recommendation card needs (UI-38). */
+export interface HomeRecommendationContext {
+  /**
+   * WX-10: whether the caller has any own or saved recipe to rank; null until
+   * `GET /recipes` succeeded.
+   */
+  hasCandidates: boolean | null;
+}
+
 export interface HomeScreenProps {
   onOpenRecipe: (id: string) => void;
   onCook: (id: string) => void;
-  /** The recommendation card from `@rsn/web/feature-recommend` (WX-4). */
-  recommendationSlot?: ReactNode;
+  /**
+   * The recommendation card from `@rsn/web/feature-recommend` (WX-4). As a
+   * function it receives what Home knows about the caller's recipes (UI-38).
+   */
+  recommendationSlot?:
+    | ReactNode
+    | ((context: HomeRecommendationContext) => ReactNode);
   /** WX-8 weather line; null before it arrives or when the API has none. */
   greetingLine?: string | null;
 }
-
-/** Shown under the greeting until the weather line arrives (decided, not in SPEC). */
-const FALLBACK_LINE = 'Your recipes, ready when you are.';
 
 /** SAVE-3: the caption beside "Your recipes". */
 function countLabel(count: number): string {
@@ -33,51 +44,58 @@ export function HomeScreen({
 }: HomeScreenProps): ReactElement {
   const api = useApi();
   const { user } = useAuth();
-  const { data, error, loading } = useRequest(() => api.listRecipes(), []);
+  const { data, error, loading, reload } = useRequest(
+    () => api.listRecipes(),
+    [],
+  );
 
   // UI-10: the greeting reads the viewer's own clock, like the recommendation does.
   const greeting = `${greetingFor(new Date().getHours())}, ${user?.username ?? ''}`;
-  const recipes = data?.recipes ?? [];
+  // UI-26: a count, an empty state or cards only after the request succeeded.
+  const succeeded = !loading && error === null && data !== null;
+  const recipes = succeeded ? data.recipes : [];
+  // UI-38 + WX-10: Home ranks the caller's own and saved recipes only.
+  const hasCandidates = succeeded
+    ? recipes.some(
+        (recipe) => recipe.relation === 'own' || recipe.relation === 'saved',
+      )
+    : null;
+  const hasLine =
+    greetingLine !== undefined && greetingLine !== null && greetingLine !== '';
 
   return (
     <main className="screen" aria-label="Home">
-      <h1 style={{ marginBottom: 'var(--space-1)' }}>{greeting}</h1>
-      <p
-        className="text-muted"
-        style={{ fontSize: '14px', marginBottom: 'var(--space-6)' }}
-      >
-        {greetingLine ?? FALLBACK_LINE}
-      </p>
+      <h1 className={hasLine ? 'mb-1' : 'mb-6'}>{greeting}</h1>
+      {/* UI-38: no sub-line until the WX-10 weather line arrives. */}
+      {hasLine ? <p className="text-muted page-lead">{greetingLine}</p> : null}
 
-      {recommendationSlot}
+      {typeof recommendationSlot === 'function'
+        ? recommendationSlot({ hasCandidates })
+        : recommendationSlot}
 
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'baseline',
-          gap: 'var(--space-3)',
-          margin: 'var(--space-8) 0 var(--space-4)',
-        }}
-      >
-        <h4 style={{ margin: 0 }}>Your recipes</h4>
-        <span className="text-muted" style={{ fontSize: '12px' }}>
-          {loading ? 'Loading…' : countLabel(recipes.length)}
+      <div className="row align-baseline gap-3 mt-8 mb-4">
+        <h4 className="m-0">Your recipes</h4>
+        <span className="text-muted text-small">
+          {loading ? 'Loading…' : succeeded ? countLabel(recipes.length) : null}
         </span>
       </div>
 
-      {error === null ? null : <InlineError>{error.message}</InlineError>}
+      {/* UI-26: after a failure, the message and a way to ask again. */}
+      {!loading && error !== null ? (
+        <div className="row gap-3 wrap">
+          <InlineError>{error.message}</InlineError>
+          <Button variant="secondary" onClick={reload}>
+            Try again
+          </Button>
+        </div>
+      ) : null}
 
-      {!loading && error === null && recipes.length === 0 ? (
+      {succeeded && recipes.length === 0 ? (
         <EmptyState text="No recipes yet. Create one, or save a public recipe from Discover." />
       ) : null}
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
-          gap: 'var(--space-4)',
-        }}
-      >
+      {/* UI-36: grid rows align cards to the top. */}
+      <div className="card-grid card-grid-narrow">
         {recipes.map((recipe) => (
           <RecipeCard
             key={recipe.id}
@@ -87,7 +105,7 @@ export function HomeScreen({
               // SAVE-2: everything on Home is owned, saved or shared, so it is cookable.
               <Button
                 variant="ghost"
-                style={{ fontSize: '12px', paddingBlock: 'var(--space-1)' }}
+                className="btn-sm"
                 onClick={() => onCook(recipe.id)}
               >
                 <Icon.Play size={13} />

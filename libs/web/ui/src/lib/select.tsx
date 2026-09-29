@@ -19,11 +19,7 @@ export function Select({
   ...rest
 }: SelectProps): ReactElement {
   return (
-    <select
-      {...rest}
-      className={cx('input', className)}
-      style={{ appearance: 'none', ...rest.style }}
-    >
+    <select {...rest} className={cx('input', 'select-input', className)}>
       {options === undefined
         ? children
         : options.map((option) => (

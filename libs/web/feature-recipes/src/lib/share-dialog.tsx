@@ -76,23 +76,9 @@ export function ShareDialog({
       {error === null && friends.length === 0 ? (
         <EmptyState text="No friends yet — add some on the Friends tab." />
       ) : null}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 'var(--space-2)',
-        }}
-      >
+      <div className="stack gap-2">
         {friends.map((friend) => (
-          <label
-            key={friend.userId}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 'var(--space-2)',
-              fontSize: '14px',
-            }}
-          >
+          <label key={friend.userId} className="row text-body">
             <input
               type="checkbox"
               checked={selected.includes(friend.userId)}

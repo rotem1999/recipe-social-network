@@ -163,11 +163,23 @@ export class FriendsService {
     return this.getFriends(userId);
   }
 
-  /** FR-4: only the sender cancels; the pending row is removed entirely. */
+  /**
+   * FR-4: either side can cancel a pending request. The sender's cancel removes the row
+   * entirely; the receiver's has the same effect as declining (Rotem, chat 2026-09-30).
+   * Either way either user may send a new request at once (`sendRequest` reuses a declined
+   * row and creates a new one after a removed row).
+   */
   async cancel(userId: string, requestId: string): Promise<FriendsResponse> {
     const request = await this.pendingOrThrow(requestId);
+    if (request.toUserId === userId) {
+      request.status = 'declined';
+      await this.requests.save(request);
+      return this.getFriends(userId);
+    }
     if (request.fromUserId !== userId) {
-      throw new ForbiddenException('Only the sender can cancel this request');
+      throw new ForbiddenException(
+        'Only the sender or the receiver can cancel this request',
+      );
     }
     await this.requests.delete(request.id);
     return this.getFriends(userId);

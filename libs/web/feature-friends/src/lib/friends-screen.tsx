@@ -1,7 +1,7 @@
-// SPEC.md §4 (FR-1..FR-4) and the design guide §4: one screen that finds
-// people, answers the requests they sent, and lists the friends recipes can be
-// shared with without publishing them.
-import { useCallback, useEffect, useId, useState } from 'react';
+// SPEC.md §4 (FR-1..FR-4), §11.5 UI-26, UI-34, UI-38 and the design guide §4:
+// one screen that finds people, answers the requests they sent, and lists the
+// friends recipes can be shared with without publishing them.
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import type {
   FriendDto,
@@ -25,31 +25,6 @@ const MIN_QUERY_LENGTH = 2;
 /** Keystrokes settle for this long before `GET /users/search` is called. */
 const SEARCH_DEBOUNCE_MS = 300;
 
-const ROW_STYLE = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '14px',
-  padding: '13px 4px',
-  borderBottom:
-    '1px solid color-mix(in srgb, var(--color-text) 8%, transparent)',
-} as const;
-
-const AVATAR_STYLE = {
-  width: '38px',
-  height: '38px',
-  flex: 'none',
-  borderRadius: '50%',
-  background: 'var(--color-accent-2-200)',
-  color: 'var(--color-accent-2-800)',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontWeight: 700,
-  fontSize: '14px',
-} as const;
-
-const SECTION_STYLE = { marginTop: 'var(--space-8)' } as const;
-
 /** Whatever the API said went wrong, as one line for {@link InlineError}. */
 function messageOf(cause: unknown): string {
   if (cause instanceof ApiError || cause instanceof Error) {
@@ -57,6 +32,11 @@ function messageOf(cause: unknown): string {
   }
   return 'Something went wrong. Please try again.';
 }
+
+/** FR-4 / UI-34: where the caller stands with one search row. */
+type SearchRelation =
+  | { kind: 'self' | 'friend' | 'none' }
+  | { kind: 'incoming' | 'outgoing'; requestId: string };
 
 /** The guide's 38px circle: the first letter of the username. */
 function initialOf(username: string): string {
@@ -85,14 +65,14 @@ function PersonRow({
   children,
 }: PersonRowProps): ReactElement {
   return (
-    <div style={ROW_STYLE}>
-      <span style={AVATAR_STYLE} aria-hidden={true}>
+    <div className="person-row">
+      <span className="person-avatar" aria-hidden={true}>
         {initialOf(username)}
       </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, fontSize: '14px' }}>{username}</div>
+      <div className="grow shrink">
+        <div className="person-name">{username}</div>
         {subLine === undefined || subLine === null ? null : (
-          <div className="text-muted" style={{ fontSize: '12px' }}>
+          <div className="text-muted text-small">
             {subLine}
           </div>
         )}
@@ -109,8 +89,8 @@ interface SectionProps {
 
 function Section({ title, children }: SectionProps): ReactElement {
   return (
-    <section style={SECTION_STYLE}>
-      <h4 style={{ marginBottom: 'var(--space-2)' }}>{title}</h4>
+    <section className="mt-8">
+      <h4 className="mb-2">{title}</h4>
       {children}
     </section>
   );
@@ -129,14 +109,16 @@ export function FriendsScreen(): ReactElement {
     useCallback(() => api.getFriends(), [api]),
     [api],
   );
-  const { data, setData } = friends;
+  const { data, setData, reload } = friends;
 
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<UserSearchResultDto[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
-  /** Rows whose request was sent in this session, so the label flips at once. */
-  const [sentIds, setSentIds] = useState<readonly string[]>([]);
+  // UI-34: bumped after every friends mutation so the search runs again.
+  const [searchRound, setSearchRound] = useState(0);
+  // The query of the last search that ran; a re-run of the same query skips the debounce.
+  const lastSearched = useRef<string | null>(null);
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -147,6 +129,7 @@ export function FriendsScreen(): ReactElement {
   useEffect(() => {
     const trimmed = query.trim();
     if (trimmed.length < MIN_QUERY_LENGTH) {
+      lastSearched.current = null;
       setResults([]);
       setSearching(false);
       setSearchError(null);
@@ -156,7 +139,9 @@ export function FriendsScreen(): ReactElement {
     let cancelled = false;
     setSearching(true);
     setSearchError(null);
+    const delay = lastSearched.current === trimmed ? 0 : SEARCH_DEBOUNCE_MS;
     const timer = setTimeout(() => {
+      lastSearched.current = trimmed;
       api.searchUsers(trimmed).then(
         (response) => {
           if (!cancelled) {
@@ -172,13 +157,13 @@ export function FriendsScreen(): ReactElement {
           }
         },
       );
-    }, SEARCH_DEBOUNCE_MS);
+    }, delay);
 
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [api, query]);
+  }, [api, query, searchRound]);
 
   /** Runs one mutation and adopts the FriendsResponse it returns. */
   const mutate = useCallback(
@@ -191,17 +176,23 @@ export function FriendsScreen(): ReactElement {
         setActionError(messageOf(cause));
       } finally {
         setBusyId(null);
+        // UI-34: the search rows are re-read after every mutation.
+        setSearchRound((round) => round + 1);
       }
     },
     [setData],
   );
 
   const sendRequest = (user: UserSearchResultDto): void => {
-    void mutate(user.id, async () => {
-      const response = await api.sendFriendRequest(user.id);
-      setSentIds((ids) => [...ids, user.id]);
-      return response;
-    });
+    void mutate(user.id, () => api.sendFriendRequest(user.id));
+  };
+
+  const acceptRequest = (requestId: string): void => {
+    void mutate(requestId, () => api.acceptRequest(requestId));
+  };
+
+  const declineRequest = (requestId: string): void => {
+    void mutate(requestId, () => api.declineRequest(requestId));
   };
 
   const removeFriend = (friend: FriendDto): void => {
@@ -213,24 +204,43 @@ export function FriendsScreen(): ReactElement {
   const outgoing: FriendRequestDto[] = data?.outgoing ?? [];
   const list: FriendDto[] = data?.friends ?? [];
 
-  /** FR-4: a pending request between the two, seen from the caller's side. */
-  const pendingDirection = (
-    user: UserSearchResultDto,
-  ): 'incoming' | 'outgoing' | null => {
-    if (user.pendingRequestId === null) {
-      return null;
+  /**
+   * FR-4 / UI-34: where the caller stands with a search row. The latest
+   * FriendsResponse (every mutation returns one) wins over the search's own flags,
+   * so a row is right at once and the re-run search only confirms it.
+   */
+  const relationOf = (user: UserSearchResultDto): SearchRelation => {
+    if (user.isSelf) {
+      return { kind: 'self' };
     }
-    return incoming.some((request) => request.id === user.pendingRequestId)
-      ? 'incoming'
-      : 'outgoing';
+    if (data === null) {
+      if (user.isFriend) {
+        return { kind: 'friend' };
+      }
+      return user.pendingRequestId === null
+        ? { kind: 'none' }
+        : { kind: 'outgoing', requestId: user.pendingRequestId };
+    }
+    if (list.some((friend) => friend.userId === user.id)) {
+      return { kind: 'friend' };
+    }
+    const received = incoming.find((request) => request.fromUserId === user.id);
+    if (received !== undefined) {
+      return { kind: 'incoming', requestId: received.id };
+    }
+    const sent = outgoing.find((request) => request.toUserId === user.id);
+    if (sent !== undefined) {
+      return { kind: 'outgoing', requestId: sent.id };
+    }
+    return { kind: 'none' };
   };
 
   const searched = query.trim().length >= MIN_QUERY_LENGTH;
 
   return (
     <main className="screen screen-narrow">
-      <h1 style={{ marginBottom: 'var(--space-1)' }}>Friends</h1>
-      <p className="text-muted" style={{ fontSize: '14px' }}>
+      <h1 className="page-title">Friends</h1>
+      <p className="text-muted text-body">
         Share recipes without publishing them.
       </p>
 
@@ -245,7 +255,7 @@ export function FriendsScreen(): ReactElement {
         autoCorrect="off"
         spellCheck={false}
         onChange={(event) => setQuery(event.target.value)}
-        style={{ width: '100%', marginTop: 'var(--space-4)' }}
+        className="mt-4"
       />
 
       {searchError === null ? null : <InlineError>{searchError}</InlineError>}
@@ -253,28 +263,51 @@ export function FriendsScreen(): ReactElement {
       {searched ? (
         <Section title="Search results">
           {searching && results.length === 0 ? (
-            <p className="text-muted" style={{ fontSize: '14px' }}>
+            <p className="text-muted text-body">
               Searching…
             </p>
           ) : results.length === 0 ? (
-            <p className="text-muted" style={{ fontSize: '14px' }}>
+            <p className="text-muted text-body">
               No one found.
             </p>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="stack">
               {results.map((user) => {
-                const direction = pendingDirection(user);
-                const sent = sentIds.includes(user.id);
+                const relation = relationOf(user);
                 return (
-                  <PersonRow key={user.id} username={user.username}>
-                    {user.isSelf ? (
+                  <PersonRow
+                    key={user.id}
+                    username={user.username}
+                    subLine={
+                      relation.kind === 'incoming'
+                        ? 'Wants to be friends'
+                        : null
+                    }
+                  >
+                    {relation.kind === 'self' ? (
                       <Tag tone="neutral">You</Tag>
-                    ) : user.isFriend ? (
+                    ) : relation.kind === 'friend' ? (
                       <Tag tone="accent-2">Friends</Tag>
-                    ) : sent || direction === 'outgoing' ? (
+                    ) : relation.kind === 'outgoing' ? (
                       <Tag tone="neutral">Request sent</Tag>
-                    ) : direction === 'incoming' ? (
-                      <Tag tone="neutral">Wants to be friends</Tag>
+                    ) : relation.kind === 'incoming' ? (
+                      // UI-34: an incoming request is answered from its search row too.
+                      <>
+                        <Button
+                          variant="primary"
+                          loading={busyId === relation.requestId}
+                          onClick={() => acceptRequest(relation.requestId)}
+                        >
+                          Accept
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          disabled={busyId === relation.requestId}
+                          onClick={() => declineRequest(relation.requestId)}
+                        >
+                          Decline
+                        </Button>
+                      </>
                     ) : (
                       <Button
                         variant="primary"
@@ -294,14 +327,10 @@ export function FriendsScreen(): ReactElement {
 
       {actionError === null ? null : <InlineError>{actionError}</InlineError>}
 
-      {friends.error !== null ? (
-        <InlineError>{messageOf(friends.error)}</InlineError>
-      ) : null}
-
       {/* FR-2: one user sends a request, the other accepts. */}
       {incoming.length > 0 ? (
         <Section title="Friend requests">
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <div className="stack">
             {incoming.map((request) => (
               <PersonRow
                 key={request.id}
@@ -311,22 +340,14 @@ export function FriendsScreen(): ReactElement {
                 <Button
                   variant="primary"
                   loading={busyId === request.id}
-                  onClick={() => {
-                    void mutate(request.id, () =>
-                      api.acceptRequest(request.id),
-                    );
-                  }}
+                  onClick={() => acceptRequest(request.id)}
                 >
                   Accept
                 </Button>
                 <Button
                   variant="secondary"
                   disabled={busyId === request.id}
-                  onClick={() => {
-                    void mutate(request.id, () =>
-                      api.declineRequest(request.id),
-                    );
-                  }}
+                  onClick={() => declineRequest(request.id)}
                 >
                   Decline
                 </Button>
@@ -339,7 +360,7 @@ export function FriendsScreen(): ReactElement {
       {/* FR-4: either side can cancel a pending request. */}
       {outgoing.length > 0 ? (
         <Section title="Sent requests">
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <div className="stack">
             {outgoing.map((request) => (
               <PersonRow
                 key={request.id}
@@ -364,26 +385,32 @@ export function FriendsScreen(): ReactElement {
       ) : null}
 
       <Section title="Your friends">
-        {list.length === 0 ? (
-          friends.loading ? (
-            <p className="text-muted" style={{ fontSize: '14px' }}>
-              Loading…
-            </p>
-          ) : (
-            <EmptyState
-              icon={<Icon.Users size={28} />}
-              text="No friends yet — find someone by username or email above."
-            />
-          )
+        {/* UI-26: the empty state only after GET /friends succeeded. */}
+        {friends.loading && data === null ? (
+          <p className="text-muted text-body">
+            Loading…
+          </p>
+        ) : friends.error !== null ? (
+          <div>
+            <InlineError>{messageOf(friends.error)}</InlineError>
+            <Button variant="ghost" onClick={reload} className="mt-2">
+              Try again
+            </Button>
+          </div>
+        ) : list.length === 0 ? (
+          <EmptyState
+            icon={<Icon.Users size={28} />}
+            text="No friends yet — find someone by username or email above."
+          />
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <div className="stack">
             {list.map((friend) => (
               <PersonRow
                 key={friend.userId}
                 username={friend.username}
                 subLine={sinceLine(friend.since)}
               >
-                <Tag tone="accent-2">Friends</Tag>
+                {/* UI-38: no "Friends" tag under "Your friends". */}
                 {/* FR-4: removing a friend also removes every share between them. */}
                 <Button
                   variant="secondary"
@@ -405,7 +432,7 @@ export function FriendsScreen(): ReactElement {
           onCancel={() => setConfirmRemove(null)}
           onConfirm={() => removeFriend(confirmRemove)}
         >
-          <p style={{ margin: 0 }}>
+          <p className="m-0">
             You will both stop seeing the recipes you shared with each other.
           </p>
         </ConfirmDialog>

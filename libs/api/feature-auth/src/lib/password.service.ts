@@ -19,6 +19,20 @@ const SCRYPT_MAXMEM = 256 * 1024 * 1024;
 const PREFIX = 'scrypt';
 const FIELD_COUNT = 6;
 
+/**
+ * AUTH-6: fixed hash that a sign-in for an unknown username is verified against, so it
+ * runs the same scrypt derivation (same N, r, p and key length) as a wrong password.
+ * Salt and key are random bytes, not derived from any password.
+ */
+export const DUMMY_PASSWORD_HASH = [
+  PREFIX,
+  SCRYPT_N,
+  SCRYPT_R,
+  SCRYPT_P,
+  'OBqyS6Kt19MYrggVFrIChw==',
+  'E9zdqOKived6Y7a8DqsGBTF5xQHmpq1tNOLfW2wR34CiIkCWYsVvQWKrddxI7COeWCfhNlGh+vQDuanRtbpGWw==',
+].join('$');
+
 const scryptAsync = promisify(scrypt) as unknown as (
   password: string,
   salt: Buffer,

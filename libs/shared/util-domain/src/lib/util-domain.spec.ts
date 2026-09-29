@@ -6,8 +6,23 @@ import {
   MAX_FAVOURITE_CATEGORIES,
   MAX_IMAGES_PER_RECIPE,
   MAX_IMAGE_BYTES,
+  INGREDIENT_NAME_MAX_LENGTH,
+  INGREDIENT_NOTE_MAX_LENGTH,
+  MAX_COOK_TIMER_MINUTES,
+  MAX_INGREDIENTS,
+  MAX_INGREDIENT_QUANTITY,
+  MAX_PREP_COOK_MINUTES,
+  MAX_SERVINGS,
   MAX_STARS,
+  MAX_STEPS,
+  MAX_STEP_DURATION_MINUTES,
+  MIN_PREP_COOK_MINUTES,
+  MIN_SERVINGS,
   MIN_STARS,
+  MIN_STEP_DURATION_MINUTES,
+  RECIPE_DESCRIPTION_MAX_LENGTH,
+  RECIPE_TITLE_MAX_LENGTH,
+  STEP_TEXT_MAX_LENGTH,
   UNITS,
   VISIBILITIES,
   greetingFor,
@@ -118,6 +133,40 @@ describe('domain constants', () => {
   it('IMG-6 allows 3 images of at most 5 MB each', () => {
     expect(MAX_IMAGES_PER_RECIPE).toBe(3);
     expect(MAX_IMAGE_BYTES).toBe(5 * 1024 * 1024);
+  });
+
+  it('§3.1.1 limits the title to 200 and the description to 500 characters', () => {
+    expect(RECIPE_TITLE_MAX_LENGTH).toBe(200);
+    expect(RECIPE_DESCRIPTION_MAX_LENGTH).toBe(500);
+  });
+
+  it('§3.1.1 allows 1 to 6 servings', () => {
+    expect(MIN_SERVINGS).toBe(1);
+    expect(MAX_SERVINGS).toBe(6);
+  });
+
+  it('§3.1.1 allows prepMinutes and cookMinutes from 0 to 1440', () => {
+    expect(MIN_PREP_COOK_MINUTES).toBe(0);
+    expect(MAX_PREP_COOK_MINUTES).toBe(1440);
+  });
+
+  it('§3.1.1 allows at most 50 ingredients, names and notes of 120 characters, quantities up to 10000', () => {
+    expect(MAX_INGREDIENTS).toBe(50);
+    expect(INGREDIENT_NAME_MAX_LENGTH).toBe(120);
+    expect(INGREDIENT_NOTE_MAX_LENGTH).toBe(120);
+    expect(MAX_INGREDIENT_QUANTITY).toBe(10000);
+  });
+
+  it('§3.1.1 allows at most 60 steps of 1000 characters with a duration from 1 to 1440 minutes', () => {
+    expect(MAX_STEPS).toBe(60);
+    expect(STEP_TEXT_MAX_LENGTH).toBe(1000);
+    expect(MIN_STEP_DURATION_MINUTES).toBe(1);
+    expect(MAX_STEP_DURATION_MINUTES).toBe(1440);
+  });
+
+  it('UI-15, §3.1.1 offers a cook-mode timer only up to 120 minutes, below the step duration limit', () => {
+    expect(MAX_COOK_TIMER_MINUTES).toBe(120);
+    expect(MAX_COOK_TIMER_MINUTES).toBeLessThan(MAX_STEP_DURATION_MINUTES);
   });
 });
 
@@ -307,16 +356,14 @@ describe('validateRecipeContent', () => {
     ]);
   });
 
-  // UNSPECIFIED: SPEC.md §3.1.1 gives no maximum length for title or description.
-  // These two tests pin the current code so a change is deliberate.
-  it('UNSPECIFIED rejects a title longer than 200 characters', () => {
+  it('§3.1.1 rejects a title longer than 200 characters', () => {
     expect(validateRecipeContent(makeContent({ title: 'a'.repeat(201) }))).toEqual([
       'title is longer than 200 characters',
     ]);
     expect(validateRecipeContent(makeContent({ title: 'a'.repeat(200) }))).toEqual([]);
   });
 
-  it('UNSPECIFIED rejects a description longer than 500 characters', () => {
+  it('§3.1.1 rejects a description longer than 500 characters', () => {
     expect(validateRecipeContent(makeContent({ description: 'a'.repeat(501) }))).toEqual([
       'description is longer than 500 characters',
     ]);

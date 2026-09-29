@@ -307,6 +307,83 @@ describe('FriendsService', () => {
         expect.objectContaining({ id: 'req-declined', status: 'pending' }),
       );
     });
+
+    it('FR-4 lets the sender request again at once after the receiver cancels (declines)', async () => {
+      const { service, requests } = harness();
+      const row = requestRow({ id: 'req-1', fromUserId: OTHER, toUserId: ME });
+      requests.findOne.mockResolvedValue(row);
+
+      await service.cancel(ME, 'req-1');
+      expect(row.status).toBe('declined');
+
+      requests.save.mockClear();
+      requests.find.mockResolvedValueOnce([row]);
+      await service.sendRequest(OTHER, ME);
+
+      expect(requests.create).not.toHaveBeenCalled();
+      expect(requests.save).toHaveBeenCalledTimes(1);
+      expect(requests.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'req-1',
+          fromUserId: OTHER,
+          toUserId: ME,
+          status: 'pending',
+        }),
+      );
+    });
+
+    it('FR-4 lets the receiver send a request of their own at once after declining', async () => {
+      const { service, requests } = harness();
+      const declined = requestRow({
+        id: 'req-declined',
+        fromUserId: OTHER,
+        toUserId: ME,
+        status: 'declined',
+      });
+      requests.find.mockResolvedValueOnce([declined]);
+
+      await service.sendRequest(ME, OTHER);
+
+      // The declined row belongs to the other direction, so a new pending row is created.
+      expect(requests.create).toHaveBeenCalledWith({
+        fromUserId: ME,
+        toUserId: OTHER,
+        status: 'pending',
+      });
+      expect(requests.save).toHaveBeenCalledTimes(1);
+      expect(declined.status).toBe('declined');
+    });
+
+    it.each([
+      ['the sender', ME, OTHER],
+      ['the receiver', OTHER, ME],
+    ])(
+      'FR-4 lets %s request again at once after the sender cancelled',
+      async (_who, from, to) => {
+        const { service, requests, users } = harness();
+        requests.findOne.mockResolvedValue(
+          requestRow({ id: 'req-1', fromUserId: ME, toUserId: OTHER }),
+        );
+        await service.cancel(ME, 'req-1');
+        expect(requests.delete).toHaveBeenCalledWith('req-1');
+
+        // The cancelled row is gone, so nothing lies between the two.
+        users.findById.mockResolvedValue(userRow(to, 'target'));
+        requests.find.mockResolvedValueOnce([]);
+        await service.sendRequest(from, to);
+
+        expect(requests.create).toHaveBeenCalledWith({
+          fromUserId: from,
+          toUserId: to,
+          status: 'pending',
+        });
+        expect(requests.save).toHaveBeenCalledWith({
+          fromUserId: from,
+          toUserId: to,
+          status: 'pending',
+        });
+      },
+    );
   });
 
   describe('FR-2, FR-4 accept, decline and cancel', () => {
@@ -370,14 +447,106 @@ describe('FriendsService', () => {
       expect(requests.delete).toHaveBeenCalledWith('req-1');
     });
 
-    it('FR-4 answers 403 when the receiver tries to cancel', async () => {
+    it('FR-4 returns the caller FriendsResponse after the sender cancels', async () => {
+      const { service, requests, users } = harness();
+      requests.findOne.mockResolvedValue(
+        requestRow({ fromUserId: ME, toUserId: OTHER }),
+      );
+      // After the delete, getFriends() reads what is left for the caller.
+      requests.find.mockResolvedValueOnce([
+        requestRow({ id: 'f', fromUserId: 'friend', toUserId: ME, status: 'accepted' }),
+      ]);
+      users.findByIds.mockResolvedValue([
+        userRow(ME, 'me'),
+        userRow('friend', 'friend'),
+      ]);
+
+      const result = await service.cancel(ME, 'req-1');
+
+      expect(result).toEqual({
+        friends: [{ userId: 'friend', username: 'friend', since: AT.toISOString() }],
+        incoming: [],
+        outgoing: [],
+      });
+      expect(requests.save).not.toHaveBeenCalled();
+    });
+
+    it('FR-4 lets the receiver cancel a pending request, with the same effect as declining', async () => {
       const { service, requests } = harness();
       requests.findOne.mockResolvedValue(
         requestRow({ fromUserId: OTHER, toUserId: ME }),
       );
 
+      const result = await service.cancel(ME, 'req-1');
+
+      expect(requests.save).toHaveBeenCalledTimes(1);
+      expect(requests.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'req-1',
+          fromUserId: OTHER,
+          toUserId: ME,
+          status: 'declined',
+        }),
+      );
+      // Declining keeps the row; only the sender's cancel deletes it.
+      expect(requests.delete).not.toHaveBeenCalled();
+      expect(result).toEqual({ friends: [], incoming: [], outgoing: [] });
+    });
+
+    it('FR-4 leaves the same row behind for a receiver cancel as for a decline', async () => {
+      const cancelled = harness();
+      const cancelledRow = requestRow({ fromUserId: OTHER, toUserId: ME });
+      cancelled.requests.findOne.mockResolvedValue(cancelledRow);
+      const declined = harness();
+      const declinedRow = requestRow({ fromUserId: OTHER, toUserId: ME });
+      declined.requests.findOne.mockResolvedValue(declinedRow);
+
+      await cancelled.service.cancel(ME, 'req-1');
+      await declined.service.decline(ME, 'req-1');
+
+      expect(cancelledRow).toEqual(declinedRow);
+      expect(cancelled.requests.delete).not.toHaveBeenCalled();
+      expect(declined.requests.delete).not.toHaveBeenCalled();
+    });
+
+    it('FR-4 answers 403 when a third party tries to cancel, changing nothing', async () => {
+      const { service, requests } = harness();
+      requests.findOne.mockResolvedValue(
+        requestRow({ fromUserId: OTHER, toUserId: 'user-third' }),
+      );
+
       await expect(service.cancel(ME, 'req-1')).rejects.toThrow(
-        'Only the sender can cancel this request',
+        ForbiddenException,
+      );
+      await expect(service.cancel(ME, 'req-1')).rejects.toThrow(
+        'Only the sender or the receiver can cancel this request',
+      );
+      expect(requests.save).not.toHaveBeenCalled();
+      expect(requests.delete).not.toHaveBeenCalled();
+    });
+
+    it.each(['accepted', 'declined'] as const)(
+      'FR-4 answers 409 when cancelling a request that is no longer pending (%s)',
+      async (status) => {
+        const { service, requests } = harness();
+        requests.findOne.mockResolvedValue(
+          requestRow({ fromUserId: OTHER, toUserId: ME, status }),
+        );
+
+        await expect(service.cancel(ME, 'req-1')).rejects.toThrow(
+          ConflictException,
+        );
+        expect(requests.save).not.toHaveBeenCalled();
+        expect(requests.delete).not.toHaveBeenCalled();
+      },
+    );
+
+    it('FR-4 answers 404 when cancelling an unknown request id', async () => {
+      const { service, requests } = harness();
+      requests.findOne.mockResolvedValue(null);
+
+      await expect(service.cancel(ME, 'nope')).rejects.toThrow(
+        NotFoundException,
       );
       expect(requests.delete).not.toHaveBeenCalled();
     });

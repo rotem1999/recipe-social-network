@@ -15,11 +15,7 @@ export function InlineError({
   children,
 }: InlineErrorProps): ReactElement {
   return (
-    <p
-      role="alert"
-      className={cx('inline-error', className)}
-      style={{ margin: 'var(--space-1) 0 0' }}
-    >
+    <p role="alert" className={cx('inline-error', className)}>
       {children}
     </p>
   );

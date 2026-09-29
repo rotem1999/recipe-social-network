@@ -3,7 +3,7 @@
 
 import type { UsdaFoodHit } from '@rsn/api/data-access-usda';
 
-import { singularise, toWords } from './words';
+import { headWord, singularise, toWords } from './words';
 
 /**
  * NUT-8: first-segment words that are neither rewarded nor penalised, kept in
@@ -57,7 +57,8 @@ export function scoreHit(name: string, hit: UsdaFoodHit): number | null {
   const nameWords = toWords(name);
   if (nameWords.length === 0 || hit.kcalPer100g === null) return null;
 
-  const head = nameWords[nameWords.length - 1];
+  // NUT-8: the last name word that is not a container word ("Garlic cloves" → garlic).
+  const head = headWord(nameWords);
   const descriptionWords = toWords(hit.description);
   if (!descriptionWords.includes(head)) return null;
 

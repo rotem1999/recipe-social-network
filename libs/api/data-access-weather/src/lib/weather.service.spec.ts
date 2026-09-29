@@ -166,6 +166,119 @@ describe('WeatherService', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each(['Etc/UTC', 'Etc/GMT+2', 'GMT'])(
+    'WX-9 returns null for %s and never calls Open-Meteo',
+    async (timezone) => {
+      await expect(service().weatherFor(timezone)).resolves.toBe(null);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('WX-9 ignores a geocoding hit whose name is not the city segment and asks no forecast', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        results: [
+          {
+            name: 'Atlanta',
+            latitude: 33.749,
+            longitude: -84.38798,
+            country: 'United States',
+            timezone: 'America/New_York',
+          },
+        ],
+      }),
+    );
+
+    await expect(service().weatherFor('Asia/Atlantis')).resolves.toBe(null);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('WX-9 geocode() returns null for a hit whose name differs from the city', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        results: [
+          {
+            name: 'Utrecht',
+            latitude: 52.09083,
+            longitude: 5.12222,
+            country: 'Netherlands',
+            timezone: 'Europe/Amsterdam',
+          },
+        ],
+      }),
+    );
+
+    await expect(service().geocode('UTC')).resolves.toBe(null);
+  });
+
+  it('WX-9 geocode() returns null for a hit without a name', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        results: [{ latitude: 31.76904, longitude: 35.21633 }],
+      }),
+    );
+
+    await expect(service().geocode('Jerusalem')).resolves.toBe(null);
+  });
+
+  it('WX-9 accepts a hit whose name differs from the city only in letter case', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          results: [{ ...geocodingBody().results[0], name: 'JERUSALEM' }],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(forecastBody()));
+
+    const snapshot = await service().weatherFor('Asia/Jerusalem');
+
+    expect(snapshot).toMatchObject({ city: 'JERUSALEM', condition: 'rain' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('WX-9 reads underscores as spaces when comparing the hit name to the city', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        results: [
+          {
+            name: 'New York',
+            latitude: 40.71427,
+            longitude: -74.00597,
+            country: 'United States',
+            timezone: 'America/New_York',
+          },
+        ],
+      }),
+    );
+
+    await expect(service().geocode('New_York')).resolves.toMatchObject({
+      name: 'New York',
+      latitude: 40.71427,
+    });
+  });
+
+  it('WX-9 accepts the New York hit for America/New_York', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          results: [
+            {
+              name: 'New York',
+              latitude: 40.71427,
+              longitude: -74.00597,
+              country: 'United States',
+              timezone: 'America/New_York',
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(forecastBody()));
+
+    await expect(service().weatherFor('America/New_York')).resolves.toMatchObject(
+      { city: 'New York' },
+    );
+  });
+
   it('WX-10 returns null when Open-Meteo geocodes no result', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ results: [] }));
 

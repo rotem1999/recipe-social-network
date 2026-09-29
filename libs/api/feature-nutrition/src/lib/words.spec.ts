@@ -1,6 +1,6 @@
 // SPEC §9 NUT-8, NUT-9: the word rules shared by food choice and portion
 // choice. Pure functions, no I/O.
-import { containsPhrase, singularise, toWords } from './words';
+import { containsPhrase, headWord, singularise, toWords } from './words';
 
 describe('singularise (NUT-8)', () => {
   it('NUT-8 drops a trailing `es` after `o` ("tomatoes" → "tomato")', () => {
@@ -133,5 +133,66 @@ describe('containsPhrase (NUT-9)', () => {
   it('NUT-9 does not match a phrase longer than the words, nor an empty phrase', () => {
     expect(containsPhrase(['quantity'], ['quantity', 'not'])).toBe(false);
     expect(containsPhrase(['clove'], [])).toBe(false);
+  });
+});
+
+describe('headWord (NUT-8)', () => {
+  it('NUT-8 takes the last word that is not a container word ("Garlic cloves" → garlic)', () => {
+    expect(headWord(toWords('Garlic cloves'))).toBe('garlic');
+    expect(headWord(toWords('Chicken Breasts'))).toBe('chicken');
+  });
+
+  it.each([
+    'clove',
+    'breast',
+    'fillet',
+    'filet',
+    'stalk',
+    'sprig',
+    'slice',
+    'leaf',
+    'leave',
+    'head',
+  ])('NUT-8 never takes the container word `%s` as the head', (container) => {
+    expect(headWord(['salmon', container])).toBe('salmon');
+  });
+
+  it('NUT-8 compares container words after singularising', () => {
+    expect(headWord(toWords('Salmon Fillets'))).toBe('salmon');
+    expect(headWord(toWords('Beef Filets'))).toBe('beef');
+    expect(headWord(toWords('Celery Stalks'))).toBe('celery');
+    expect(headWord(toWords('Thyme Sprigs'))).toBe('thyme');
+    expect(headWord(toWords('Bread Slices'))).toBe('bread');
+    expect(headWord(toWords('Lettuce Heads'))).toBe('lettuce');
+  });
+
+  it('NUT-8 treats `leave` (what "leaves" singularises to) and `leaf` as container words', () => {
+    expect(headWord(toWords('Basil leaves'))).toBe('basil');
+    expect(headWord(toWords('Bay leaf'))).toBe('bay');
+    expect(headWord(toWords('Lettuce leaves'))).toBe('lettuce');
+  });
+
+  it('NUT-8 skips several container words at the end ("Chicken breast fillets" → chicken)', () => {
+    expect(headWord(toWords('Chicken breast fillets'))).toBe('chicken');
+  });
+
+  it('NUT-8 keeps the last word when the name has no container word', () => {
+    expect(headWord(toWords('Ground Beef'))).toBe('beef');
+    expect(headWord(toWords('Plum Tomatoes'))).toBe('tomato');
+  });
+
+  it('NUT-8 a container word before the last word does not change the head', () => {
+    expect(headWord(['chicken', 'breast', 'meat'])).toBe('meat');
+  });
+
+  it('NUT-8 a name made only of container words keeps its last word ("Slices")', () => {
+    expect(headWord(toWords('Slices'))).toBe('slice');
+    expect(headWord(toWords('Cloves'))).toBe('clove');
+    expect(headWord(['sprig', 'leaf'])).toBe('leaf');
+    expect(headWord(toWords('Leaves'))).toBe('leave');
+  });
+
+  it('NUT-8 container words stay name words (toWords keeps them)', () => {
+    expect(toWords('Garlic cloves')).toEqual(['garlic', 'clove']);
   });
 });

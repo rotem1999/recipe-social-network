@@ -9,6 +9,8 @@ export interface CardProps extends HTMLAttributes<HTMLDivElement> {
   interactive?: boolean;
   /** Removes the padding and the gap so a `.washed` image can sit flush at the top. */
   flush?: boolean;
+  /** UI-36: recipe cards and TheMealDB tiles render as `article`. */
+  as?: 'div' | 'article';
 }
 
 const ELEVATION_CLASS: Record<CardElevation, string> = {
@@ -23,12 +25,13 @@ export function Card({
   elevation = 'sm',
   interactive = false,
   flush = false,
+  as: Element = 'div',
   className,
   children,
   ...rest
 }: CardProps): ReactElement {
   return (
-    <div
+    <Element
       {...rest}
       className={cx(
         'card',
@@ -39,6 +42,6 @@ export function Card({
       )}
     >
       {children}
-    </div>
+    </Element>
   );
 }

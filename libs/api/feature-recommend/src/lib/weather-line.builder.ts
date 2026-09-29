@@ -4,14 +4,14 @@ import { greetingFor } from '@rsn/shared/util-domain';
 
 /**
  * WX-2/WX-10: the one-line weather sentence shown next to the greeting, for
- * example "9° and clear tonight in Tel Aviv". Pure: no I/O, no state.
+ * example "9 °C and clear tonight in Tel Aviv". Pure: no I/O, no state.
  */
 @Injectable()
 export class WeatherLineBuilder {
-  /** WX-10: the greeting line returned with every recommendation response. */
+  /** WX-10: the greeting line returned with every recommendation response; UI-37: with its unit. */
   line(snapshot: WeatherSnapshot): string {
     const degrees = Math.round(snapshot.temperatureC);
-    return `${degrees}° and ${snapshot.condition} ${timePhrase(snapshot)} in ${snapshot.city}`;
+    return `${degrees} °C and ${snapshot.condition} ${timePhrase(snapshot)} in ${snapshot.city}`;
   }
 }
 

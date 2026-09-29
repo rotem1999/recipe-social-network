@@ -1,6 +1,8 @@
 // SPEC.md UI-12 (the "Owner" row on the recipe detail screen), SAVE-7 (a saved
 // copy is removed with "Remove from my recipes") and SAVE-8 (a saved copy stays
-// private, so its row has no Visibility select and no Share…).
+// private, so its row has no Visibility select and no Share…); UI-28 (Shared
+// opens the Share dialog without writing, Public asks first, Private writes at
+// once).
 import {
   fireEvent,
   render,
@@ -17,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     deleteRecipe: vi.fn(),
     listFriends: vi.fn(),
     shareRecipe: vi.fn(),
+    getFriends: vi.fn(),
   },
 }));
 
@@ -51,6 +54,7 @@ const OWN: RecipeDetailDto = {
   ingredients: [{ quantity: 200, unit: 'g', name: 'flour' }],
   steps: [{ text: 'Fry the onion.', durationMinutes: 5 }],
   imageUrls: [],
+  externalImageUrl: null,
   canCook: true,
   canEdit: true,
   canRate: false,
@@ -79,13 +83,17 @@ const SAVED_COPY: RecipeDetailDto = {
 
 function show(
   recipe: RecipeDetailDto,
-  handlers: { onEdit?: (id: string) => void; onDeleted?: () => void } = {},
+  handlers: {
+    onEdit?: (id: string) => void;
+    onDeleted?: () => void;
+    onChanged?: (recipe: RecipeDetailDto) => void;
+  } = {},
 ) {
   return render(
     <OwnerActions
       recipe={recipe}
       onEdit={handlers.onEdit ?? vi.fn()}
-      onChanged={vi.fn()}
+      onChanged={handlers.onChanged ?? vi.fn()}
       onDeleted={handlers.onDeleted ?? vi.fn()}
     />,
   );
@@ -97,6 +105,14 @@ describe('OwnerActions', () => {
     mocks.api.deleteRecipe.mockReset().mockResolvedValue(undefined);
     mocks.api.listFriends.mockReset().mockResolvedValue({ friends: [] });
     mocks.api.shareRecipe.mockReset();
+    mocks.api.getFriends.mockReset().mockResolvedValue({
+      friends: [
+        { userId: 'u2', username: 'noa', since: '2026-09-10T08:00:00.000Z' },
+        { userId: 'u3', username: 'dan', since: '2026-09-12T08:00:00.000Z' },
+      ],
+      incoming: [],
+      outgoing: [],
+    });
   });
 
   it('UI-12 shows Edit, Visibility and Delete on a recipe the caller wrote', () => {
@@ -161,5 +177,119 @@ describe('OwnerActions', () => {
       expect(mocks.api.deleteRecipe).toHaveBeenCalledWith('copy-1'),
     );
     await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
+  });
+
+  it('UI-28 choosing "Shared with friends" opens the Share dialog without writing, and Cancel leaves the select', async () => {
+    show(OWN);
+    const select = screen.getByRole('combobox', {
+      name: 'Visibility',
+    }) as HTMLSelectElement;
+
+    fireEvent.change(select, { target: { value: 'shared' } });
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Share with friends')).toBeTruthy();
+    expect(mocks.api.setVisibility).not.toHaveBeenCalled();
+    expect(select.value).toBe('private');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mocks.api.setVisibility).not.toHaveBeenCalled();
+    expect(select.value).toBe('private');
+  });
+
+  it("UI-28 the Share dialog's Save sends shared with the ticked friends and adopts the answer", async () => {
+    const onChanged = vi.fn();
+    const shared: RecipeDetailDto = {
+      ...OWN,
+      visibility: 'shared',
+      sharedWithUserIds: ['u2'],
+    };
+    mocks.api.setVisibility.mockResolvedValue(shared);
+    show(OWN, { onChanged });
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Visibility' }), {
+      target: { value: 'shared' },
+    });
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(await within(dialog).findByLabelText('noa'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(mocks.api.setVisibility).toHaveBeenCalledWith('r1', {
+        visibility: 'shared',
+        sharedWithUserIds: ['u2'],
+      }),
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith(shared));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('UI-28 choosing "Public" asks "Publish to everyone?" and Cancel writes nothing', async () => {
+    show(OWN);
+    const select = screen.getByRole('combobox', {
+      name: 'Visibility',
+    }) as HTMLSelectElement;
+
+    fireEvent.change(select, { target: { value: 'public' } });
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Publish to everyone?')).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        'Every version of this recipe becomes visible to all users.',
+      ),
+    ).toBeTruthy();
+    expect(mocks.api.setVisibility).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mocks.api.setVisibility).not.toHaveBeenCalled();
+    expect(select.value).toBe('private');
+  });
+
+  it('UI-28 Publish writes public and adopts the recipe the API returned', async () => {
+    const onChanged = vi.fn();
+    const published: RecipeDetailDto = { ...OWN, visibility: 'public' };
+    mocks.api.setVisibility.mockResolvedValue(published);
+    show(OWN, { onChanged });
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Visibility' }), {
+      target: { value: 'public' },
+    });
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Publish',
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.api.setVisibility).toHaveBeenCalledWith('r1', {
+        visibility: 'public',
+      }),
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith(published));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('UI-28 choosing "Private" writes at once without a dialog', async () => {
+    const onChanged = vi.fn();
+    const privateRecipe: RecipeDetailDto = { ...OWN, visibility: 'private' };
+    mocks.api.setVisibility.mockResolvedValue(privateRecipe);
+    show({ ...OWN, visibility: 'public' }, { onChanged });
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Visibility' }), {
+      target: { value: 'private' },
+    });
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() =>
+      expect(mocks.api.setVisibility).toHaveBeenCalledWith('r1', {
+        visibility: 'private',
+      }),
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith(privateRecipe));
   });
 });

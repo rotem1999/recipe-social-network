@@ -5,7 +5,10 @@ export { RecipeCard } from './lib/recipe-card';
 export type { RecipeCardProps } from './lib/recipe-card';
 
 export { HomeScreen } from './lib/home-screen';
-export type { HomeScreenProps } from './lib/home-screen';
+export type {
+  HomeRecommendationContext,
+  HomeScreenProps,
+} from './lib/home-screen';
 
 export { RecipeDetailScreen } from './lib/recipe-detail-screen';
 export type { RecipeDetailScreenProps } from './lib/recipe-detail-screen';

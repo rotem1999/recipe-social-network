@@ -80,6 +80,7 @@ const COPY: RecipeDetailDto = {
   ingredients: PREVIEW.ingredients,
   steps: PREVIEW.steps,
   imageUrls: [],
+  externalImageUrl: PREVIEW.thumbnailUrl,
   canCook: true,
   canEdit: true,
   canRate: false,
@@ -181,5 +182,19 @@ describe('CataloguePreviewScreen', () => {
     expect(onCook).toHaveBeenCalledWith('copy-7');
     expect(mocks.api.saveCatalogue).not.toHaveBeenCalled();
     expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it('UI-41 gives the title, ingredient names and step text dir="auto"', async () => {
+    show({});
+
+    const title = await screen.findByRole('heading', {
+      level: 1,
+      name: 'Vegan Lasagna',
+    });
+    expect(title.getAttribute('dir')).toBe('auto');
+    expect(screen.getByText('lasagna sheets').getAttribute('dir')).toBe('auto');
+    expect(screen.getByText('Layer and bake.').getAttribute('dir')).toBe(
+      'auto',
+    );
   });
 });

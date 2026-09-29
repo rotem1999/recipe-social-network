@@ -5,6 +5,9 @@ export {
   ApiError,
   apiClient,
   DEFAULT_API_BASE_URL,
+  isConnectivityError,
+  NETWORK_ERROR_MESSAGE,
+  SERVER_ERROR_MESSAGE,
 } from './lib/client';
 export type { HttpMethod } from './lib/client';
 

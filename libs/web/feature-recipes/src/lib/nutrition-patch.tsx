@@ -1,9 +1,13 @@
-// SPEC.md NUT-1..6 and UI-15, design guide §5: the nutrition patch under the
-// ingredients. Ingredient mode is the default (NUT-4); a miss reads
-// "nutrition data unavailable" (NUT-5), per ingredient and for the total.
+// SPEC.md NUT-1..6, NUT-11 and UI-15, design guide §5: the nutrition patch under
+// the ingredients. The headline is the NUT-11 range between both estimates; the
+// mode switch (ingredient mode by default, NUT-4) picks the breakdown below it.
+// A miss reads "nutrition data unavailable" (NUT-5).
 import { useState } from 'react';
 import type { ReactElement } from 'react';
-import type { NutritionMode } from '@rsn/shared/util-contracts';
+import type {
+  NutritionEstimateDto,
+  NutritionMode,
+} from '@rsn/shared/util-contracts';
 import { useApi, useRequest } from '@rsn/web/data-access-api';
 import { InlineError, Segmented } from '@rsn/web/ui';
 
@@ -24,6 +28,25 @@ function formatKcal(kcal: number | null): string {
   return kcal === null ? UNAVAILABLE : String(Math.round(kcal));
 }
 
+/**
+ * NUT-11: "about N–M kcal per portion", "about N kcal per portion" when both ends
+ * are equal (the API rounds them to 10 kcal), "at least N kcal per portion" when
+ * only a partial ingredients value exists, and NUT-5's phrase when there is none.
+ */
+function headline(estimate: NutritionEstimateDto | null): string {
+  if (estimate === null) {
+    return UNAVAILABLE;
+  }
+  const low = Math.round(estimate.lowKcalPerPortion);
+  const high = Math.round(estimate.highKcalPerPortion);
+  if (estimate.atLeast) {
+    return `at least ${low} kcal per portion`;
+  }
+  return low === high
+    ? `about ${low} kcal per portion`
+    : `about ${low}–${high} kcal per portion`;
+}
+
 /** NUT-3/NUT-4: the switchable calorie box the guide draws in neutral-100. */
 export function NutritionPatch({
   recipeId,
@@ -34,36 +57,34 @@ export function NutritionPatch({
     () => api.getNutrition(recipeId, mode),
     [recipeId, mode],
   );
+  // NUT-11: the estimate; an API from before NUT-11 sends none, read as null.
+  const estimate: NutritionEstimateDto | null = data?.estimate ?? null;
+  // NUT-11: the ingredients the ingredients-mode pass left out, in either mode.
+  const notCounted =
+    loading || estimate === null
+      ? []
+      : (estimate.notCounted ?? []).filter((name) => name.trim() !== '');
 
   return (
-    <div
-      style={{
-        marginTop: 'var(--space-6)',
-        padding: 'var(--space-4) var(--space-4)',
-        borderRadius: 'var(--radius-lg)',
-        background: 'var(--color-neutral-100)',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 'var(--space-2)',
-          flexWrap: 'wrap',
-        }}
-      >
+    <div className="nutrition-patch">
+      <div className="row between wrap">
         <div>
-          <div style={{ fontSize: '20px', fontFamily: 'var(--font-heading)' }}>
+          {/* NUT-11: the headline range, whichever mode is shown below. */}
+          <div className="nutrition-headline">
             {loading
               ? '…'
               : data === null
                 ? UNAVAILABLE
-                : formatKcal(data.kcalPerPortion)}
+                : headline(estimate)}
           </div>
-          <div className="text-muted" style={{ fontSize: '11px' }}>
-            kcal per portion · USDA FoodData Central
+          <div className="text-muted text-caption">
+            Estimate from USDA FoodData Central
           </div>
+          {notCounted.length === 0 ? null : (
+            <div className="text-muted text-caption">
+              Not counted: {notCounted.join(', ')}
+            </div>
+          )}
         </div>
         <Segmented
           options={MODES}
@@ -78,27 +99,14 @@ export function NutritionPatch({
 
       {/* NUT-6 ingredients mode: one row per ingredient, unmatched ones named. */}
       {data !== null && data.mode === 'ingredients' ? (
-        <ul
-          style={{
-            listStyle: 'none',
-            margin: 'var(--space-3) 0 0',
-            padding: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 'var(--space-1)',
-          }}
-        >
+        <ul className="list-reset stack gap-1 mt-3">
           {data.ingredients.map((ingredient, index) => (
             <li
               key={`${index}-${ingredient.name}`}
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                gap: 'var(--space-2)',
-                fontSize: '12px',
-              }}
+              className="nutrition-row"
             >
-              <span>{ingredient.name}</span>
+              {/* UI-41: ingredient names are user text. */}
+              <span dir="auto">{ingredient.name}</span>
               <span
                 className={ingredient.kcal === null ? 'text-muted' : undefined}
               >
@@ -113,22 +121,10 @@ export function NutritionPatch({
 
       {/* NUT-6 meal mode: the FNDDS description the total was taken from. */}
       {data !== null && data.mode === 'meal' ? (
-        <p
-          className="text-muted"
-          style={{ fontSize: '11px', margin: 'var(--space-2) 0 0' }}
-        >
+        <p className="text-muted text-caption m-0 mt-2">
           {data.matchedDescription === null
             ? `No FoodData Central match for this meal name — ${UNAVAILABLE}.`
             : `Matched "${data.matchedDescription}" in FoodData Central.`}
-        </p>
-      ) : null}
-
-      {data !== null && data.mode === 'ingredients' && data.partial ? (
-        <p
-          className="text-muted"
-          style={{ fontSize: '11px', margin: 'var(--space-2) 0 0' }}
-        >
-          Some ingredients could not be matched, so the total is partial.
         </p>
       ) : null}
     </div>

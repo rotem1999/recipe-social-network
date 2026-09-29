@@ -10,7 +10,11 @@ import {
 import type { ImageStorageService } from '@rsn/api/data-access-images';
 import type { MealRecord, TheMealDbService } from '@rsn/api/data-access-themealdb';
 import type { FriendsService } from '@rsn/api/feature-friends';
-import { MAX_IMAGES_PER_RECIPE } from '@rsn/shared/util-domain';
+import {
+  MAX_IMAGES_PER_RECIPE,
+  MAX_INGREDIENTS,
+  MAX_STEPS,
+} from '@rsn/shared/util-domain';
 import type {
   Category,
   RecipeContent,
@@ -46,6 +50,20 @@ jest.mock('@nestjs/config', () => ({
   ConfigService: class ConfigService {},
   ConfigModule: { forRoot: () => ({}), forFeature: () => ({}) },
 }));
+/**
+ * The real CAT-6 mapper, wrapped so one test can hand `saveCatalogue` a mapped meal
+ * with more ingredients than TheMealDB's 20 slots allow (§3.1.1 upper limits).
+ */
+jest.mock('@rsn/api/data-access-themealdb', () => {
+  const actual = jest.requireActual('@rsn/api/data-access-themealdb');
+  return {
+    ...actual,
+    toRecipeContent: jest.fn(actual.toRecipeContent),
+  };
+});
+const mapperMocks = jest.requireMock('@rsn/api/data-access-themealdb') as {
+  toRecipeContent: jest.Mock;
+};
 
 
 const ME = 'user-me';
@@ -548,9 +566,27 @@ describe('RecipesService', () => {
       );
 
       expect(error).toBeInstanceOf(BadRequestException);
-      expect(error.message).toBe(
-        'A recipe can only be shared with friends: stranger-1',
+      expect(error.message).toBe('You can only share with friends');
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('§11.6, FR-1 does not name the ids that are not friends in the 400', async () => {
+      const { service, recipes, friends, dataSource } = harness();
+      recipes.findOne.mockResolvedValue(
+        recipeRow({ ownerId: ME, currentVersion: versionRow() }),
       );
+      friends.friendIdsOf.mockResolvedValue([]);
+
+      const error = await failureOf<BadRequestException>(
+        service.setVisibility(ME, 'recipe-1', 'shared', [
+          'stranger-1',
+          'stranger-2',
+        ]),
+      );
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect(error.message).toBe('You can only share with friends');
+      expect(JSON.stringify(error.getResponse())).not.toContain('stranger-');
       expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
@@ -999,6 +1035,78 @@ describe('RecipesService', () => {
           savedFromRecipeId: null,
         }),
       );
+    });
+
+    /** The version row `saveCatalogue` created (the second `manager.create`). */
+    function savedVersion(manager: Harness['manager']): RecipeContent {
+      const [, data] = manager.create.mock.calls[1] as [unknown, RecipeContent];
+      return data;
+    }
+
+    function savedCopyRow(): RecipeEntity {
+      return recipeRow({
+        id: 'generated-1',
+        ownerId: ME,
+        source: 'themealdb',
+        currentVersion: versionRow(),
+      });
+    }
+
+    it('§3.1.1 keeps the first 60 steps of a meal whose instructions split into more', async () => {
+      const { service, recipes, theMealDb, manager } = harness();
+      const lines = Array.from(
+        { length: 70 },
+        (_, index) => `Instruction number ${index + 1}.`,
+      );
+      theMealDb.lookup.mockResolvedValue(
+        meal({ strInstructions: lines.join('\r\n') }),
+      );
+      recipes.findOne.mockResolvedValueOnce(null).mockResolvedValue(savedCopyRow());
+
+      await service.saveCatalogue(ME, '52772');
+
+      const version = savedVersion(manager);
+      expect(version.steps).toHaveLength(MAX_STEPS);
+      expect(MAX_STEPS).toBe(60);
+      expect(version.steps.map((step) => step.text)).toEqual(lines.slice(0, 60));
+    });
+
+    it('§3.1.1 keeps the first 50 ingredients when the mapped meal has more', async () => {
+      const { service, recipes, theMealDb, manager } = harness();
+      theMealDb.lookup.mockResolvedValue(meal());
+      const ingredients = Array.from({ length: 55 }, (_, index) => ({
+        quantity: 1,
+        unit: 'piece' as const,
+        name: `ingredient ${index + 1}`,
+      }));
+      mapperMocks.toRecipeContent.mockReturnValueOnce(
+        content({ ingredients, steps: [{ text: 'Mix.' }] }),
+      );
+      recipes.findOne.mockResolvedValueOnce(null).mockResolvedValue(savedCopyRow());
+
+      await service.saveCatalogue(ME, '52772');
+
+      const version = savedVersion(manager);
+      expect(version.ingredients).toHaveLength(MAX_INGREDIENTS);
+      expect(MAX_INGREDIENTS).toBe(50);
+      expect(version.ingredients).toEqual(ingredients.slice(0, 50));
+    });
+
+    it('§3.1.1 keeps a meal within the limits whole', async () => {
+      const { service, recipes, theMealDb, manager } = harness();
+      theMealDb.lookup.mockResolvedValue(meal());
+      recipes.findOne.mockResolvedValueOnce(null).mockResolvedValue(savedCopyRow());
+
+      await service.saveCatalogue(ME, '52772');
+
+      const version = savedVersion(manager);
+      expect(version.steps.map((step) => step.text)).toEqual([
+        'Preheat oven to 175C.',
+        'Mix the sauce.',
+      ]);
+      expect(version.ingredients).toEqual([
+        { name: 'soy sauce', quantity: 0.75, unit: 'cup' },
+      ]);
     });
 
     it('CAT-3 answers 404 when TheMealDB knows no such meal', async () => {

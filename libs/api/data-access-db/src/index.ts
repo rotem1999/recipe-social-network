@@ -9,3 +9,7 @@ export {
 export { InitialSchema1759000000000 } from './migrations/1759000000000-InitialSchema';
 export { SaveOwnership1759100000000 } from './migrations/1759100000000-SaveOwnership';
 export { DbModule } from './lib/data-access-db.module';
+export {
+  MigrationCheckService,
+  SCHEMA_OUT_OF_DATE_MESSAGE,
+} from './lib/migration-check.service';

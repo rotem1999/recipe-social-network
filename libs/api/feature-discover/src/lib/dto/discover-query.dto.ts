@@ -9,7 +9,7 @@ export class DiscoverQueryDto {
   @IsIn(CATEGORIES)
   category?: Category;
 
-  /** DISC-9: 1-based page of the public recipes of one category. */
+  /** DISC-9: 1-based page of the public recipes and catalogue entries of one category. */
   @IsOptional()
   @Type(() => Number)
   @IsInt()

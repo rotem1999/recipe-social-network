@@ -17,7 +17,7 @@ import type {
   SignUpRequest,
   UserDto,
 } from '@rsn/shared/util-contracts';
-import { ApiError } from './client';
+import { ApiError, isConnectivityError } from './client';
 import { endpoints } from './endpoints';
 import type { Endpoints } from './endpoints';
 import { tokenStore } from './tokens';
@@ -84,8 +84,12 @@ export function useRequest<T>(
   return { data, error, loading, reload, setData };
 }
 
-/** 'loading' until `GET /me` settles; then signed-in or signed-out (UI-9). */
-export type AuthStatus = 'loading' | 'signed-out' | 'signed-in';
+/**
+ * 'loading' until `GET /me` settles; then signed-in or signed-out (UI-9), or
+ * 'unreachable' when that start-up `GET /me` failed with status 0 or a 5xx and
+ * the stored tokens were kept (UI-26).
+ */
+export type AuthStatus = 'loading' | 'signed-out' | 'signed-in' | 'unreachable';
 
 /** What {@link useAuth} exposes to the sign-in screen and the avatar menu (UI-9). */
 export interface AuthContextValue {
@@ -95,6 +99,8 @@ export interface AuthContextValue {
   signUp: (body: SignUpRequest) => Promise<UserDto>;
   signOut: () => void;
   refreshUser: () => Promise<UserDto | null>;
+  /** UI-26: repeats the start-up `GET /me` from the 'unreachable' state, keeping the tokens. */
+  retry: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -106,12 +112,30 @@ export interface AuthProviderProps {
 
 /**
  * Holds the signed-in user. On mount it calls `GET /me` when a token is stored
- * (AUTH-8); a rejected token is discarded and the app shows the auth screen (UI-9).
+ * (AUTH-8); a rejected token is discarded by the client and the app shows the
+ * auth screen (UI-9). UI-26: a start-up failure with status 0 or a 5xx keeps
+ * the tokens and reports 'unreachable' until {@link AuthContextValue.retry}
+ * succeeds, and whenever the tokens are cleared the status becomes signed-out.
  */
 export function AuthProvider({ children }: AuthProviderProps): ReactElement {
   const [user, setUser] = useState<UserDto | null>(null);
   const [status, setStatus] = useState<AuthStatus>(() =>
     tokenStore.hasAccessToken() ? 'loading' : 'signed-out',
+  );
+  // UI-26: bumped by retry() to run the start-up `GET /me` again.
+  const [attempt, setAttempt] = useState(0);
+
+  // UI-9 / UI-26: the client clears the pair when a refresh is rejected or a
+  // request still answers 401 after it; the sign-in screen then shows at once.
+  useEffect(
+    () =>
+      tokenStore.subscribe((tokens) => {
+        if (tokens.accessToken === null) {
+          setUser(null);
+          setStatus('signed-out');
+        }
+      }),
+    [],
   );
 
   const refreshUser = useCallback(async (): Promise<UserDto | null> => {
@@ -126,10 +150,9 @@ export function AuthProvider({ children }: AuthProviderProps): ReactElement {
       setStatus('signed-in');
       return current;
     } catch {
-      // AUTH-7: the client already tried the refresh token and cleared the pair.
-      tokenStore.clear();
-      setUser(null);
-      setStatus('signed-out');
+      // UI-26: a 401 has already cleared the pair in the client, and the
+      // subscription above signed out; any other failure (status 0, 5xx)
+      // leaves the session as it is.
       return null;
     }
   }, []);
@@ -140,6 +163,7 @@ export function AuthProvider({ children }: AuthProviderProps): ReactElement {
       setStatus('signed-out');
       return;
     }
+    setStatus('loading');
     endpoints.me().then(
       (current) => {
         if (!cancelled) {
@@ -147,17 +171,23 @@ export function AuthProvider({ children }: AuthProviderProps): ReactElement {
           setStatus('signed-in');
         }
       },
-      () => {
+      (cause: unknown) => {
         if (!cancelled) {
-          tokenStore.clear();
           setUser(null);
-          setStatus('signed-out');
+          // UI-26: the tokens are cleared only by the client (a rejected
+          // refresh or a second 401). Status 0 or a 5xx keeps them and offers
+          // Retry; any other failure shows the sign-in screen.
+          setStatus(isConnectivityError(cause) ? 'unreachable' : 'signed-out');
         }
       },
     );
     return () => {
       cancelled = true;
     };
+  }, [attempt]);
+
+  const retry = useCallback((): void => {
+    setAttempt((value) => value + 1);
   }, []);
 
   /** Stores the pair of AUTH-7 and adopts the user the API returned. */
@@ -188,8 +218,8 @@ export function AuthProvider({ children }: AuthProviderProps): ReactElement {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ user, status, signIn, signUp, signOut, refreshUser }),
-    [user, status, signIn, signUp, signOut, refreshUser],
+    () => ({ user, status, signIn, signUp, signOut, refreshUser, retry }),
+    [user, status, signIn, signUp, signOut, refreshUser, retry],
   );
 
   return createElement(AuthContext.Provider, { value }, children);

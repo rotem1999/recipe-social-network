@@ -3,7 +3,9 @@
 // recipes), COM-1 (no comment section without one), UI-12 (the owner row),
 // SAVE-9 (the one attribution line of a copy), SAVE-10 (the update banner and
 // Sync) and DISC-10 (In your recipes + Start cooking on a recipe the caller has
-// a copy of).
+// a copy of); UI-19 (shared tag and owner byline), UI-20 (catalogue photo),
+// UI-24 (comment divider on shared recipes), UI-25 (upload notice), UI-29 (fork
+// Sync confirmation), UI-38 (inline SAVE-9 link) and UI-41 (dir="auto").
 import {
   fireEvent,
   render,
@@ -16,6 +18,7 @@ import type {
   RecipeDetailDto,
 } from '@rsn/shared/util-contracts';
 import { RecipeDetailScreen } from './recipe-detail-screen';
+import { clearUploadNotice, setUploadNotice } from './upload-notice';
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -71,6 +74,12 @@ const NUTRITION: NutritionResponse = {
   ],
   matchedDescription: null,
   source: 'USDA FoodData Central',
+  estimate: {
+    lowKcalPerPortion: 410,
+    highKcalPerPortion: 410,
+    atLeast: false,
+    notCounted: [],
+  },
 };
 
 const OWN: RecipeDetailDto = {
@@ -94,6 +103,7 @@ const OWN: RecipeDetailDto = {
   ingredients: [{ quantity: 200, unit: 'g', name: 'flour' }],
   steps: [{ text: 'Fry the onion.', durationMinutes: 5 }],
   imageUrls: [],
+  externalImageUrl: null,
   canCook: true,
   canEdit: true,
   canRate: false,
@@ -163,6 +173,22 @@ const MEAL_COPY: RecipeDetailDto = {
     source: 'themealdb',
   },
   attribution: 'Recipe data and imagery: TheMealDB',
+};
+
+/** REC-8: Noa's recipe shared with the caller: cookable, comments without votes. */
+const SHARED_WITH_ME: RecipeDetailDto = {
+  ...OWN,
+  id: 'r5',
+  title: 'Sabich',
+  ownerUsername: 'noa',
+  visibility: 'shared',
+  relation: 'shared',
+  canCook: true,
+  canEdit: false,
+  canRate: false,
+  hasComments: true,
+  hasVotes: false,
+  sharedWithUserIds: ['u1'],
 };
 
 const BANNER_TEXT = 'The original has changed since you saved it';
@@ -550,5 +576,200 @@ describe('RecipeDetailScreen', () => {
     await screen.findByText('In your recipes');
     expect(screen.queryByText(BANNER_TEXT)).toBeNull();
     expect(screen.queryByText('Update available')).toBeNull();
+  });
+
+  it('UI-19 tags a recipe shared with the caller "Shared with you by <owner>" and shows "by <owner>" under the title', async () => {
+    show({ ...SHARED_WITH_ME, sharedWithUserIds: ['u1', 'u3'] });
+
+    expect(await screen.findByText('Shared with you by noa')).toBeTruthy();
+    expect(screen.queryByText(/Shared with \d+ friends?/)).toBeNull();
+    const byline = screen.getByText('by noa');
+    expect(byline.tagName).toBe('P');
+    // UI-19: the same muted line style as the SAVE-9 attribution.
+    expect(byline.classList.contains('byline')).toBe(true);
+  });
+
+  it("UI-19 shows the owner's friend count on the owner's own shared recipe and no byline", async () => {
+    show({ ...OWN, visibility: 'shared', sharedWithUserIds: ['u2', 'u3'] });
+
+    expect(await screen.findByText('Shared with 2 friends')).toBeTruthy();
+    expect(screen.queryByText(/Shared with you by/)).toBeNull();
+    expect(screen.queryByText('by rotem')).toBeNull();
+  });
+
+  it('UI-19 shows "by <owner>" on a public preview and not on a saved copy', async () => {
+    const { unmount } = show(PUBLIC_UNSAVED);
+
+    expect(await screen.findByText('by noa')).toBeTruthy();
+    unmount();
+
+    show(SAVED_COPY);
+    await screen.findByText(attributionLine('Saved from Lentil soup by noa'));
+    expect(screen.queryByText('by noa')).toBeNull();
+  });
+
+  it('UI-20 shows the externalImageUrl of a TheMealDB copy with no uploaded image as its photo', async () => {
+    const external = 'https://images.example.test/meals/lasagna.jpg';
+    const { container } = show({ ...MEAL_COPY, externalImageUrl: external });
+
+    await screen.findByText('Saved from Vegan Lasagna on TheMealDB');
+    const photos = container.querySelectorAll('.photo-row img');
+    expect(photos).toHaveLength(1);
+    expect(photos[0].getAttribute('src')).toBe(external);
+    // IMG-4: a failing catalogue photo is not a signed URL, so nothing is refetched.
+    fireEvent.error(photos[0]);
+    expect(mocks.api.getRecipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('UI-20 prefers the uploaded images over the catalogue photo', async () => {
+    const uploaded = 'https://storage.example.test/bucket/recipes/copy-7/a1.jpg';
+    const { container } = show({
+      ...MEAL_COPY,
+      imageUrls: [uploaded],
+      externalImageUrl: 'https://images.example.test/meals/lasagna.jpg',
+    });
+
+    await screen.findByText('Saved from Vegan Lasagna on TheMealDB');
+    const photos = container.querySelectorAll('.photo-row img');
+    expect(photos).toHaveLength(1);
+    expect(photos[0].getAttribute('src')).toBe(uploaded);
+  });
+
+  it('UI-20 shows no photo row when there is neither an uploaded image nor a catalogue photo', async () => {
+    const { container } = show(OWN);
+
+    await screen.findByText('Shakshuka');
+    expect(container.querySelector('.photo-row')).toBeNull();
+  });
+
+  it('UI-24 opens the comment section of a shared recipe after the same divider as on a public recipe', async () => {
+    show(SHARED_WITH_ME);
+
+    const comments = await screen.findByRole('region', { name: 'Comments' });
+    expect(
+      comments.previousElementSibling?.classList.contains('hr-section'),
+    ).toBe(true);
+    expect(
+      screen.queryByRole('radiogroup', { name: 'Your rating' }),
+    ).toBeNull();
+  });
+
+  it('UI-24 draws one divider on a public recipe, above the rating block', async () => {
+    const { container } = show(PUBLIC_UNSAVED);
+
+    await screen.findByRole('region', { name: 'Comments' });
+    const steps = screen.getByRole('region', { name: 'Steps' });
+    expect(steps.querySelectorAll('.hr-section')).toHaveLength(1);
+    expect(container.querySelectorAll('.hr-section')).toHaveLength(1);
+  });
+
+  it('UI-25 shows the upload notice the editor left for this recipe, once', async () => {
+    const text =
+      'The recipe was saved, but 1 image(s) could not be uploaded: Images must be 5 MB or smaller.';
+    setUploadNotice('r1', text);
+    try {
+      const { unmount } = show(OWN);
+
+      expect(await screen.findByText(text)).toBeTruthy();
+      unmount();
+
+      show(OWN);
+      await screen.findByText('Shakshuka');
+      expect(screen.queryByText(text)).toBeNull();
+    } finally {
+      clearUploadNotice('r1');
+    }
+  });
+
+  it('UI-29 asks before a fork syncs, and Cancel leaves the fork as it is', async () => {
+    mocks.api.syncRecipe.mockResolvedValue({
+      ...FORK,
+      updateAvailable: false,
+      steps: [{ text: 'Simmer for an hour.' }],
+    });
+    show({ ...FORK, updateAvailable: true });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Sync/ }));
+
+    let dialog = screen.getByRole('dialog');
+    expect(
+      within(dialog).getByText(
+        "Replace your version with the original's latest?",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByText('Your changes stay in the version history.'),
+    ).toBeTruthy();
+    expect(mocks.api.syncRecipe).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mocks.api.syncRecipe).not.toHaveBeenCalled();
+    expect(screen.getByText(BANNER_TEXT)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Sync/ }));
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /Sync/ }));
+
+    await waitFor(() =>
+      expect(mocks.api.syncRecipe).toHaveBeenCalledWith('copy-1'),
+    );
+    expect(await screen.findByText('Simmer for an hour.')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('UI-29 syncs a saved copy at once, without a confirmation', async () => {
+    mocks.api.syncRecipe.mockResolvedValue({
+      ...SAVED_COPY,
+      updateAvailable: false,
+    });
+    show({ ...SAVED_COPY, updateAvailable: true });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Sync/ }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() =>
+      expect(mocks.api.syncRecipe).toHaveBeenCalledWith('copy-1'),
+    );
+  });
+
+  it('UI-38 renders the SAVE-9 source link as an inline text link inside the attribution line', async () => {
+    show(SAVED_COPY);
+
+    const link = await screen.findByRole('button', {
+      name: 'Lentil soup by noa',
+    });
+    expect(link.classList.contains('link-button')).toBe(true);
+    expect(link.classList.contains('btn')).toBe(false);
+    expect(link.parentElement?.tagName).toBe('P');
+    expect(link.parentElement?.classList.contains('byline')).toBe(true);
+  });
+
+  it('UI-41 gives the title, description, ingredient names and step text dir="auto"', async () => {
+    show({
+      ...OWN,
+      ingredients: [
+        { quantity: 200, unit: 'g', name: 'flour', note: 'sifted' },
+      ],
+    });
+
+    const title = await screen.findByRole('heading', {
+      level: 1,
+      name: 'Shakshuka',
+    });
+    expect(title.getAttribute('dir')).toBe('auto');
+    expect(
+      screen.getByText('Eggs poached in tomato.').getAttribute('dir'),
+    ).toBe('auto');
+    expect(
+      screen.getByText('Fry the onion.').closest('[dir]')?.getAttribute('dir'),
+    ).toBe('auto');
+    const ingredients = screen.getByRole('region', { name: 'Ingredients' });
+    expect(
+      within(ingredients).getAllByText('flour')[0].getAttribute('dir'),
+    ).toBe('auto');
+    expect(within(ingredients).getByText('sifted').getAttribute('dir')).toBe(
+      'auto',
+    );
   });
 });

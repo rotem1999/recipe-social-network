@@ -102,7 +102,10 @@ export class WeatherService {
 
   /**
    * WX-9: forward geocoding, city name → coordinates. Null when Open-Meteo
-   * returns no hit. Cached per city for 30 minutes (WX-10).
+   * returns no hit, or a hit whose `name` is not the city itself (compared
+   * case-insensitively, underscores as spaces), so a fuzzy match such as
+   * "UTC" → Utrecht never becomes weather context (BUG-017). Cached per city
+   * for 30 minutes (WX-10).
    */
   async geocode(city: string): Promise<GeoLocation | null> {
     const key = city.toLowerCase();
@@ -116,13 +119,24 @@ export class WeatherService {
 
     const body = await this.getJson<GeocodingResponse>(url);
     const hit = body?.results?.[0];
+    const matches =
+      hit !== undefined &&
+      typeof hit.name === 'string' &&
+      sameCityName(hit.name, city);
+    if (hit !== undefined && !matches) {
+      this.logger.warn(
+        `Open-Meteo geocoded "${city}" to "${String(hit.name)}"; no weather context`,
+      );
+    }
     const location: GeoLocation | null =
       hit === undefined ||
+      !matches ||
+      typeof hit.name !== 'string' ||
       typeof hit.latitude !== 'number' ||
       typeof hit.longitude !== 'number'
         ? null
         : {
-            name: hit.name ?? city,
+            name: hit.name,
             latitude: hit.latitude,
             longitude: hit.longitude,
             country: hit.country ?? '',
@@ -230,6 +244,13 @@ function localHourIn(timezone: string): number {
   }).format(new Date());
   // Some ICU versions render midnight as "24" under hour12:false.
   return Number(hour) % 24;
+}
+
+/** WX-9: a geocoding hit names the city segment itself, ignoring case and underscores. */
+function sameCityName(hitName: string, city: string): boolean {
+  const normalise = (value: string): string =>
+    value.replace(/_/g, ' ').trim().toLowerCase();
+  return normalise(hitName) === normalise(city);
 }
 
 function readCache<T>(

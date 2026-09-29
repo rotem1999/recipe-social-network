@@ -3,7 +3,7 @@
 // no token store is touched (libs/web/CLAUDE.md).
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { UserDto } from '@rsn/shared/util-contracts';
-import { ApiError } from '@rsn/web/data-access-api';
+import { ApiError, NETWORK_ERROR_MESSAGE } from '@rsn/web/data-access-api';
 import { AuthScreen } from './auth-screen';
 
 const mocks = vi.hoisted(() => ({
@@ -94,6 +94,18 @@ describe('AuthScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
     const alert = await screen.findByText('Wrong username or password');
+    expect(alert.getAttribute('role')).toBe('alert');
+  });
+
+  it("UI-26 shows the client's status-0 message inline when the server cannot be reached", async () => {
+    mocks.signIn.mockRejectedValue(new ApiError(0, NETWORK_ERROR_MESSAGE));
+    render(<AuthScreen />);
+
+    type('Username', 'rotem');
+    type('Password', 'correct-horse');
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    const alert = await screen.findByText("Can't reach CookBook's server.");
     expect(alert.getAttribute('role')).toBe('alert');
   });
 });

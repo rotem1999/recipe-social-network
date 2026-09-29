@@ -1,8 +1,20 @@
 // SPEC.md §3.1.1: the editor validates the recipe content before it is sent, and
 // a valid create posts the RecipeWriteRequest shape (§11.6) before onSaved runs.
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+// UI-31 (per-field messages, the §3.1.1 upper limits, empty category, "Qty",
+// Move up / Move down, Add hidden at the limits), UI-25 (every picked image is
+// attempted after create; the notice), UI-40 (dirty reporting and the photo
+// removal confirmations), UI-20 (no removal of a catalogue photo) and UI-41.
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import type { RecipeDetailDto } from '@rsn/shared/util-contracts';
+import { ApiError } from '@rsn/web/data-access-api';
 import { RecipeEditorScreen } from './recipe-editor-screen';
+import { clearUploadNotice, peekUploadNotice } from './upload-notice';
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -56,6 +68,7 @@ const CREATED: RecipeDetailDto = {
   ingredients: [{ quantity: 3, unit: 'none', name: 'eggs' }],
   steps: [{ text: 'Fry the onion.' }],
   imageUrls: [],
+  externalImageUrl: null,
   canCook: true,
   canEdit: true,
   canRate: false,
@@ -70,6 +83,71 @@ const CREATED: RecipeDetailDto = {
 
 function set(label: string, value: string): void {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
+}
+
+/** UI-31: the message the control points at through `aria-describedby`. */
+function messageFor(label: string): string | null {
+  const control = screen.getByLabelText(label);
+  const id = control.getAttribute('aria-describedby');
+  if (id === null) {
+    return null;
+  }
+  return document.getElementById(id)?.textContent ?? null;
+}
+
+/** A form that passes every UI-31 check. */
+function fillValid(): void {
+  set('Title', 'Shakshuka');
+  set('Category', 'Beef');
+  set('Servings', '2');
+  set('Quantity 1', '3');
+  set('Ingredient 1', 'eggs');
+  set('Step 1', 'Fry the onion.');
+}
+
+function create(): void {
+  fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+}
+
+function png(name: string): File {
+  return new File(['png'], name, { type: 'image/png' });
+}
+
+function pick(file: File): void {
+  fireEvent.change(screen.getByLabelText('Add image'), {
+    target: { files: [file] },
+  });
+}
+
+/** IMG-6 object paths: `recipes/<recipeId>/<uuid>.<ext>` inside the bucket. */
+const OWN_IMAGE = 'https://storage.example.test/bucket/recipes/r1/a1.jpg?sig=1';
+const SOURCE_IMAGE =
+  'https://storage.example.test/bucket/recipes/r0/b2.jpg?sig=2';
+
+const EXISTING: RecipeDetailDto = {
+  ...CREATED,
+  versionNumber: 2,
+  versionCount: 2,
+  ingredients: [
+    { quantity: 3, unit: 'none', name: 'eggs' },
+    { quantity: 200, unit: 'g', name: 'tomatoes', note: 'chopped' },
+  ],
+  steps: [{ text: 'Fry the onion.' }, { text: 'Crack the eggs.' }],
+};
+
+function openEditor(
+  recipe: RecipeDetailDto,
+  handlers: { onDirtyChange?: (dirty: boolean) => void } = {},
+) {
+  mocks.api.getRecipe.mockResolvedValue(recipe);
+  return render(
+    <RecipeEditorScreen
+      recipeId={recipe.id}
+      onSaved={vi.fn()}
+      onCancel={vi.fn()}
+      onDirtyChange={handlers.onDirtyChange}
+    />,
+  );
 }
 
 describe('RecipeEditorScreen', () => {
@@ -88,9 +166,9 @@ describe('RecipeEditorScreen', () => {
     set('Step 1', 'Fry the onion.');
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
-    expect(
-      await screen.findByText('ingredient 1: name is required'),
-    ).toBeTruthy();
+    // UI-31: the message sits under the ingredient's own name field.
+    expect(await screen.findByText('Name this ingredient')).toBeTruthy();
+    expect(messageFor('Ingredient 1')).toBe('Name this ingredient');
     expect(mocks.api.createRecipe).not.toHaveBeenCalled();
   });
 
@@ -99,6 +177,8 @@ describe('RecipeEditorScreen', () => {
     render(<RecipeEditorScreen onSaved={onSaved} onCancel={vi.fn()} />);
 
     set('Title', 'Shakshuka');
+    // UI-31: a new recipe has no default category, so one is chosen.
+    set('Category', 'Beef');
     set('Servings', '2');
     set('Quantity 1', '3');
     set('Ingredient 1', 'eggs');
@@ -119,5 +199,609 @@ describe('RecipeEditorScreen', () => {
       cookMinutes: undefined,
     });
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(CREATED));
+  });
+
+  it('UI-31 starts the category empty with the placeholder "Choose a category"', () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+
+    const category = screen.getByLabelText('Category') as HTMLSelectElement;
+    expect(category.value).toBe('');
+    expect(category.selectedOptions[0].textContent).toBe('Choose a category');
+  });
+
+  it('UI-31 gives quantity inputs the placeholder "Qty"', () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+
+    expect(
+      screen.getByLabelText('Quantity 1').getAttribute('placeholder'),
+    ).toBe('Qty');
+  });
+
+  it('UI-31 shows each required-field message under its own field, marks it aria-invalid and focuses the first', async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    try {
+      render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+
+      create();
+
+      await screen.findByText('Give the recipe a title');
+      expect(messageFor('Title')).toBe('Give the recipe a title');
+      expect(messageFor('Category')).toBe('Choose a category');
+      expect(messageFor('Ingredient 1')).toBe('Name this ingredient');
+      expect(messageFor('Step 1')).toBe('Write this step');
+      for (const label of ['Title', 'Category', 'Ingredient 1', 'Step 1']) {
+        expect(screen.getByLabelText(label).getAttribute('aria-invalid')).toBe(
+          'true',
+        );
+      }
+      // Valid fields carry no mark.
+      expect(screen.getByLabelText('Servings').getAttribute('aria-invalid')).toBe(
+        null,
+      );
+      const title = screen.getByLabelText('Title');
+      expect(document.activeElement).toBe(title);
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.instances[0]).toBe(title);
+      expect(mocks.api.createRecipe).not.toHaveBeenCalled();
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown })
+        .scrollIntoView;
+    }
+  });
+
+  it('UI-31 focuses the first invalid field in screen order', async () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+    set('Title', 'Shakshuka');
+    set('Ingredient 1', 'eggs');
+
+    create();
+
+    await screen.findByText('Write this step');
+    expect(messageFor('Category')).toBe('Choose a category');
+    expect(document.activeElement).toBe(screen.getByLabelText('Category'));
+  });
+
+  it('UI-31 drops a message and its aria-invalid once the field is edited', async () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+
+    create();
+    await screen.findByText('Give the recipe a title');
+    set('Title', 'Shakshuka');
+
+    expect(screen.queryByText('Give the recipe a title')).toBeNull();
+    expect(screen.getByLabelText('Title').getAttribute('aria-invalid')).toBe(
+      null,
+    );
+    // The other messages stay until their own field changes.
+    expect(messageFor('Ingredient 1')).toBe('Name this ingredient');
+  });
+
+  it('UI-31 shows the lower-bound messages for servings, minutes, quantity and step minutes', async () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+    fillValid();
+    set('Servings', '0');
+    set('Prep minutes', '-1');
+    set('Cook minutes', '-5');
+    set('Quantity 1', '-1');
+    set('Step 1 minutes', '0');
+
+    create();
+
+    await screen.findByText('Servings must be at least 1');
+    expect(messageFor('Servings')).toBe('Servings must be at least 1');
+    expect(messageFor('Prep minutes')).toBe("Prep minutes can't be negative");
+    expect(messageFor('Cook minutes')).toBe("Cook minutes can't be negative");
+    expect(messageFor('Quantity 1')).toBe("Quantity can't be negative");
+    expect(messageFor('Step 1 minutes')).toBe('Minutes must be at least 1');
+    expect(mocks.api.createRecipe).not.toHaveBeenCalled();
+  });
+
+  it('UI-31 asks for servings when the field is left empty', async () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+    fillValid();
+    set('Servings', '');
+
+    create();
+
+    await screen.findByText('Servings must be at least 1');
+    expect(messageFor('Servings')).toBe('Servings must be at least 1');
+    expect(mocks.api.createRecipe).not.toHaveBeenCalled();
+  });
+
+  it('§3.1.1 UI-31 rejects a quantity of 0 with "Quantity must be more than 0"', async () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+    fillValid();
+    set('Quantity 1', '0');
+
+    create();
+
+    await screen.findByText('Quantity must be more than 0');
+    expect(messageFor('Quantity 1')).toBe('Quantity must be more than 0');
+    expect(mocks.api.createRecipe).not.toHaveBeenCalled();
+  });
+
+  it('§3.1.1 accepts an empty quantity as "to taste"', async () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+    fillValid();
+    set('Quantity 1', '');
+
+    create();
+
+    await waitFor(() => expect(mocks.api.createRecipe).toHaveBeenCalledTimes(1));
+    expect(mocks.api.createRecipe.mock.calls[0][0].ingredients[0].quantity).toBe(
+      null,
+    );
+  });
+
+  it('UI-31 §3.1.1 shows the upper-limit messages for the numeric fields', async () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+    fillValid();
+    set('Servings', '7');
+    set('Prep minutes', '1441');
+    set('Cook minutes', '1441');
+    set('Quantity 1', '10001');
+    set('Step 1 minutes', '1441');
+
+    create();
+
+    await screen.findByText('Servings can be at most 6');
+    expect(messageFor('Servings')).toBe('Servings can be at most 6');
+    expect(messageFor('Prep minutes')).toBe('Prep minutes can be at most 1440');
+    expect(messageFor('Cook minutes')).toBe('Cook minutes can be at most 1440');
+    expect(messageFor('Quantity 1')).toBe('Quantity can be at most 10000');
+    expect(messageFor('Step 1 minutes')).toBe('Minutes can be at most 1440');
+    expect(mocks.api.createRecipe).not.toHaveBeenCalled();
+  });
+
+  it('UI-31 §3.1.1 accepts the upper limits themselves', async () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+    fillValid();
+    set('Servings', '6');
+    set('Prep minutes', '1440');
+    set('Cook minutes', '0');
+    set('Quantity 1', '10000');
+    set('Step 1 minutes', '1440');
+
+    create();
+
+    await waitFor(() => expect(mocks.api.createRecipe).toHaveBeenCalledTimes(1));
+    const posted = mocks.api.createRecipe.mock.calls[0][0];
+    expect(posted.servings).toBe(6);
+    expect(posted.prepMinutes).toBe(1440);
+    expect(posted.cookMinutes).toBe(0);
+    expect(posted.ingredients[0].quantity).toBe(10000);
+    expect(posted.steps[0].durationMinutes).toBe(1440);
+  });
+
+  it('UI-31 §3.1.1 shows the upper-limit messages for the text fields', async () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+    fillValid();
+    set('Title', 't'.repeat(201));
+    set('Description', 'd'.repeat(501));
+    set('Ingredient 1', 'i'.repeat(121));
+    set('Note 1', 'n'.repeat(121));
+    set('Step 1', 's'.repeat(1001));
+
+    create();
+
+    await screen.findByText('Title can be at most 200 characters');
+    expect(messageFor('Title')).toBe('Title can be at most 200 characters');
+    expect(messageFor('Description')).toBe(
+      'Description can be at most 500 characters',
+    );
+    expect(messageFor('Ingredient 1')).toBe(
+      'Ingredient names can be at most 120 characters',
+    );
+    expect(messageFor('Note 1')).toBe('Notes can be at most 120 characters');
+    expect(messageFor('Step 1')).toBe('Steps can be at most 1000 characters');
+    expect(mocks.api.createRecipe).not.toHaveBeenCalled();
+  });
+
+  it('§3.1.1 carries the limits as maxLength and max on the editor controls', () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+
+    const attr = (label: string, name: string): string | null =>
+      screen.getByLabelText(label).getAttribute(name);
+    expect(attr('Title', 'maxlength')).toBe('200');
+    expect(attr('Description', 'maxlength')).toBe('500');
+    expect(attr('Ingredient 1', 'maxlength')).toBe('120');
+    expect(attr('Note 1', 'maxlength')).toBe('120');
+    expect(attr('Step 1', 'maxlength')).toBe('1000');
+    expect(attr('Servings', 'max')).toBe('6');
+    expect(attr('Prep minutes', 'max')).toBe('1440');
+    expect(attr('Cook minutes', 'max')).toBe('1440');
+    expect(attr('Quantity 1', 'max')).toBe('10000');
+    expect(attr('Step 1 minutes', 'max')).toBe('1440');
+  });
+
+  it('UI-31 Move up and Move down reorder the ingredients and the posted list follows', async () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+    fillValid();
+    fireEvent.click(screen.getByRole('button', { name: /Add ingredient/ }));
+    set('Ingredient 2', 'tomatoes');
+
+    // The ends cannot move past the list.
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Move ingredient 1 up',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Move ingredient 2 down',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move ingredient 2 up' }));
+
+    expect((screen.getByLabelText('Ingredient 1') as HTMLInputElement).value).toBe(
+      'tomatoes',
+    );
+    expect((screen.getByLabelText('Ingredient 2') as HTMLInputElement).value).toBe(
+      'eggs',
+    );
+    // The quantity moved with its row.
+    expect((screen.getByLabelText('Quantity 2') as HTMLInputElement).value).toBe(
+      '3',
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Move ingredient 1 down' }),
+    );
+    expect((screen.getByLabelText('Ingredient 1') as HTMLInputElement).value).toBe(
+      'eggs',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move ingredient 1 down' }));
+    create();
+
+    await waitFor(() => expect(mocks.api.createRecipe).toHaveBeenCalledTimes(1));
+    expect(
+      mocks.api.createRecipe.mock.calls[0][0].ingredients.map(
+        (ingredient: { name: string }) => ingredient.name,
+      ),
+    ).toEqual(['tomatoes', 'eggs']);
+  });
+
+  it('UI-31 Move up and Move down reorder the steps', async () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+    fillValid();
+    fireEvent.click(screen.getByRole('button', { name: /Add step/ }));
+    set('Step 2', 'Crack the eggs.');
+    set('Step 2 minutes', '4');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move step 1 down' }));
+
+    expect((screen.getByLabelText('Step 1') as HTMLInputElement).value).toBe(
+      'Crack the eggs.',
+    );
+    expect(
+      (screen.getByLabelText('Step 1 minutes') as HTMLInputElement).value,
+    ).toBe('4');
+    expect(
+      (
+        screen.getByRole('button', { name: 'Move step 1 up' }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+
+    create();
+
+    await waitFor(() => expect(mocks.api.createRecipe).toHaveBeenCalledTimes(1));
+    expect(mocks.api.createRecipe.mock.calls[0][0].steps).toEqual([
+      { text: 'Crack the eggs.', durationMinutes: 4 },
+      { text: 'Fry the onion.', durationMinutes: undefined },
+    ]);
+  });
+
+  it('UI-31 §3.1.1 hides Add ingredient once the recipe has 50 ingredients and Add step once it has 60 steps', async () => {
+    // Loaded at 49 / 59 so one click reaches each limit (role queries over
+    // 50 rows are too slow to click there one row at a time).
+    openEditor({
+      ...EXISTING,
+      ingredients: Array.from({ length: 49 }, (_, index) => ({
+        quantity: 1,
+        unit: 'none' as const,
+        name: `item ${index + 1}`,
+      })),
+      steps: Array.from({ length: 59 }, (_, index) => ({
+        text: `step ${index + 1}`,
+      })),
+    });
+    await screen.findByDisplayValue('item 49');
+
+    fireEvent.click(screen.getByText('Add ingredient'));
+
+    expect(screen.getByLabelText('Ingredient 50')).toBeTruthy();
+    expect(screen.queryByText('Add ingredient')).toBeNull();
+    expect(screen.getByText('Add step')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Add step'));
+
+    expect(screen.getByLabelText('Step 60')).toBeTruthy();
+    expect(screen.queryByText('Add step')).toBeNull();
+  });
+
+  it('UI-31 §3.1.1 refuses a loaded recipe above 50 ingredients or 60 steps until it is cut down', async () => {
+    const onSaved = vi.fn();
+    mocks.api.getRecipe.mockResolvedValue({
+      ...EXISTING,
+      ingredients: Array.from({ length: 51 }, (_, index) => ({
+        quantity: 1,
+        unit: 'none' as const,
+        name: `item ${index + 1}`,
+      })),
+      steps: Array.from({ length: 61 }, (_, index) => ({
+        text: `step ${index + 1}`,
+      })),
+    });
+    render(
+      <RecipeEditorScreen recipeId="r1" onSaved={onSaved} onCancel={vi.fn()} />,
+    );
+
+    await screen.findByDisplayValue('item 51');
+    expect(screen.queryByRole('button', { name: /Add ingredient/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Add step/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save version' }));
+
+    await screen.findByText('A recipe can have at most 50 ingredients');
+    expect(messageFor('Ingredient 51')).toBe(
+      'A recipe can have at most 50 ingredients',
+    );
+    expect(messageFor('Step 61')).toBe('A recipe can have at most 60 steps');
+    expect(mocks.api.updateRecipe).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it('UI-25 attempts every picked image after create, opens the recipe and leaves the notice for the detail screen', async () => {
+    const onSaved = vi.fn();
+    mocks.api.uploadImage
+      .mockRejectedValueOnce(new ApiError(400, 'Images must be 5 MB or smaller.'))
+      .mockResolvedValueOnce({ imageUrls: [OWN_IMAGE] });
+    render(<RecipeEditorScreen onSaved={onSaved} onCancel={vi.fn()} />);
+    fillValid();
+    pick(png('one.png'));
+    pick(png('two.png'));
+    await screen.findByRole('button', { name: /two\.png/ });
+
+    create();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(mocks.api.uploadImage).toHaveBeenCalledTimes(2);
+    expect(mocks.api.uploadImage.mock.calls.map((call) => call[0])).toEqual([
+      'r1',
+      'r1',
+    ]);
+    expect(
+      mocks.api.uploadImage.mock.calls.map((call) => (call[1] as File).name),
+    ).toEqual(['one.png', 'two.png']);
+    expect(onSaved).toHaveBeenCalledWith({ ...CREATED, imageUrls: [OWN_IMAGE] });
+    expect(mocks.api.createRecipe).toHaveBeenCalledTimes(1);
+    expect(peekUploadNotice('r1')).toBe(
+      'The recipe was saved, but 1 image(s) could not be uploaded: Images must be 5 MB or smaller.',
+    );
+    clearUploadNotice('r1');
+  });
+
+  it('UI-25 opens the new recipe even when every upload fails, quoting the first failure', async () => {
+    const onSaved = vi.fn();
+    mocks.api.uploadImage
+      .mockRejectedValueOnce(new ApiError(503, 'Image storage is unavailable.'))
+      .mockRejectedValueOnce(new ApiError(400, 'Second failure.'));
+    render(<RecipeEditorScreen onSaved={onSaved} onCancel={vi.fn()} />);
+    fillValid();
+    pick(png('one.png'));
+    pick(png('two.png'));
+    await screen.findByRole('button', { name: /two\.png/ });
+
+    create();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(CREATED));
+    expect(peekUploadNotice('r1')).toBe(
+      'The recipe was saved, but 2 image(s) could not be uploaded: Image storage is unavailable.',
+    );
+    clearUploadNotice('r1');
+  });
+
+  it('UI-25 leaves no notice when every picked image uploads', async () => {
+    const onSaved = vi.fn();
+    mocks.api.uploadImage.mockResolvedValue({ imageUrls: [OWN_IMAGE] });
+    render(<RecipeEditorScreen onSaved={onSaved} onCancel={vi.fn()} />);
+    fillValid();
+    pick(png('one.png'));
+    await screen.findByRole('button', { name: /one\.png/ });
+
+    create();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(peekUploadNotice('r1')).toBeNull();
+  });
+
+  it('UI-25 stays in the editor with the message when POST /recipes fails, uploading nothing', async () => {
+    const onSaved = vi.fn();
+    mocks.api.createRecipe.mockRejectedValue(
+      new ApiError(503, "Something went wrong on CookBook's server. Try again."),
+    );
+    render(<RecipeEditorScreen onSaved={onSaved} onCancel={vi.fn()} />);
+    fillValid();
+    pick(png('one.png'));
+    await screen.findByRole('button', { name: /one\.png/ });
+
+    create();
+
+    expect(
+      await screen.findByText(
+        "Something went wrong on CookBook's server. Try again.",
+      ),
+    ).toBeTruthy();
+    expect(mocks.api.uploadImage).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it('UI-40 reports a new editor dirty once a field changes and clean when it is changed back', () => {
+    const onDirtyChange = vi.fn();
+    const { unmount } = render(
+      <RecipeEditorScreen
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+        onDirtyChange={onDirtyChange}
+      />,
+    );
+
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+    expect(onDirtyChange).not.toHaveBeenCalledWith(true);
+
+    set('Title', 'Shakshuka');
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+    set('Title', '');
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+
+    set('Ingredient 1', 'eggs');
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+    // UI-40: leaving the editor clears the flag.
+    unmount();
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('UI-40 reports a new editor dirty when an image is picked but not yet uploaded', async () => {
+    const onDirtyChange = vi.fn();
+    render(
+      <RecipeEditorScreen
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+        onDirtyChange={onDirtyChange}
+      />,
+    );
+
+    pick(png('one.png'));
+
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
+    expect(mocks.api.uploadImage).not.toHaveBeenCalled();
+  });
+
+  it('UI-40 treats the loaded version as clean and an edit of it as dirty', async () => {
+    const onDirtyChange = vi.fn();
+    openEditor(EXISTING, { onDirtyChange });
+
+    await screen.findByDisplayValue('tomatoes');
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+    expect(onDirtyChange).not.toHaveBeenCalledWith(true);
+
+    set('Note 2', 'diced');
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+    set('Note 2', 'chopped');
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('UI-40 asks "Remove this photo?" before dropping a picked image, and Cancel keeps it', async () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+    pick(png('one.png'));
+
+    fireEvent.click(await screen.findByRole('button', { name: /one\.png/ }));
+
+    let dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Remove this photo?')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: /one\.png/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /one\.png/ }));
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+
+    expect(screen.queryByRole('button', { name: /one\.png/ })).toBeNull();
+    expect(mocks.api.deleteImage).not.toHaveBeenCalled();
+  });
+
+  it('UI-40 IMG-7 asks "Remove this photo from your recipe and from every copy of it?" for an image this recipe owns', async () => {
+    mocks.api.deleteImage.mockResolvedValue({ imageUrls: [SOURCE_IMAGE] });
+    openEditor({ ...EXISTING, imageUrls: [OWN_IMAGE, SOURCE_IMAGE] });
+
+    await screen.findByDisplayValue('tomatoes');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]);
+
+    const dialog = screen.getByRole('dialog');
+    expect(
+      within(dialog).getByText(
+        'Remove this photo from your recipe and from every copy of it?',
+      ),
+    ).toBeTruthy();
+    expect(mocks.api.deleteImage).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() =>
+      expect(mocks.api.deleteImage).toHaveBeenCalledWith('r1', 0),
+    );
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: 'Remove' })).toHaveLength(1),
+    );
+  });
+
+  it('UI-40 IMG-7 asks only "Remove this photo?" for an image the recipe links from its source', async () => {
+    mocks.api.deleteImage.mockResolvedValue({ imageUrls: [OWN_IMAGE] });
+    openEditor({ ...EXISTING, imageUrls: [OWN_IMAGE, SOURCE_IMAGE] });
+
+    await screen.findByDisplayValue('tomatoes');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[1]);
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Remove this photo?')).toBeTruthy();
+    expect(
+      within(dialog).queryByText(
+        'Remove this photo from your recipe and from every copy of it?',
+      ),
+    ).toBeNull();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(mocks.api.deleteImage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[1]);
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' }),
+    );
+    await waitFor(() =>
+      expect(mocks.api.deleteImage).toHaveBeenCalledWith('r1', 1),
+    );
+  });
+
+  it('UI-20 never offers to remove the catalogue photo of a TheMealDB copy', async () => {
+    const external = 'https://images.example.test/meals/lasagna.jpg';
+    const { container } = openEditor({
+      ...EXISTING,
+      source: 'themealdb',
+      relation: 'saved',
+      imageUrls: [],
+      externalImageUrl: external,
+    });
+
+    await screen.findByDisplayValue('tomatoes');
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+    expect(container.querySelector(`img[src="${external}"]`)).toBeNull();
+  });
+
+  it('UI-41 gives the text the user writes dir="auto"', () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+
+    for (const label of [
+      'Title',
+      'Description',
+      'Ingredient 1',
+      'Note 1',
+      'Step 1',
+    ]) {
+      expect(screen.getByLabelText(label).getAttribute('dir')).toBe('auto');
+    }
   });
 });

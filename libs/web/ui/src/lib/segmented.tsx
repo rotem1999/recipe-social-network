@@ -27,13 +27,13 @@ export function Segmented<T extends string>({
   className,
 }: SegmentedProps<T>): ReactElement {
   const name = useId();
-  const optionStyle = compact
-    ? { padding: '5px 10px', fontSize: '11px' }
-    : undefined;
   return (
     <span className={cx('seg', className)} role="group" aria-label={label}>
       {options.map((option) => (
-        <label key={option.value} className="seg-opt" style={optionStyle}>
+        <label
+          key={option.value}
+          className={cx('seg-opt', compact && 'seg-opt-compact')}
+        >
           <input
             type="radio"
             name={name}
