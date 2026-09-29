@@ -21,3 +21,13 @@ export {
   StepDto,
 } from './lib/dto/recipe-write.dto';
 export { VisibilityDto } from './lib/dto/visibility.dto';
+export {
+  ImageUploadResponseDto,
+  RatingSummaryResponseDto,
+  RecipeAttributionResponseDto,
+  RecipeCardResponseDto,
+  RecipeDetailResponseDto,
+  RecipeListResponseDto,
+  RecipeVersionSummaryResponseDto,
+  RecipeVersionsResponseDto,
+} from './lib/dto/recipe-response.dto';

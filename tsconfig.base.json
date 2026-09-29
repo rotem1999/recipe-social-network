@@ -65,6 +65,9 @@
       "@rsn/api/feature-recommend": [
         "./libs/api/feature-recommend/src/index.ts"
       ],
+      "@rsn/api/util-openapi": [
+        "./libs/api/util-openapi/src/index.ts"
+      ],
       "@rsn/web/ui": [
         "./libs/web/ui/src/index.ts"
       ],

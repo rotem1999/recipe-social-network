@@ -23,11 +23,11 @@ An Nx 23 monorepo with pnpm and TypeScript (SPEC §11).
 
 | Project | What it is |
 |---|---|
-| `apps/api` | NestJS 11 API (CommonJS, Jest), the only process that talks to PostgreSQL and to third-party services |
+| `apps/api` | NestJS 11 API (CommonJS, Jest), the only process that talks to PostgreSQL and to third-party services; API docs with `@nestjs/swagger` 11.4.7 |
 | `apps/web` | React 19 renderer (Vite 7, Vitest), loaded by the Electron window |
 | `apps/desktop` | Electron 44 main and preload, built with electron-vite |
 | `apps/*-e2e` | End-to-end tests: API (Jest), renderer (Playwright), desktop (WebdriverIO) |
-| `libs/api/*` | API features (`feature-*`) and clients for PostgreSQL, OpenRouter, TheMealDB, USDA, Open-Meteo and Firebase (`data-access-*`) |
+| `libs/api/*` | API features (`feature-*`), clients for PostgreSQL, OpenRouter, TheMealDB, USDA, Open-Meteo and Firebase (`data-access-*`), and the API docs with their access rules (`util-openapi`) |
 | `libs/web/*` | Renderer features, the typed API client and the UI kit with the design tokens |
 | `libs/shared/*` | Domain types and request/response contracts used by both sides |
 
@@ -54,7 +54,7 @@ Imports use the alias `@rsn/<scope>/<type>-<name>` (for example `@rsn/shared/uti
    "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U postgres -h localhost -d postgres -f docker/setup-database.sql
    ```
 
-3. Copy `.env.example` to `.env.local` and fill every empty value: the database password from step 2, two different long random JWT secrets, and the provider keys. Leave the three `FIREBASE_*` values empty to run without image uploads. `.env.local` is gitignored; never commit it.
+3. Copy `.env.example` to `.env.local` and fill every empty value: the database password from step 2, two different long random JWT secrets, and the provider keys. Leave the three `FIREBASE_*` values empty to run without image uploads. `DOCS_USERNAME` and `DOCS_PASSWORD` (at least 16 characters) are needed only in production, to open the API docs (see [API documentation](#api-documentation)). `.env.local` is gitignored; never commit it.
 
 4. Create the schema:
 
@@ -64,7 +64,7 @@ Imports use the alias `@rsn/<scope>/<type>-<name>` (for example `@rsn/shared/uti
 
 ## Run
 
-Start the API (port 3000, prefix `/api/v1`, health check at `/api/v1/health`):
+Start the API (port 3000, prefix `/api/v1`, health check at `/api/v1/health`, API docs at `/api/v1/docs`):
 
 ```bash
 pnpm nx serve api
@@ -91,6 +91,20 @@ $env:NX_DAEMON='false'; pnpm nx serve web
 ```
 
 In development React StrictMode mounts effects twice, so the Home screen sends each recommendation request twice. Production builds do not.
+
+## API documentation
+
+The API serves Swagger UI and the OpenAPI 3 document in both builds (SPEC §11.7):
+
+- Swagger UI: http://localhost:<API_PORT>/api/v1/docs
+- OpenAPI document (JSON): http://localhost:<API_PORT>/api/v1/docs-json
+
+Both follow `API_GLOBAL_PREFIX`. Every route except sign-up, sign-in, refresh and health shows a lock: it needs a Bearer access token.
+
+- **Development** (`NODE_ENV` is not `production`): the docs are open. "Try it out" works on every operation; click **Authorize** and paste an access token (from sign-in). The token is not kept after a page reload.
+- **Production** (`NODE_ENV=production`): the docs need HTTP Basic auth with `DOCS_USERNAME` and `DOCS_PASSWORD` from `.env.local`; the password must be at least 16 characters. If either key is empty or the password is shorter, the docs are not served (both paths answer 404) and the API logs a warning at startup naming the key. "Try it out" is off, so the production docs send no requests to the API.
+
+The API runs over plain HTTP, so when the docs are opened from another machine the Basic auth credentials cross the network in clear text.
 
 ## Test
 

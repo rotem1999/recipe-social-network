@@ -2,6 +2,7 @@
 // Port, prefix and CORS origins come from the §14 keys.
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { setupApiDocs } from '@rsn/api/util-openapi';
 import { AppModule } from './app/app.module';
 
 async function bootstrap(): Promise<void> {
@@ -15,6 +16,8 @@ async function bootstrap(): Promise<void> {
     .filter((origin) => origin.length > 0);
   // Electron loads the production renderer from file://, which sends Origin "null".
   app.enableCors({ origin: [...origins, 'null'], credentials: false });
+  // DOC-1: Swagger UI and the OpenAPI document, after the prefix and before listen.
+  setupApiDocs(app, { globalPrefix, env: process.env });
   const port = Number(process.env['API_PORT'] ?? 3000);
   await app.listen(port);
   Logger.log(`CookBook API listening on http://localhost:${port}/${globalPrefix}`);

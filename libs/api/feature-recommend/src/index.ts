@@ -1,4 +1,5 @@
 export * from './lib/dto/recommend-request.dto';
+export * from './lib/dto/recommend-response.dto';
 export * from './lib/recommend-prompt.builder';
 export * from './lib/recommend.controller';
 export * from './lib/recommend.module';
