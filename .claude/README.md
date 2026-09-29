@@ -4,7 +4,7 @@ Added 2026-09-08, the step before the first code. Everything here enforces or au
 
 ## Subagents (`agents/`)
 
-All four are pinned to Claude Opus 4.8 (`model: claude-opus-4-8`). Subagents cannot ask Rotem questions directly; they return questions to the main session, which asks in chat.
+All six are pinned to Claude Opus 5.5 (`model: claude-opus-5-5`; was Opus 4.8 until Rotem's change on 2026-09-29). Subagents cannot ask Rotem questions directly; they return questions to the main session, which asks in chat.
 
 | Agent | Job | Writes files |
 |---|---|---|
@@ -12,6 +12,7 @@ All four are pinned to Claude Opus 4.8 (`model: claude-opus-4-8`). Subagents can
 | `fact-verifier` | Verifies one group of third-party facts online today; returns §16 citation lines | no |
 | `arch-reviewer` | 14-point check: placement, tags, boundaries, aliases, secrets, TypeORM 1.x, Nest 11, AI logging, tests | no |
 | `test-runner` | Runs `pnpm nx` lint/typecheck/test/e2e targets; returns a short failure digest | no |
+| `app-critic` | Harsh QA pass on the running app (API + renderer in the browser) against every SPEC.md ID; writes `docs/reviews/QA-REVIEW-<date>.md` and screenshots for a separate fixer session; at most 15 AI calls per run (added 2026-09-29) | review and screenshots only |
 | `test-writer` | The only writer of `*.spec.ts(x)` files (Rotem, 2026-09-08); tests named by SPEC ID; runs them; reports production defects instead of fixing them | spec files only |
 
 ## Skills (`skills/`)
@@ -39,7 +40,7 @@ Permissions deny reading the env files and pre-allow read-only git commands and 
 
 Known gaps: an edit made with `sed` through Bash is not inspected for SPEC.md or client-secret content; only the env-file and test-file token checks apply to Bash. The Bash test-file check is a token heuristic, so a main-session command that both redirects output and mentions a spec file name anywhere (for example a heredoc containing one) is denied too. Prefer the Edit and Write tools.
 
-The `env` block in `settings.json` (`CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-4-8`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`) pins every subagent, including the built-in Explore, Plan and general-purpose agents, to Opus 4.8 (Rotem, 2026-09-08). The per-agent `model:` lines document the same intent.
+The `env` block in `settings.json` (`CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-5-5`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`) pins every subagent, including the built-in Explore, Plan and general-purpose agents, to Opus 5.5 (Rotem, 2026-09-08; model changed from Opus 4.8 by Rotem, 2026-09-29). The per-agent `model:` lines document the same intent.
 
 ## Sources (fetched 2026-09-08, re-verified 2026-09-08 in the fourth session)
 
@@ -50,3 +51,4 @@ The `env` block in `settings.json` (`CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-4-8`
 - C4 https://code.claude.com/docs/en/permissions.md — `Read(./.env)` rules also block Edit/Write (v2.1.208+ / v2.1.228+); Read deny rules apply to `cat`/`head`/`tail`/`sed`; NotebookEdit is not covered; `Bash(cmd *)` patterns.
 - C5 https://code.claude.com/docs/en/settings-reference.md and https://code.claude.com/docs/en/model-config.md (with C1) — `env` key applies to every session and its subprocesses; a per-agent `model:` wins unless `_FORCE` is set.
 - C6 https://platform.claude.com/docs/en/models/opus-4-8/overview — Claude Opus 4.8 model ID `claude-opus-4-8`, legacy but active, retirement not before 2027-05-28.
+- C7 https://platform.claude.com/docs/en/about-claude/models/overview (fetched 2026-09-29) — Claude Opus 5.5 model ID `claude-opus-5-5`, current, retirement not before 2027-09-22.
