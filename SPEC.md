@@ -368,6 +368,7 @@ recipe-social-network/
 ├── docker/                         PostgreSQL compose files (§12)
 ├── INTENT.txt
 ├── SPEC.md
+├── README.md                       short overview, setup and run commands, derived from SPEC.md (Rotem, chat 2026-09-29)
 ├── .env.example
 ├── nx.json
 ├── package.json
