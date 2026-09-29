@@ -1,4 +1,4 @@
-// SPEC §9 NUT-2/NUT-5/NUT-6 (§16 U1–U9): the FoodData Central client. `fetch`
+// SPEC §9 NUT-2/NUT-5/NUT-6/NUT-8/NUT-9 (§16 U1–U9, U13, U14): the FoodData Central client. `fetch`
 // is mocked; the key is a placeholder and every field name comes from §9.
 
 import { HttpException, ServiceUnavailableException } from '@nestjs/common';
@@ -77,7 +77,7 @@ describe('UsdaService', () => {
   }
 
   describe('searchFoods', () => {
-    it('NUT-6 posts the query, the dataType array and pageSize 5 to /foods/search', async () => {
+    it('NUT-8 posts the query, the dataType array and pageSize 25 to /foods/search', async () => {
       fetchMock.mockResolvedValue(jsonResponse({ foods: [] }));
 
       await service().searchFoods('onion', INGREDIENT_DATA_TYPES);
@@ -94,9 +94,57 @@ describe('UsdaService', () => {
       expect(JSON.parse(String(init.body))).toEqual({
         query: 'onion',
         dataType: INGREDIENT_DATA_TYPES,
-        pageSize: 5,
+        pageSize: 25,
         pageNumber: 1,
       });
+    });
+
+    it('NUT-8 sends the query as given, `+` operators included (§16 U13)', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ foods: [] }));
+
+      await service().searchFoods('+ground +beef raw', INGREDIENT_DATA_TYPES);
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(String(init.body)).query).toBe('+ground +beef raw');
+    });
+
+    it("NUT-8 keeps every hit USDA returns, in USDA's order", async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          foods: [
+            searchHit([{ nutrientId: 1008, value: 200 }], {
+              fdcId: 1,
+              description: 'Garlic sauce',
+            }),
+            searchHit([{ nutrientId: 1008, value: 140 }], {
+              fdcId: 2,
+              description: 'Garlic, cooked',
+            }),
+            searchHit([{ nutrientId: 1008, value: 149 }], {
+              fdcId: 3,
+              description: 'Garlic, raw',
+            }),
+          ],
+        }),
+      );
+
+      const hits = await service().searchFoods('+garlic raw', INGREDIENT_DATA_TYPES);
+      expect(hits.map((hit) => hit.description)).toEqual([
+        'Garlic sauce',
+        'Garlic, cooked',
+        'Garlic, raw',
+      ]);
+    });
+
+    it('NUT-6 caches the strict and the plain query separately', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ foods: [] }));
+      const client = service();
+
+      await client.searchFoods('+plum +tomatoes raw', INGREDIENT_DATA_TYPES);
+      await client.searchFoods('Plum Tomatoes', INGREDIENT_DATA_TYPES);
+      await client.searchFoods('+plum +tomatoes raw', INGREDIENT_DATA_TYPES);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
     it('NUT-6 uses the configured base URL without its trailing slash', async () => {
@@ -316,8 +364,18 @@ describe('UsdaService', () => {
         description: 'Onions, raw',
         kcalPer100g: 40,
         portions: [
-          { gramWeight: 110, description: '1 medium' },
-          { gramWeight: 160, description: 'large' },
+          {
+            gramWeight: 110,
+            description: '1 medium',
+            amount: null,
+            sequenceNumber: null,
+          },
+          {
+            gramWeight: 160,
+            description: 'large',
+            amount: null,
+            sequenceNumber: null,
+          },
         ],
       });
       expect(String(fetchMock.mock.calls[0][0])).toBe(
@@ -326,6 +384,202 @@ describe('UsdaService', () => {
       expect(
         (fetchMock.mock.calls[0][1] as RequestInit).method,
       ).toBe('GET');
+    });
+
+    it('NUT-9 keeps `amount` for an SR Legacy `modifier` portion ("cloves", 3, 9 g; §16 U11 169230)', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          fdcId: 169230,
+          description: 'Garlic, raw',
+          foodNutrients: [{ nutrient: { id: 1008 }, amount: 149 }],
+          foodPortions: [
+            { amount: 1, modifier: 'cup', gramWeight: 136, sequenceNumber: 1 },
+            { amount: 3, modifier: 'cloves', gramWeight: 9, sequenceNumber: 3 },
+            {
+              amount: 1,
+              modifier: 'tsp',
+              portionDescription: '',
+              gramWeight: 2.8,
+              sequenceNumber: 2,
+            },
+          ],
+        }),
+      );
+
+      const detail = await service().getFood(169230);
+      expect(detail?.portions).toEqual([
+        { gramWeight: 136, description: 'cup', amount: 1, sequenceNumber: 1 },
+        { gramWeight: 9, description: 'cloves', amount: 3, sequenceNumber: 3 },
+        { gramWeight: 2.8, description: 'tsp', amount: 1, sequenceNumber: 2 },
+      ]);
+    });
+
+    it('NUT-9 drops `amount` when the text is an FNDDS `portionDescription` (§16 U14)', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          fdcId: 2709786,
+          description: 'Garlic, raw',
+          foodNutrients: [{ nutrient: { id: 1008 }, amount: 143 }],
+          foodPortions: [
+            {
+              portionDescription: '1 clove',
+              modifier: '10205',
+              amount: 1,
+              gramWeight: 3,
+              sequenceNumber: 2,
+            },
+            {
+              portionDescription: 'Quantity not specified',
+              modifier: '90000',
+              gramWeight: 3,
+              sequenceNumber: 3,
+            },
+          ],
+        }),
+      );
+
+      const detail = await service().getFood(2709786);
+      expect(detail?.portions).toEqual([
+        { gramWeight: 3, description: '1 clove', amount: null, sequenceNumber: 2 },
+        {
+          gramWeight: 3,
+          description: 'Quantity not specified',
+          amount: null,
+          sequenceNumber: 3,
+        },
+      ]);
+    });
+
+    it('NUT-9 appends `measureUnit.name` to a Foundation `modifier` ("whole without shell" + "egg"; §16 U11 748967)', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          fdcId: 748967,
+          description: 'Eggs',
+          foodPortions: [
+            {
+              modifier: 'whole without shell',
+              measureUnit: { name: 'egg' },
+              amount: 1,
+              gramWeight: 50.3,
+              sequenceNumber: 1,
+            },
+          ],
+        }),
+      );
+
+      const detail = await service().getFood(748967);
+      expect(detail?.portions).toEqual([
+        {
+          gramWeight: 50.3,
+          description: 'whole without shell egg',
+          amount: 1,
+          sequenceNumber: 1,
+        },
+      ]);
+    });
+
+    it('NUT-9 describes a Foundation portion with no modifier by its unit alone ("RACC"; §16 U11 1104647)', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          fdcId: 1104647,
+          description: 'Garlic, raw',
+          foodPortions: [
+            {
+              measureUnit: { name: 'RACC' },
+              amount: 1,
+              gramWeight: 85,
+              sequenceNumber: 1,
+            },
+          ],
+        }),
+      );
+
+      const detail = await service().getFood(1104647);
+      expect(detail?.portions).toEqual([
+        { gramWeight: 85, description: 'RACC', amount: null, sequenceNumber: 1 },
+      ]);
+    });
+
+    it('NUT-9 leaves out a `measureUnit.name` of "undetermined"', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          fdcId: 169230,
+          description: 'Garlic, raw',
+          foodPortions: [
+            {
+              modifier: 'cloves',
+              measureUnit: { name: 'undetermined' },
+              amount: 3,
+              gramWeight: 9,
+              sequenceNumber: 3,
+            },
+            {
+              portionDescription: '1 clove',
+              measureUnit: { name: 'undetermined' },
+              gramWeight: 3,
+              sequenceNumber: 4,
+            },
+            {
+              measureUnit: { name: 'undetermined' },
+              gramWeight: 5,
+              sequenceNumber: 5,
+            },
+          ],
+        }),
+      );
+
+      const detail = await service().getFood(169230);
+      expect(detail?.portions).toEqual([
+        { gramWeight: 9, description: 'cloves', amount: 3, sequenceNumber: 3 },
+        { gramWeight: 3, description: '1 clove', amount: null, sequenceNumber: 4 },
+        { gramWeight: 5, description: '', amount: null, sequenceNumber: 5 },
+      ]);
+    });
+
+    it('NUT-9 prefers `portionDescription` over `modifier` and still appends the unit', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          fdcId: 2709786,
+          description: 'Garlic, raw',
+          foodPortions: [
+            {
+              portionDescription: '1 clove',
+              modifier: '10205',
+              measureUnit: { name: 'clove' },
+              amount: 1,
+              gramWeight: 3,
+              sequenceNumber: 1,
+            },
+          ],
+        }),
+      );
+
+      const detail = await service().getFood(2709786);
+      expect(detail?.portions).toEqual([
+        {
+          gramWeight: 3,
+          description: '1 clove clove',
+          amount: null,
+          sequenceNumber: 1,
+        },
+      ]);
+    });
+
+    it('NUT-9 leaves a non-numeric `amount` or `sequenceNumber` null', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          fdcId: 169230,
+          description: 'Garlic, raw',
+          foodPortions: [
+            { modifier: 'cloves', amount: '3', gramWeight: 9, sequenceNumber: 'x' },
+          ],
+        }),
+      );
+
+      const detail = await service().getFood(169230);
+      expect(detail?.portions).toEqual([
+        { gramWeight: 9, description: 'cloves', amount: null, sequenceNumber: null },
+      ]);
     });
 
     it('NUT-5 returns null for a 404 food id', async () => {
