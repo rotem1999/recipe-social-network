@@ -2,7 +2,9 @@
 // another" re-prompts with everything already shown excluded) and WX-10 (an
 // empty pick list, and the 429 the shared daily quota of COOK-8 raises); UI-18
 // (the ranked list, its replacement and the empty re-prompt), UI-38 (the
-// no-candidates line and the loading texts) and UI-41 (dir="auto" on AI text).
+// no-candidates line and the loading texts), UI-41 (dir="auto" on AI text),
+// UI-43 (a 400 reads "No recommendation right now") and UI-50 (directional
+// title text inside a left-aligned button, clamped like cards).
 import {
   fireEvent,
   render,
@@ -410,12 +412,123 @@ describe('HomeRecommendation', () => {
     );
 
     const title = await screen.findByRole('button', { name: 'Ramen' });
-    expect(title.getAttribute('dir')).toBe('auto');
+    // UI-50: the title text is its own directional element inside the button.
+    expect(title.querySelector('[dir="auto"]')?.textContent).toBe('Ramen');
     expect(
       screen
         .getByText('A hot bowl suits a cold, rainy night.')
         .getAttribute('dir'),
     ).toBe('auto');
+  });
+
+  it('UI-50 keeps the title button left-aligned and puts the title text in a bidi-text span', async () => {
+    render(
+      <HomeRecommendation
+        onCook={vi.fn()}
+        onOpen={vi.fn()}
+        onWeather={vi.fn()}
+      />,
+    );
+
+    const title = await screen.findByRole('button', { name: 'Ramen' });
+    expect(title.hasAttribute('dir')).toBe(false);
+    const text = title.querySelector('[dir="auto"]');
+    expect(text?.classList.contains('bidi-text')).toBe(true);
+    const reason = screen.getByText('A hot bowl suits a cold, rainy night.');
+    expect(reason.classList.contains('bidi-text')).toBe(true);
+  });
+
+  it('UI-50 UI-36 clamps a recommendation title to two lines and keeps the full title in the title attribute', async () => {
+    const long =
+      'Slow-roasted tomato and chickpea shakshuka with herbs, feta and warm flatbread';
+    mocks.api.recommend.mockResolvedValue({
+      ...FIRST,
+      picks: [pick('r1', long, 'Warm and filling.'), ...FIRST.picks.slice(1)],
+    });
+    render(
+      <HomeRecommendation
+        onCook={vi.fn()}
+        onOpen={vi.fn()}
+        onWeather={vi.fn()}
+      />,
+    );
+
+    const title = await screen.findByRole('button', { name: long });
+    expect(title.getAttribute('title')).toBe(long);
+    const text = title.querySelector('.card-clamp');
+    expect(text?.textContent).toBe(long);
+    expect(text?.getAttribute('dir')).toBe('auto');
+  });
+
+  it('UI-43 shows "No recommendation right now" and not the validator text when POST /recommend answers 400', async () => {
+    mocks.api.recommend.mockRejectedValue(
+      new ApiError(400, 'Unknown time zone'),
+    );
+    render(
+      <HomeRecommendation
+        onCook={vi.fn()}
+        onOpen={vi.fn()}
+        onWeather={vi.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByText('No recommendation right now'),
+    ).toBeTruthy();
+    expect(screen.queryByText('Unknown time zone')).toBeNull();
+    expect(screen.queryAllByRole('listitem')).toHaveLength(0);
+  });
+
+  it('UI-18 UI-43 keeps the picks and says "No other suggestions right now" when the re-prompt answers 400', async () => {
+    mocks.api.recommend
+      .mockResolvedValueOnce(FIRST)
+      .mockRejectedValueOnce(new ApiError(400, 'Unknown time zone'));
+    render(
+      <HomeRecommendation
+        onCook={vi.fn()}
+        onOpen={vi.fn()}
+        onWeather={vi.fn()}
+      />,
+    );
+
+    await screen.findByText('Ramen');
+    fireEvent.click(screen.getByRole('button', { name: /Show another/ }));
+
+    expect(
+      await screen.findByText('No other suggestions right now'),
+    ).toBeTruthy();
+    expect(mocks.api.recommend).toHaveBeenCalledTimes(2);
+    expect(screen.getAllByRole('listitem')).toHaveLength(3);
+    expect(screen.getByText('Ramen')).toBeTruthy();
+    expect(screen.getByText('Lentil soup')).toBeTruthy();
+    expect(screen.getByText('Shakshuka')).toBeTruthy();
+    // UI-18: picks never sit next to "No recommendation right now"; UI-43: no validator text.
+    expect(screen.queryByText('No recommendation right now')).toBeNull();
+    expect(screen.queryByText('Unknown time zone')).toBeNull();
+  });
+
+  it('COOK-8 UI-18 keeps the picks and shows "Daily AI limit reached" when the re-prompt answers 429', async () => {
+    mocks.api.recommend
+      .mockResolvedValueOnce(FIRST)
+      .mockRejectedValueOnce(
+        new ApiError(429, "You've used today's AI requests"),
+      );
+    render(
+      <HomeRecommendation
+        onCook={vi.fn()}
+        onOpen={vi.fn()}
+        onWeather={vi.fn()}
+      />,
+    );
+
+    await screen.findByText('Ramen');
+    fireEvent.click(screen.getByRole('button', { name: /Show another/ }));
+
+    expect(await screen.findByText('Daily AI limit reached')).toBeTruthy();
+    expect(screen.getAllByRole('listitem')).toHaveLength(3);
+    expect(screen.getByText('Ramen')).toBeTruthy();
+    expect(screen.queryByText('No recommendation right now')).toBeNull();
+    expect(screen.queryByText('No other suggestions right now')).toBeNull();
   });
 
   it('WX-10 says there is no recommendation when the model returned no pick', async () => {
@@ -486,5 +599,17 @@ describe('DiscoverRecommendation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View recipe' }));
 
     expect(onOpen).toHaveBeenCalledWith('p1');
+  });
+
+  it('UI-43 shows "No recommendation right now" on Discover when POST /recommend answers 400', async () => {
+    mocks.api.recommend.mockRejectedValue(
+      new ApiError(400, 'Unknown time zone'),
+    );
+    render(<DiscoverRecommendation onOpen={vi.fn()} />);
+
+    expect(
+      await screen.findByText('No recommendation right now'),
+    ).toBeTruthy();
+    expect(screen.queryByText('Unknown time zone')).toBeNull();
   });
 });

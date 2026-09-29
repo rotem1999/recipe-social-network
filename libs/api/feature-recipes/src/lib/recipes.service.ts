@@ -216,6 +216,10 @@ export class RecipesService {
 
     if (visibility === 'shared') {
       const wanted = [...new Set(sharedWithUserIds ?? [])];
+      // UI-51, REC-2 (QOL-002): sharing with nobody is not a state.
+      if (wanted.length === 0) {
+        throw new BadRequestException('Pick at least one friend to share with');
+      }
       // REC-2, FR-1, §11.6: a recipe is shared with friends only.
       const friendIds = new Set(await this.friends.friendIdsOf(userId));
       if (wanted.some((candidate) => !friendIds.has(candidate))) {

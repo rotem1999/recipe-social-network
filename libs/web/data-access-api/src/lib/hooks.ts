@@ -101,6 +101,11 @@ export interface AuthContextValue {
   refreshUser: () => Promise<UserDto | null>;
   /** UI-26: repeats the start-up `GET /me` from the 'unreachable' state, keeping the tokens. */
   retry: () => void;
+  /**
+   * UI-44: true while signed out because the client cleared the tokens after a
+   * 401 (the session ended); false after a sign-out and once a sign-in succeeds.
+   */
+  sessionEnded: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -124,12 +129,16 @@ export function AuthProvider({ children }: AuthProviderProps): ReactElement {
   );
   // UI-26: bumped by retry() to run the start-up `GET /me` again.
   const [attempt, setAttempt] = useState(0);
+  // UI-44: whether the last clear ended the session rather than signing out.
+  const [sessionEnded, setSessionEnded] = useState(false);
 
   // UI-9 / UI-26: the client clears the pair when a refresh is rejected or a
-  // request still answers 401 after it; the sign-in screen then shows at once.
+  // request still answers 401 after it; the sign-in screen then shows at once,
+  // saying the session ended (UI-44). A new pair clears that message.
   useEffect(
     () =>
       tokenStore.subscribe((tokens) => {
+        setSessionEnded(tokenStore.sessionEnded);
         if (tokens.accessToken === null) {
           setUser(null);
           setStatus('signed-out');
@@ -218,8 +227,17 @@ export function AuthProvider({ children }: AuthProviderProps): ReactElement {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ user, status, signIn, signUp, signOut, refreshUser, retry }),
-    [user, status, signIn, signUp, signOut, refreshUser, retry],
+    () => ({
+      user,
+      status,
+      signIn,
+      signUp,
+      signOut,
+      refreshUser,
+      retry,
+      sessionEnded,
+    }),
+    [user, status, signIn, signUp, signOut, refreshUser, retry, sessionEnded],
   );
 
   return createElement(AuthContext.Provider, { value }, children);

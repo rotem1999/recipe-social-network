@@ -334,25 +334,36 @@ describe('RecipesService', () => {
     });
 
     it.each([
-      ['a blank title', { title: '  ' }, 'title is required'],
+      ['a blank title', { title: '  ' }, 'Give the recipe a title'],
       [
         'a title over 200 characters',
         { title: 'x'.repeat(201) },
-        'title is longer than 200 characters',
+        'Title can be at most 200 characters',
       ],
       [
         'a description over 500 characters',
         { description: 'x'.repeat(501) },
-        'description is longer than 500 characters',
+        'Description can be at most 500 characters',
       ],
       [
         'a category outside the 14',
         { category: 'Tacos' as Category },
-        'category must be one of the 14 categories',
+        'Choose a category',
       ],
-      ['zero servings', { servings: 0 }, 'servings must be an integer >= 1'],
-      ['no ingredient', { ingredients: [] }, 'at least one ingredient is required'],
-      ['no step', { steps: [] }, 'at least one step is required'],
+      ['zero servings', { servings: 0 }, 'Servings must be a whole number of at least 1'],
+      ['2.5 servings', { servings: 2.5 }, 'Servings must be a whole number of at least 1'],
+      [
+        '12.5 cook minutes',
+        { cookMinutes: 12.5 },
+        'Cook minutes must be a whole number, 0 or more',
+      ],
+      [
+        'a 1.5-minute step',
+        { steps: [{ text: 'Rest.', durationMinutes: 1.5 }] },
+        'Step 1: minutes must be a whole number of at least 1',
+      ],
+      ['no ingredient', { ingredients: [] }, 'Add at least one ingredient'],
+      ['no step', { steps: [] }, 'Add at least one step'],
       [
         'a unit outside the fixed list',
         {
@@ -360,12 +371,12 @@ describe('RecipesService', () => {
             { quantity: 1, unit: 'handful' as never, name: 'egg' },
           ],
         },
-        'ingredient 1: unit is not in the fixed list',
+        'Choose a unit for ingredient 1',
       ],
       [
         'a blank step',
         { steps: [{ text: '  ' }] },
-        'step 1: text is required',
+        'Write step 1',
       ],
     ])(
       '§3.1.1 answers 400 for %s and never opens a transaction',
@@ -588,6 +599,64 @@ describe('RecipesService', () => {
       expect(error.message).toBe('You can only share with friends');
       expect(JSON.stringify(error.getResponse())).not.toContain('stranger-');
       expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an empty list', [] as string[]],
+      ['no list at all', undefined],
+    ])(
+      'UI-51 answers 400 "Pick at least one friend to share with" for shared with %s, and changes nothing',
+      async (_name, sharedWithUserIds) => {
+        const { service, recipes, friends, dataSource } = harness();
+        recipes.findOne.mockResolvedValue(
+          recipeRow({ ownerId: ME, currentVersion: versionRow() }),
+        );
+        friends.friendIdsOf.mockResolvedValue(['friend-1']);
+
+        const error = await failureOf<BadRequestException>(
+          service.setVisibility(ME, 'recipe-1', 'shared', sharedWithUserIds),
+        );
+
+        expect(error).toBeInstanceOf(BadRequestException);
+        expect(error.getStatus()).toBe(400);
+        expect(error.message).toBe('Pick at least one friend to share with');
+        expect(dataSource.transaction).not.toHaveBeenCalled();
+      },
+    );
+
+    it('UI-51 an empty share list never leaves the recipe shared with nobody', async () => {
+      const { service, recipes, manager } = harness();
+      recipes.findOne.mockResolvedValue(
+        recipeRow({ ownerId: ME, visibility: 'private', currentVersion: versionRow() }),
+      );
+
+      await expect(
+        service.setVisibility(ME, 'recipe-1', 'shared', []),
+      ).rejects.toThrow('Pick at least one friend to share with');
+
+      expect(manager.update).not.toHaveBeenCalled();
+      expect(manager.delete).not.toHaveBeenCalled();
+    });
+
+    it('UI-51 an empty list is still fine when the recipe is made private or public', async () => {
+      const { service, recipes, manager } = harness();
+      recipes.findOne.mockResolvedValue(
+        recipeRow({ ownerId: ME, visibility: 'shared', currentVersion: versionRow() }),
+      );
+
+      await service.setVisibility(ME, 'recipe-1', 'private', []);
+      await service.setVisibility(ME, 'recipe-1', 'public', []);
+
+      expect(manager.update).toHaveBeenCalledWith(
+        RecipeEntity,
+        { id: 'recipe-1' },
+        { visibility: 'private' },
+      );
+      expect(manager.update).toHaveBeenCalledWith(
+        RecipeEntity,
+        { id: 'recipe-1' },
+        { visibility: 'public' },
+      );
     });
 
     it('REC-2 replaces the share rows with the chosen friends and sets the visibility', async () => {

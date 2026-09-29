@@ -4,13 +4,14 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { UserDto } from '@rsn/shared/util-contracts';
 import { ApiError, NETWORK_ERROR_MESSAGE } from '@rsn/web/data-access-api';
-import { AuthScreen } from './auth-screen';
+import { AuthScreen, SESSION_ENDED_MESSAGE } from './auth-screen';
 
 const mocks = vi.hoisted(() => ({
   signIn: vi.fn(),
   signUp: vi.fn(),
   signOut: vi.fn(),
   refreshUser: vi.fn(),
+  auth: { sessionEnded: false },
 }));
 
 vi.mock('@rsn/web/data-access-api', async (importOriginal) => {
@@ -26,6 +27,7 @@ vi.mock('@rsn/web/data-access-api', async (importOriginal) => {
       signUp: mocks.signUp,
       signOut: mocks.signOut,
       refreshUser: mocks.refreshUser,
+      sessionEnded: mocks.auth.sessionEnded,
     }),
     useTimezone: () => 'Asia/Jerusalem',
   };
@@ -47,6 +49,7 @@ describe('AuthScreen', () => {
   beforeEach(() => {
     mocks.signIn.mockReset().mockResolvedValue(USER);
     mocks.signUp.mockReset().mockResolvedValue(USER);
+    mocks.auth.sessionEnded = false;
   });
 
   it('UI-9/AUTH-5 sends the username lower-cased on sign-in', async () => {
@@ -107,5 +110,70 @@ describe('AuthScreen', () => {
 
     const alert = await screen.findByText("Can't reach CookBook's server.");
     expect(alert.getAttribute('role')).toBe('alert');
+  });
+
+  it("UI-44 uses SPEC's exact wording for the session-ended message", () => {
+    expect(SESSION_ENDED_MESSAGE).toBe('Your session ended. Sign in again.');
+  });
+
+  it('UI-44 shows "Your session ended. Sign in again." above the form when the session ended', () => {
+    mocks.auth.sessionEnded = true;
+    const { container } = render(<AuthScreen />);
+
+    const message = screen.getByText('Your session ended. Sign in again.');
+    expect(message.getAttribute('role')).toBe('alert');
+    const form = container.querySelector('form');
+    if (form === null) {
+      throw new Error('the auth form was not rendered');
+    }
+    expect(form.contains(message)).toBe(false);
+    // DOCUMENT_POSITION_FOLLOWING: the form comes after the message.
+    expect(
+      message.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      message.compareDocumentPosition(
+        screen.getByRole('radio', { name: 'Sign in' }),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('UI-44 shows no session message when the session did not end (first visit or a sign-out)', () => {
+    render(<AuthScreen />);
+
+    expect(screen.queryByText('Your session ended. Sign in again.')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('UNSPECIFIED keeps the session message after the switch moves to sign-up', () => {
+    mocks.auth.sessionEnded = true;
+    render(<AuthScreen />);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign up' }));
+
+    expect(screen.getByText('Your session ended. Sign in again.')).toBeTruthy();
+  });
+
+  it('UI-44 drops the message once useAuth reports the session no longer ended (the next sign-in)', () => {
+    mocks.auth.sessionEnded = true;
+    const { rerender } = render(<AuthScreen />);
+    expect(screen.getByText('Your session ended. Sign in again.')).toBeTruthy();
+
+    mocks.auth.sessionEnded = false;
+    rerender(<AuthScreen />);
+
+    expect(screen.queryByText('Your session ended. Sign in again.')).toBeNull();
+  });
+
+  it('UI-44 shows a wrong-password error under the form without adding the session message', async () => {
+    mocks.signIn.mockRejectedValue(new ApiError(401, 'Wrong username or password'));
+    render(<AuthScreen />);
+
+    type('Username', 'rotem');
+    type('Password', 'correct-horse');
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(await screen.findByText('Wrong username or password')).toBeTruthy();
+    expect(screen.queryByText('Your session ended. Sign in again.')).toBeNull();
   });
 });

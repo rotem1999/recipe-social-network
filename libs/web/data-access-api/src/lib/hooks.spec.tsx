@@ -470,6 +470,133 @@ describe('AuthProvider (UI-17)', () => {
   });
 });
 
+describe('AuthProvider sessionEnded (UI-44)', () => {
+  function SessionProbe(): ReactElement {
+    const { status, sessionEnded, signIn: doSignIn, signOut } = useAuth();
+    return (
+      <div>
+        <span data-testid="status">{status}</span>
+        <span data-testid="ended">{String(sessionEnded)}</span>
+        <button
+          type="button"
+          onClick={() => {
+            void doSignIn({ username: 'rotem', password: 'correct horse' }).catch(
+              () => undefined,
+            );
+          }}
+        >
+          Sign in
+        </button>
+        <button type="button" onClick={signOut}>
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
+  /** Mounts a signed-in session on the shared token store. */
+  async function renderSignedIn(): Promise<void> {
+    tokenStore.set('access-1', 'refresh-1');
+    me.mockResolvedValue(USER);
+    render(
+      <AuthProvider>
+        <SessionProbe />
+      </AuthProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('signed-in'),
+    );
+  }
+
+  beforeEach(() => {
+    // The shared store keeps sessionEnded in memory between tests.
+    tokenStore.clear();
+  });
+
+  it('UI-44 is false while signed in', async () => {
+    await renderSignedIn();
+
+    expect(screen.getByTestId('ended').textContent).toBe('false');
+  });
+
+  it('UI-44 turns true and shows sign-in when the client ends the session', async () => {
+    await renderSignedIn();
+
+    // What the client does after a rejected refresh or a second 401.
+    act(() => tokenStore.endSession());
+
+    expect(screen.getByTestId('status').textContent).toBe('signed-out');
+    expect(screen.getByTestId('ended').textContent).toBe('true');
+  });
+
+  it('UI-44 stays false after a sign-out', async () => {
+    await renderSignedIn();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('signed-out'),
+    );
+    expect(screen.getByTestId('ended').textContent).toBe('false');
+  });
+
+  it('UI-44 clears when a sign-out follows an ended session', async () => {
+    await renderSignedIn();
+    act(() => tokenStore.endSession());
+    expect(screen.getByTestId('ended').textContent).toBe('true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('ended').textContent).toBe('false'),
+    );
+  });
+
+  it('UI-44 clears on the next successful sign-in', async () => {
+    await renderSignedIn();
+    act(() => tokenStore.endSession());
+    expect(screen.getByTestId('ended').textContent).toBe('true');
+    signIn.mockResolvedValue({
+      accessToken: 'access-2',
+      refreshToken: 'refresh-2',
+      user: USER,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('signed-in'),
+    );
+    expect(screen.getByTestId('ended').textContent).toBe('false');
+  });
+
+  it('UI-44 stays true after a failed sign-in (a wrong password) that follows an ended session', async () => {
+    await renderSignedIn();
+    act(() => tokenStore.endSession());
+    signIn.mockRejectedValue(new ApiError(401, 'Unauthorized', 'Unauthorized'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    await waitFor(() => expect(signIn).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('status').textContent).toBe('signed-out');
+    expect(screen.getByTestId('ended').textContent).toBe('true');
+  });
+
+  it('UI-44 stays false when a 401 arrives with no tokens stored', async () => {
+    render(
+      <AuthProvider>
+        <SessionProbe />
+      </AuthProvider>,
+    );
+
+    // A wrong password on the sign-in screen: the client ends a session that never was.
+    act(() => tokenStore.endSession());
+
+    expect(screen.getByTestId('status').textContent).toBe('signed-out');
+    expect(screen.getByTestId('ended').textContent).toBe('false');
+  });
+});
+
 describe('useAuth (UI-17)', () => {
   it('UI-17 throws when it is used outside an AuthProvider', () => {
     expect(() => renderHook(() => useAuth())).toThrow(

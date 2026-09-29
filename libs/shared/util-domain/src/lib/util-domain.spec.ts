@@ -261,28 +261,28 @@ describe('validateRecipeContent', () => {
   });
 
   it('§3.1.1 requires a title', () => {
-    expect(validateRecipeContent(makeContent({ title: '' }))).toContain('title is required');
-    expect(validateRecipeContent(makeContent({ title: '   ' }))).toContain('title is required');
+    expect(validateRecipeContent(makeContent({ title: '' }))).toContain('Give the recipe a title');
+    expect(validateRecipeContent(makeContent({ title: '   ' }))).toContain('Give the recipe a title');
   });
 
   it('§3.1.1 requires the category to be one of the 14 categories', () => {
     const content = makeContent({ category: 'Cuisine' as RecipeContent['category'] });
-    expect(validateRecipeContent(content)).toContain('category must be one of the 14 categories');
+    expect(validateRecipeContent(content)).toContain('Choose a category');
   });
 
   it('§3.1.1 requires servings to be an integer >= 1', () => {
-    expect(validateRecipeContent(makeContent({ servings: 0 }))).toContain('servings must be an integer >= 1');
-    expect(validateRecipeContent(makeContent({ servings: -2 }))).toContain('servings must be an integer >= 1');
-    expect(validateRecipeContent(makeContent({ servings: 2.5 }))).toContain('servings must be an integer >= 1');
+    expect(validateRecipeContent(makeContent({ servings: 0 }))).toContain('Servings must be a whole number of at least 1');
+    expect(validateRecipeContent(makeContent({ servings: -2 }))).toContain('Servings must be a whole number of at least 1');
+    expect(validateRecipeContent(makeContent({ servings: 2.5 }))).toContain('Servings must be a whole number of at least 1');
     expect(validateRecipeContent(makeContent({ servings: 1 }))).toEqual([]);
   });
 
   it('§3.1.1 requires at least one ingredient', () => {
-    expect(validateRecipeContent(makeContent({ ingredients: [] }))).toContain('at least one ingredient is required');
+    expect(validateRecipeContent(makeContent({ ingredients: [] }))).toContain('Add at least one ingredient');
   });
 
   it('§3.1.1 requires at least one step', () => {
-    expect(validateRecipeContent(makeContent({ steps: [] }))).toContain('at least one step is required');
+    expect(validateRecipeContent(makeContent({ steps: [] }))).toContain('Add at least one step');
   });
 
   it('§3.1.1 reports the 1-based position of an ingredient without a name', () => {
@@ -292,14 +292,14 @@ describe('validateRecipeContent', () => {
         { quantity: 1, unit: 'tsp', name: '  ' },
       ],
     });
-    expect(validateRecipeContent(content)).toEqual(['ingredient 2: name is required']);
+    expect(validateRecipeContent(content)).toEqual(['Name ingredient 2']);
   });
 
   it('§3.1.1 rejects an ingredient unit outside the fixed list', () => {
     const content = makeContent({
       ingredients: [{ quantity: 1, unit: 'ounce' as never, name: 'butter' }],
     });
-    expect(validateRecipeContent(content)).toEqual(['ingredient 1: unit is not in the fixed list']);
+    expect(validateRecipeContent(content)).toEqual(['Choose a unit for ingredient 1']);
   });
 
   it('§3.1.1 allows an empty quantity as "to taste" but rejects a negative one', () => {
@@ -308,7 +308,7 @@ describe('validateRecipeContent', () => {
 
     const negative = makeContent({ ingredients: [{ quantity: -1, unit: 'g', name: 'salt' }] });
     expect(validateRecipeContent(negative)).toEqual([
-      'ingredient 1: quantity must be a non-negative number or empty',
+      "Ingredient 1: the quantity can't be negative",
     ]);
   });
 
@@ -319,22 +319,22 @@ describe('validateRecipeContent', () => {
 
   it('§3.1.1 reports the 1-based position of a step without text', () => {
     const content = makeContent({ steps: [{ text: 'Mix.' }, { text: '' }] });
-    expect(validateRecipeContent(content)).toEqual(['step 2: text is required']);
+    expect(validateRecipeContent(content)).toEqual(['Write step 2']);
   });
 
   it('§3.1.1 requires a step durationMinutes to be an integer >= 1', () => {
     expect(validateRecipeContent(makeContent({ steps: [{ text: 'Rest.', durationMinutes: 0 }] }))).toEqual([
-      'step 1: durationMinutes must be an integer >= 1',
+      'Step 1: minutes must be a whole number of at least 1',
     ]);
     expect(validateRecipeContent(makeContent({ steps: [{ text: 'Rest.', durationMinutes: 1.5 }] }))).toEqual([
-      'step 1: durationMinutes must be an integer >= 1',
+      'Step 1: minutes must be a whole number of at least 1',
     ]);
     expect(validateRecipeContent(makeContent({ steps: [{ text: 'Rest.', durationMinutes: 1 }] }))).toEqual([]);
   });
 
   it('§3.1.1 requires prepMinutes and cookMinutes to be integers >= 0 when present', () => {
-    expect(validateRecipeContent(makeContent({ prepMinutes: -1 }))).toContain('prepMinutes must be an integer >= 0');
-    expect(validateRecipeContent(makeContent({ cookMinutes: 12.5 }))).toContain('cookMinutes must be an integer >= 0');
+    expect(validateRecipeContent(makeContent({ prepMinutes: -1 }))).toContain('Prep minutes must be a whole number, 0 or more');
+    expect(validateRecipeContent(makeContent({ cookMinutes: 12.5 }))).toContain('Cook minutes must be a whole number, 0 or more');
     expect(validateRecipeContent(makeContent({ prepMinutes: 0, cookMinutes: 0 }))).toEqual([]);
     expect(validateRecipeContent(makeContent({ prepMinutes: undefined, cookMinutes: undefined }))).toEqual([]);
   });
@@ -348,26 +348,74 @@ describe('validateRecipeContent', () => {
       steps: [],
     });
     expect(validateRecipeContent(content)).toEqual([
-      'title is required',
-      'category must be one of the 14 categories',
-      'servings must be an integer >= 1',
-      'at least one ingredient is required',
-      'at least one step is required',
+      'Give the recipe a title',
+      'Choose a category',
+      'Servings must be a whole number of at least 1',
+      'Add at least one ingredient',
+      'Add at least one step',
     ]);
   });
 
   it('§3.1.1 rejects a title longer than 200 characters', () => {
     expect(validateRecipeContent(makeContent({ title: 'a'.repeat(201) }))).toEqual([
-      'title is longer than 200 characters',
+      'Title can be at most 200 characters',
     ]);
     expect(validateRecipeContent(makeContent({ title: 'a'.repeat(200) }))).toEqual([]);
   });
 
   it('§3.1.1 rejects a description longer than 500 characters', () => {
     expect(validateRecipeContent(makeContent({ description: 'a'.repeat(501) }))).toEqual([
-      'description is longer than 500 characters',
+      'Description can be at most 500 characters',
     ]);
     expect(validateRecipeContent(makeContent({ description: 'a'.repeat(500) }))).toEqual([]);
+  });
+
+  it('UI-43 words every message for people, with 1-based positions and no field names', () => {
+    const content = makeContent({
+      title: 'a'.repeat(201),
+      description: 'd'.repeat(501),
+      ingredients: [
+        { quantity: 1, unit: 'cup', name: 'flour' },
+        { quantity: 1, unit: 'cup', name: 'sugar' },
+        { quantity: -3, unit: 'ounce' as never, name: '' },
+      ],
+      steps: [{ text: 'Mix.' }, { text: 'Rest.', durationMinutes: 0 }, { text: ' ' }],
+      prepMinutes: -5,
+      cookMinutes: -1,
+    });
+
+    const messages = validateRecipeContent(content);
+
+    expect(messages).toEqual([
+      'Title can be at most 200 characters',
+      'Description can be at most 500 characters',
+      'Name ingredient 3',
+      'Choose a unit for ingredient 3',
+      "Ingredient 3: the quantity can't be negative",
+      'Step 2: minutes must be a whole number of at least 1',
+      'Write step 3',
+      'Prep minutes must be a whole number, 0 or more',
+      'Cook minutes must be a whole number, 0 or more',
+    ]);
+    for (const message of messages) {
+      expect(message).not.toMatch(/prepMinutes|cookMinutes|durationMinutes|servings must be an integer|>=/);
+    }
+  });
+
+  it.each([
+    ['2.5 servings', { servings: 2.5 }, 'Servings must be a whole number of at least 1'],
+    ['12.5 cook minutes', { cookMinutes: 12.5 }, 'Cook minutes must be a whole number, 0 or more'],
+    ['12.5 prep minutes', { prepMinutes: 12.5 }, 'Prep minutes must be a whole number, 0 or more'],
+    [
+      'a 1.5-minute step',
+      { steps: [{ text: 'Rest.', durationMinutes: 1.5 }] },
+      'Step 1: minutes must be a whole number of at least 1',
+    ],
+  ])('UI-43 answers %s, which is not a whole number, with a sentence that says so', (_name, overrides, expected) => {
+    const messages = validateRecipeContent(makeContent(overrides as Partial<RecipeContent>));
+
+    expect(messages).toEqual([expected]);
+    expect(expected).not.toMatch(/can't be negative/);
   });
 });
 

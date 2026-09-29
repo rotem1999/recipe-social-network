@@ -1,7 +1,8 @@
 // SPEC.md UI-32 (Enter posts; each comment shows its age, and from 7 days on
 // its date; the list is reloaded after a post so the server's COM-3 order
 // holds; Delete asks "Delete this comment?"), COM-3 (only the author deletes)
-// and UI-41 (comments are user text, so they carry dir="auto").
+// and UI-41 (comments are user text, so they carry dir="auto"); UI-46 (the date
+// and hover formats) and UI-50 (the comment text is its own bidi-text element).
 // `@rsn/web/data-access-api` is mocked at the module boundary.
 import {
   fireEvent,
@@ -215,6 +216,55 @@ describe('CommentsSection', () => {
       rowOf('From early September.').querySelector('.comment-author time')
         ?.textContent,
     ).toBe('3 Sep 2026');
+  });
+
+  it('UI-46 writes an old comment date with formatDate and its hover text with formatDateTime', async () => {
+    // Local time, so the expected text holds in any time zone.
+    const createdAt = new Date(2026, 8, 3, 14, 5).toISOString();
+    mocks.api.listComments.mockResolvedValue(
+      list([comment({ id: 'c1', body: 'Early September.', createdAt })]),
+    );
+    render(<CommentsSection recipeId="r1" hasVotes={false} />);
+
+    await screen.findByText('Early September.');
+    const time = rowOf('Early September.').querySelector('.comment-author time');
+    expect(time?.textContent).toBe('3 Sep 2026');
+    expect(time?.getAttribute('title')).toBe('3 Sep 2026, 14:05');
+    expect(time?.getAttribute('dateTime')).toBe(createdAt);
+  });
+
+  it('UI-46 gives a recent comment the "29 Sep 2026, 01:07" hover text next to its age', async () => {
+    const created = new Date(Date.now() - 2 * HOUR - 5 * MINUTE);
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    const expected = `${created.getDate()} ${months[created.getMonth()]} ${created.getFullYear()}, ${pad(created.getHours())}:${pad(created.getMinutes())}`;
+    mocks.api.listComments.mockResolvedValue(
+      list([
+        comment({ id: 'c1', body: 'Recent.', createdAt: created.toISOString() }),
+      ]),
+    );
+    render(<CommentsSection recipeId="r1" hasVotes={false} />);
+
+    await screen.findByText('Recent.');
+    const time = rowOf('Recent.').querySelector('.comment-author time');
+    expect(time?.textContent).toBe('2 h ago');
+    expect(time?.getAttribute('title')).toBe(expected);
+  });
+
+  it('UI-50 puts the comment text in its own bidi-text element', async () => {
+    mocks.api.listComments.mockResolvedValue(
+      list([comment({ id: 'c1', body: 'טעים מאוד' })]),
+    );
+    render(<CommentsSection recipeId="r1" hasVotes={false} />);
+
+    const body = await screen.findByText('טעים מאוד');
+    expect(body.getAttribute('dir')).toBe('auto');
+    expect(body.classList.contains('bidi-text')).toBe(true);
+    // The row around it keeps the page's direction.
+    expect(rowOf('טעים מאוד').hasAttribute('dir')).toBe(false);
   });
 
   it('UI-32 asks "Delete this comment?" and deletes only after Delete', async () => {

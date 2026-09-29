@@ -1,7 +1,7 @@
 // SPEC.md REC-4/REC-7, SAVE-1/2/6..10, DISC-10, RATE-1..4, COM-1..3, NUT-1..6,
-// IMG-4, UI-12..UI-15, UI-19/20, UI-24/25, UI-29 and UI-38, design guide §5: the
-// recipe detail screen. All data goes through `useApi()`; every mutation adopts
-// the DTO the API returned (§11.6).
+// IMG-4, UI-12..UI-15, UI-19/20, UI-24/25, UI-29, UI-38, UI-47 and UI-50, design
+// guide §5: the recipe detail screen. All data goes through `useApi()`; every
+// mutation adopts the DTO the API returned (§11.6).
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import type {
@@ -253,8 +253,12 @@ export function RecipeDetailScreen({
     !shown.canCook &&
     shown.visibility === 'public' &&
     shown.relation !== 'own';
-  // UI-19: "by <owner>" whenever the caller is not the owner (public previews, shared).
-  const showOwner = shown.relation !== 'own' && shown.relation !== 'saved';
+  // UI-19: "by <owner>" on public recipes the caller does not own; a shared
+  // recipe has none, because its tag already names the owner.
+  const showOwner =
+    shown.relation !== 'own' &&
+    shown.relation !== 'saved' &&
+    shown.relation !== 'shared';
   // UI-20: a TheMealDB copy with no uploaded image shows its catalogue photo.
   const externalUrl = shown.externalImageUrl;
   const photoUrls =
@@ -302,8 +306,8 @@ export function RecipeDetailScreen({
               </Tag>
             </Button>
           </div>
-          {/* UI-41: user-written text carries dir="auto". */}
-          <h1 dir="auto" className="page-title">
+          {/* UI-41/UI-50: user-written text carries dir="auto" and stays left-aligned. */}
+          <h1 dir="auto" className="page-title bidi-text">
             {shown.title}
           </h1>
           {showOwner ? (
@@ -313,7 +317,7 @@ export function RecipeDetailScreen({
           shown.description === '' ? null : (
             <p
               dir="auto"
-              className="text-muted text-lead"
+              className="text-muted text-lead bidi-text"
               style={{ maxWidth: '520px' }}
             >
               {shown.description}
@@ -397,8 +401,10 @@ export function RecipeDetailScreen({
       {/* SAVE-10: the source moved on; Sync appends its current content as a new version. */}
       {showUpdateBanner ? (
         <div role="status" className="update-banner">
+          {/* UI-47: a fork says "forked"; a saved copy keeps "saved". */}
           <span className="text-body grow">
-            The original has changed since you saved it
+            The original has changed since you{' '}
+            {shown.forkedFrom !== null ? 'forked' : 'saved'} it
           </span>
           {originalId === null ? null : (
             <Button variant="ghost" onClick={() => onOpenRecipe(originalId)}>
@@ -478,8 +484,12 @@ export function RecipeDetailScreen({
             {shown.steps.map((step, index) => (
               <li key={`${index}-${step.text}`} className="row align-start gap-3">
                 <span className="step-number">{index + 1}</span>
-                <div dir="auto" className="step-text">
-                  {step.text}
+                <div className="step-text">
+                  {/* UI-50: only the step's own text is directional; the minutes
+                      tag sits outside it, so it always follows on the left-to-right line. */}
+                  <span dir="auto" className="bidi-text">
+                    {step.text}
+                  </span>
                   {/* UI-15: the minutes tag shows on the detail screen too. */}
                   {step.durationMinutes === undefined ? null : (
                     <Tag tone="accent-2" className="step-minutes">
@@ -496,7 +506,8 @@ export function RecipeDetailScreen({
           {!isVersionView && shown.canRate ? (
             <>
               <div className="hr hr-section" />
-              <div className="row gap-3 mb-1">
+              {/* UI-47: no footnote under the rating input. */}
+              <div className="row gap-3 mb-6">
                 <h4 className="m-0">Your rating</h4>
                 <StarInput
                   value={shown.rating?.mine ?? null}
@@ -507,9 +518,6 @@ export function RecipeDetailScreen({
                   <span className="byline">Counted in the average</span>
                 )}
               </div>
-              <p className="text-muted text-small mb-6">
-                Whole stars only — the average shows in quarter steps.
-              </p>
             </>
           ) : null}
 

@@ -3,7 +3,9 @@
 // UI-31 (per-field messages, the §3.1.1 upper limits, empty category, "Qty",
 // Move up / Move down, Add hidden at the limits), UI-25 (every picked image is
 // attempted after create; the notice), UI-40 (dirty reporting and the photo
-// removal confirmations), UI-20 (no removal of a catalogue photo) and UI-41.
+// removal confirmations), UI-20 (no removal of a catalogue photo), UI-41, UI-45
+// (growing two-row step textareas, the "Note" placeholder) and UI-47 (the
+// notice counts in words).
 import {
   fireEvent,
   render,
@@ -157,6 +159,12 @@ describe('RecipeEditorScreen', () => {
     mocks.api.updateRecipe.mockReset();
     mocks.api.uploadImage.mockReset();
     mocks.api.deleteImage.mockReset();
+  });
+
+  afterEach(() => {
+    // UI-25: the upload-notice map is module state; a failed assertion must not
+    // leave a notice behind for the next test.
+    clearUploadNotice('r1');
   });
 
   it('§3.1.1 refuses a recipe with no named ingredient and does not call createRecipe', async () => {
@@ -561,7 +569,7 @@ describe('RecipeEditorScreen', () => {
     expect(onSaved).not.toHaveBeenCalled();
   });
 
-  it('UI-25 attempts every picked image after create, opens the recipe and leaves the notice for the detail screen', async () => {
+  it('UI-25 UI-47 attempts every picked image after create, opens the recipe and leaves the notice for the detail screen', async () => {
     const onSaved = vi.fn();
     mocks.api.uploadImage
       .mockRejectedValueOnce(new ApiError(400, 'Images must be 5 MB or smaller.'))
@@ -586,12 +594,12 @@ describe('RecipeEditorScreen', () => {
     expect(onSaved).toHaveBeenCalledWith({ ...CREATED, imageUrls: [OWN_IMAGE] });
     expect(mocks.api.createRecipe).toHaveBeenCalledTimes(1);
     expect(peekUploadNotice('r1')).toBe(
-      'The recipe was saved, but 1 image(s) could not be uploaded: Images must be 5 MB or smaller.',
+      'The recipe was saved, but 1 image could not be uploaded: Images must be 5 MB or smaller.',
     );
     clearUploadNotice('r1');
   });
 
-  it('UI-25 opens the new recipe even when every upload fails, quoting the first failure', async () => {
+  it('UI-25 UI-47 opens the new recipe even when every upload fails, quoting the first failure', async () => {
     const onSaved = vi.fn();
     mocks.api.uploadImage
       .mockRejectedValueOnce(new ApiError(503, 'Image storage is unavailable.'))
@@ -606,7 +614,7 @@ describe('RecipeEditorScreen', () => {
 
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(CREATED));
     expect(peekUploadNotice('r1')).toBe(
-      'The recipe was saved, but 2 image(s) could not be uploaded: Image storage is unavailable.',
+      'The recipe was saved, but 2 images could not be uploaded: Image storage is unavailable.',
     );
     clearUploadNotice('r1');
   });
@@ -789,6 +797,74 @@ describe('RecipeEditorScreen', () => {
     await screen.findByDisplayValue('tomatoes');
     expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
     expect(container.querySelector(`img[src="${external}"]`)).toBeNull();
+  });
+
+  it('UI-45 makes each step a two-row textarea-grow textarea of at most 1000 characters', () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+
+    const step = screen.getByLabelText('Step 1');
+    expect(step.tagName).toBe('TEXTAREA');
+    expect(step.getAttribute('rows')).toBe('2');
+    expect(step.getAttribute('maxlength')).toBe('1000');
+    expect(step.classList.contains('textarea-grow')).toBe(true);
+    expect(step.classList.contains('input')).toBe(true);
+    expect(step.getAttribute('placeholder')).toBe('Step 1');
+  });
+
+  it('UI-45 grows the step textarea with its text and shrinks it back', () => {
+    // jsdom lays nothing out, so the content height is derived from the lines.
+    const proto = HTMLTextAreaElement.prototype;
+    Object.defineProperty(proto, 'scrollHeight', {
+      configurable: true,
+      get(this: HTMLTextAreaElement) {
+        return 16 + 20 * this.value.split('\n').length;
+      },
+    });
+    Object.defineProperty(proto, 'offsetHeight', {
+      configurable: true,
+      get: () => 42,
+    });
+    Object.defineProperty(proto, 'clientHeight', {
+      configurable: true,
+      get: () => 40,
+    });
+    try {
+      render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+      const step = screen.getByLabelText('Step 1') as HTMLTextAreaElement;
+      // One line: 36 px of content and padding, plus the 2 px border.
+      expect(step.style.height).toBe('38px');
+
+      set('Step 1', 'one\ntwo\nthree\nfour\nfive');
+      expect(step.style.height).toBe('118px');
+
+      set('Step 1', 'one');
+      expect(step.style.height).toBe('38px');
+    } finally {
+      delete (proto as unknown as Record<string, unknown>)['scrollHeight'];
+      delete (proto as unknown as Record<string, unknown>)['offsetHeight'];
+      delete (proto as unknown as Record<string, unknown>)['clientHeight'];
+    }
+  });
+
+  it('UI-45 keeps the line breaks inside a step and trims only the surrounding whitespace when it posts', async () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+    fillValid();
+    set('Step 1', '  \nFry the onion.\nThen add the garlic.\n  ');
+
+    create();
+
+    await waitFor(() => expect(mocks.api.createRecipe).toHaveBeenCalledTimes(1));
+    expect(mocks.api.createRecipe.mock.calls[0][0].steps).toEqual([
+      { text: 'Fry the onion.\nThen add the garlic.', durationMinutes: undefined },
+    ]);
+  });
+
+  it('UI-45 gives the ingredient note the placeholder "Note"', () => {
+    render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
+
+    expect(screen.getByLabelText('Note 1').getAttribute('placeholder')).toBe(
+      'Note',
+    );
   });
 
   it('UI-41 gives the text the user writes dir="auto"', () => {

@@ -1,8 +1,8 @@
-// SPEC.md §3.1.1, REC-1/REC-6/REC-7, IMG-3/IMG-6, UI-11, UI-25 and UI-31: the
-// full recipe editor. Create saves a private version 1; edit saves a new version.
+// SPEC.md §3.1.1, REC-1/REC-6/REC-7, IMG-3/IMG-6, UI-11, UI-25, UI-31 and UI-45:
+// the full recipe editor. Create saves a private version 1; edit saves a new version.
 // Client-side validation shows each message under its own field (UI-31);
 // `validateRecipeContent` from `@rsn/shared/util-domain` stays the last check.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ChangeEvent, ReactElement } from 'react';
 import type {
   RecipeDetailDto,
@@ -46,6 +46,7 @@ import {
   Textarea,
   WashedImage,
 } from '@rsn/web/ui';
+import type { TextareaProps } from '@rsn/web/ui';
 
 export interface RecipeEditorScreenProps {
   /** Omitted on create (REC-1); the recipe being edited otherwise (REC-6). */
@@ -78,6 +79,30 @@ function parseOptionalInt(text: string): number | undefined {
   }
   const value = Number(trimmed);
   return Number.isFinite(value) ? Math.trunc(value) : undefined;
+}
+
+/**
+ * UI-45: a step's text is a two-row textarea that grows with its text, so a
+ * step of up to 1000 characters (§3.1.1) is shown whole while it is written.
+ */
+function GrowingTextarea(props: TextareaProps): ReactElement {
+  const box = useRef<HTMLDivElement>(null);
+  const { value } = props;
+  useLayoutEffect(() => {
+    const area = box.current?.querySelector('textarea');
+    if (area === null || area === undefined) {
+      return;
+    }
+    // Shrink first, so deleted lines give their height back; the border is
+    // added because scrollHeight covers only the content and padding.
+    area.style.height = 'auto';
+    area.style.height = `${area.scrollHeight + area.offsetHeight - area.clientHeight}px`;
+  }, [value]);
+  return (
+    <div ref={box}>
+      <Textarea rows={2} {...props} />
+    </div>
+  );
 }
 
 /** UI-31: one message per field id, in the order the fields appear on screen. */
@@ -817,7 +842,7 @@ export function RecipeEditorScreen({
               <Input
                 id={ids.note(index)}
                 aria-label={`Note ${index + 1}`}
-                placeholder="Note (chopped…)"
+                placeholder="Note"
                 dir="auto"
                 maxLength={INGREDIENT_NOTE_MAX_LENGTH}
                 value={ingredient.note ?? ''}
@@ -878,8 +903,10 @@ export function RecipeEditorScreen({
             className="row align-start wrap"
           >
             <div style={{ flex: 3, minWidth: '200px' }}>
-              <Input
+              {/* UI-45: a growing two-row textarea, at most 1000 characters. */}
+              <GrowingTextarea
                 id={ids.step(index)}
+                className="textarea-grow"
                 aria-label={`Step ${index + 1}`}
                 placeholder={`Step ${index + 1}`}
                 dir="auto"

@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsString, Length } from 'class-validator';
+import { IsString, MaxLength, MinLength } from 'class-validator';
 import type { CommentRequest } from '@rsn/shared/util-contracts';
 import { COMMENT_MAX_LENGTH } from '@rsn/shared/util-domain';
 
@@ -8,10 +8,14 @@ import { COMMENT_MAX_LENGTH } from '@rsn/shared/util-domain';
  * surrounding whitespace, so a whitespace-only comment answers 400.
  */
 export class CommentRequestDto implements CommentRequest {
-  @IsString()
+  // UI-43: messages written for people.
+  @IsString({ message: 'Write a comment' })
   @Transform(({ value }: { value: unknown }): unknown =>
     typeof value === 'string' ? value.trim() : value,
   )
-  @Length(1, COMMENT_MAX_LENGTH)
+  @MinLength(1, { message: 'Write a comment' })
+  @MaxLength(COMMENT_MAX_LENGTH, {
+    message: `Comments can be at most ${COMMENT_MAX_LENGTH} characters`,
+  })
   body!: string;
 }

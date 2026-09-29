@@ -46,7 +46,7 @@ interface RawPick {
  */
 @Injectable()
 export class RecommendService {
-  /** WX-10: the last answer per user and scope, in memory, 60 minutes. */
+  /** WX-10: the last answer per user and scope (plain and Show-another slots), in memory, 60 minutes. */
   private readonly cache = new RecommendCache();
 
   constructor(
@@ -80,11 +80,14 @@ export class RecommendService {
     }
 
     // WX-10: keyed by local date and hour, weather word and the exact
-    // candidate ids; null (no caching) for a zone the runtime does not know.
+    // candidate ids (plus the exclusions for Show another, PERF-003); null
+    // (no caching) for a zone the runtime does not know.
+    const excludedIds = [...excluded];
     const cacheKey = recommendCacheKey({
       timezone: body.timezone,
       condition: snapshot?.condition ?? null,
       candidateIds: candidates.map((card) => card.id),
+      excludedIds,
     });
 
     // WX-10: a hit answers without a model call and without a quota unit
@@ -126,14 +129,17 @@ export class RecommendService {
 
     const picks = this.picksFrom(result.text, candidates, body.scope);
 
-    // WX-10: the answer replaces the cached one for this user and scope. An
-    // empty answer is not cached, so the next visit asks again.
+    // WX-10: the answer replaces the cached one in its own slot for this user
+    // and scope; a Show-another answer goes to a slot of its own and never
+    // replaces the plain answer (PERF-003). An empty answer is not cached, so
+    // the next visit asks again.
     if (cacheKey !== null && picks.length > 0) {
       this.cache.set(
         user.id,
         body.scope,
         cacheKey,
         picks.map((pick) => ({ id: pick.recipe.id, reason: pick.reason })),
+        excludedIds,
       );
     }
 

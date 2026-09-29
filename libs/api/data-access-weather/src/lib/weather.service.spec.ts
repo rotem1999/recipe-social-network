@@ -279,6 +279,100 @@ describe('WeatherService', () => {
     );
   });
 
+  /** WX-9: one Open-Meteo geocoding hit with the documented field names. */
+  function hit(name: string, latitude: number, longitude: number, country: string, timezone: string) {
+    return jsonResponse({
+      results: [{ name, latitude, longitude, country, timezone }],
+    });
+  }
+
+  const SAO_PAULO = (): Response =>
+    hit('São Paulo', -23.5475, -46.63611, 'Brazil', 'America/Sao_Paulo');
+  const BOGOTA = (): Response =>
+    hit('Bogotá', 4.60971, -74.08175, 'Colombia', 'America/Bogota');
+  const HO_CHI_MINH_CITY = (): Response =>
+    hit('Ho Chi Minh City', 10.82302, 106.62965, 'Vietnam', 'Asia/Ho_Chi_Minh');
+
+  it('WX-9 matches "São Paulo" to the segment Sao_Paulo, diacritics removed', async () => {
+    fetchMock.mockResolvedValueOnce(SAO_PAULO());
+
+    await expect(service().geocode('Sao_Paulo')).resolves.toMatchObject({
+      name: 'São Paulo',
+      latitude: -23.5475,
+      longitude: -46.63611,
+    });
+  });
+
+  it('WX-9 matches "Bogotá" to the segment Bogota', async () => {
+    fetchMock.mockResolvedValueOnce(BOGOTA());
+
+    await expect(service().geocode('Bogota')).resolves.toMatchObject({
+      name: 'Bogotá',
+    });
+  });
+
+  it('WX-9 removes diacritics from both sides of the comparison', async () => {
+    fetchMock.mockResolvedValueOnce(
+      hit('Bogota', 4.60971, -74.08175, 'Colombia', 'America/Bogota'),
+    );
+
+    await expect(service().geocode('Bogotá')).resolves.toMatchObject({
+      name: 'Bogota',
+    });
+  });
+
+  it('WX-9 accepts a hit named after the segment followed by " City" (Ho_Chi_Minh)', async () => {
+    fetchMock.mockResolvedValueOnce(HO_CHI_MINH_CITY());
+
+    await expect(service().geocode('Ho_Chi_Minh')).resolves.toMatchObject({
+      name: 'Ho Chi Minh City',
+      latitude: 10.82302,
+    });
+  });
+
+  it('WX-9 gives weather for America/Sao_Paulo named as Open-Meteo spells it', async () => {
+    fetchMock
+      .mockResolvedValueOnce(SAO_PAULO())
+      .mockResolvedValueOnce(jsonResponse(forecastBody(95, 0)));
+
+    const snapshot = await service().weatherFor('America/Sao_Paulo');
+
+    expect(snapshot).toMatchObject({ city: 'São Paulo', condition: 'thunderstorm' });
+    const forecastUrl = new URL(String(fetchMock.mock.calls[1][0]));
+    expect(forecastUrl.searchParams.get('latitude')).toBe('-23.5475');
+  });
+
+  it('WX-9 gives weather for Asia/Ho_Chi_Minh through the " City" hit', async () => {
+    fetchMock
+      .mockResolvedValueOnce(HO_CHI_MINH_CITY())
+      .mockResolvedValueOnce(jsonResponse(forecastBody()));
+
+    await expect(service().weatherFor('Asia/Ho_Chi_Minh')).resolves.toMatchObject({
+      city: 'Ho Chi Minh City',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['a different city with the same letters but for the diacritics', 'Sao_Paula', 'São Paulo'],
+    ['" City" in front of the segment', 'Ho_Chi_Minh', 'City of Ho Chi Minh'],
+    ['more than " City" after the segment', 'Ho_Chi_Minh', 'Ho Chi Minh City Centre'],
+    ['a segment that only starts the hit name', 'Ho_Chi', 'Ho Chi Minh City'],
+    ['" Town" instead of " City"', 'Ho_Chi_Minh', 'Ho Chi Minh Town'],
+  ])('WX-9 rejects %s', async (_name, segment, hitName) => {
+    fetchMock.mockResolvedValueOnce(hit(hitName, 10.82302, 106.62965, 'Vietnam', 'Asia/Ho_Chi_Minh'));
+
+    await expect(service().geocode(segment)).resolves.toBe(null);
+  });
+
+  it('WX-9 the " City" rule does not let UTC resolve to Utrecht', async () => {
+    fetchMock.mockResolvedValueOnce(
+      hit('Utrecht', 52.09083, 5.12222, 'Netherlands', 'Europe/Amsterdam'),
+    );
+
+    await expect(service().geocode('UTC')).resolves.toBe(null);
+  });
+
   it('WX-10 returns null when Open-Meteo geocodes no result', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ results: [] }));
 

@@ -101,13 +101,22 @@ export function useRecommendation(
       if (isStale()) {
         return;
       }
+      // UI-18: with picks on screen a rejected re-prompt reads like an empty one,
+      // so "No recommendation right now" never sits next to picks.
+      if (hadPicks && cause instanceof ApiError && cause.status === 400) {
+        setNotice('No other suggestions right now');
+        return;
+      }
       // COOK-8: cook mode and recommendations share one daily quota.
+      // UI-43: a 400 (e.g. a rejected timezone) never shows its validator text.
       setMessage(
         cause instanceof ApiError && cause.status === 429
           ? 'Daily AI limit reached'
-          : cause instanceof Error
-            ? cause.message
-            : 'No recommendation right now',
+          : cause instanceof ApiError && cause.status === 400
+            ? 'No recommendation right now'
+            : cause instanceof Error
+              ? cause.message
+              : 'No recommendation right now',
       );
     } finally {
       if (!isStale()) {

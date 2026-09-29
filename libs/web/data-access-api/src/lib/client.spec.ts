@@ -6,6 +6,7 @@ import {
   DEFAULT_API_BASE_URL,
   NETWORK_ERROR_MESSAGE,
   SERVER_ERROR_MESSAGE,
+  SERVER_OWN_MESSAGES,
   isConnectivityError,
 } from './client';
 import { TokenStore } from './tokens';
@@ -236,12 +237,12 @@ describe('ApiClient (UI-17)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('§11.6 joins a ValidationPipe message array into one ApiError message', async () => {
+  it('UI-43 shows only the first entry of a ValidationPipe message array', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(
         {
           statusCode: 400,
-          message: ['servings must be at least 1', 'steps should not be empty'],
+          message: ['Servings can be at most 6', 'Write a comment'],
           error: 'Bad Request',
         },
         400,
@@ -257,9 +258,47 @@ describe('ApiClient (UI-17)', () => {
     expect(error.name).toBe('ApiError');
     expect(error.status).toBe(400);
     expect(error.error).toBe('Bad Request');
-    expect(error.message).toBe(
-      'servings must be at least 1, steps should not be empty',
+    expect(error.message).toBe('Servings can be at most 6');
+    expect(error.message).not.toContain('Write a comment');
+  });
+
+  it('UNSPECIFIED falls back to the status text when a 4xx message array is empty', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        status: 400,
+        statusText: 'Bad Request',
+        body: JSON.stringify({ statusCode: 400, message: [], error: 'Bad Request' }),
+      }),
     );
+
+    const client = new ApiClient(store, 'http://localhost:3000/api/v1');
+    const error = (await client
+      .post('/recipes', {})
+      .catch((cause: unknown) => cause)) as ApiError;
+
+    expect(error.status).toBe(400);
+    expect(error.message).toBe('Bad Request');
+  });
+
+  it('UNSPECIFIED falls back to the status text when the first array entry is an empty string', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        status: 400,
+        statusText: 'Bad Request',
+        body: JSON.stringify({
+          statusCode: 400,
+          message: ['', 'Write a comment'],
+          error: 'Bad Request',
+        }),
+      }),
+    );
+
+    const client = new ApiClient(store, 'http://localhost:3000/api/v1');
+    const error = (await client
+      .post('/recipes', {})
+      .catch((cause: unknown) => cause)) as ApiError;
+
+    expect(error.message).toBe('Bad Request');
   });
 
   it('§11.6 keeps a single-string error message', async () => {
@@ -559,6 +598,227 @@ describe('ApiClient errors and connectivity (UI-26)', () => {
     await rejectionOf(client.get('/me'));
 
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe('ApiClient own 5xx texts (UI-43)', () => {
+  const BASE = 'http://localhost:3000/api/v1';
+
+  async function rejectionOf(promise: Promise<unknown>): Promise<ApiError> {
+    const outcome = await promise.then(
+      () => 'resolved' as const,
+      (cause: unknown) => cause,
+    );
+    expect(outcome).toBeInstanceOf(ApiError);
+    return outcome as ApiError;
+  }
+
+  it('UI-43 lists exactly the three API texts SPEC names', () => {
+    expect([...SERVER_OWN_MESSAGES]).toEqual([
+      'The assistant is unavailable right now',
+      "The assistant didn't answer. Ask again.",
+      'Image storage is unavailable right now',
+    ]);
+  });
+
+  it.each([
+    ['COOK-10', '/cook/ask', 'The assistant is unavailable right now'],
+    ['COOK-10', '/cook/ask', "The assistant didn't answer. Ask again."],
+    ['IMG-6', '/recipes/r1/images', 'Image storage is unavailable right now'],
+  ])(
+    'UI-43 keeps the API own %s text on a 503 from %s: "%s"',
+    async (_id, path, text) => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(
+          { statusCode: 503, message: text, error: 'Service Unavailable' },
+          503,
+        ),
+      );
+
+      const client = new ApiClient(store, BASE);
+      const error = await rejectionOf(client.post(path, {}));
+
+      expect(error.status).toBe(503);
+      expect(error.message).toBe(text);
+      expect(error.error).toBe('Service Unavailable');
+    },
+  );
+
+  it('UI-43 keeps an own text on any 5xx status, not only 503', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          statusCode: 500,
+          message: 'Image storage is unavailable right now',
+          error: 'Internal Server Error',
+        },
+        500,
+      ),
+    );
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.get('/recipes/r1'));
+
+    expect(error.status).toBe(500);
+    expect(error.message).toBe('Image storage is unavailable right now');
+  });
+
+  it("UI-43 replaces any other 5xx text with CookBook's server message", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          statusCode: 503,
+          message: 'Service Unavailable',
+          error: 'Service Unavailable',
+        },
+        503,
+      ),
+    );
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.post('/cook/ask', {}));
+
+    expect(error.status).toBe(503);
+    expect(error.message).toBe(SERVER_ERROR_MESSAGE);
+    expect(error.error).toBeUndefined();
+  });
+
+  it('UI-43 does not keep an own text that differs by case, spacing or a suffix', async () => {
+    const client = new ApiClient(store, BASE);
+    for (const text of [
+      'the assistant is unavailable right now',
+      'The assistant is unavailable right now ',
+      'The assistant is unavailable right now: provider 502',
+    ]) {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ statusCode: 503, message: text, error: 'Service Unavailable' }, 503),
+      );
+      const error = await rejectionOf(client.post('/cook/ask', {}));
+      expect(error.message).toBe(SERVER_ERROR_MESSAGE);
+    }
+  });
+
+  it('UI-43 does not keep an own text sent as a message array on a 5xx', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          statusCode: 503,
+          message: ['The assistant is unavailable right now'],
+          error: 'Service Unavailable',
+        },
+        503,
+      ),
+    );
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.post('/cook/ask', {}));
+
+    expect(error.message).toBe(SERVER_ERROR_MESSAGE);
+  });
+
+  it('UI-43 keeps the tokens when a 5xx carries an own text', async () => {
+    store.set('access-1', 'refresh-1');
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          statusCode: 503,
+          message: "The assistant didn't answer. Ask again.",
+          error: 'Service Unavailable',
+        },
+        503,
+      ),
+    );
+
+    const client = new ApiClient(store, BASE);
+    await rejectionOf(client.post('/cook/ask', {}));
+
+    expect(store.get()).toEqual({
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+    });
+    expect(store.sessionEnded).toBe(false);
+  });
+});
+
+describe('ApiClient session end (UI-44)', () => {
+  const BASE = 'http://localhost:3000/api/v1';
+
+  it('UI-44 marks the session ended when the refresh token is rejected with 401', async () => {
+    store.set('stale-access', 'stale-refresh');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(makeResponse({ status: 401 }));
+
+    const client = new ApiClient(store, BASE);
+    await client.get('/me').catch(() => undefined);
+
+    expect(store.get()).toEqual({ accessToken: null, refreshToken: null });
+    expect(store.sessionEnded).toBe(true);
+  });
+
+  it('UI-44 marks the session ended when POST /auth/refresh answers 403', async () => {
+    store.set('stale-access', 'stale-refresh');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(makeResponse({ status: 403 }));
+
+    const client = new ApiClient(store, BASE);
+    await client.get('/me').catch(() => undefined);
+
+    expect(store.sessionEnded).toBe(true);
+  });
+
+  it('UI-44 marks the session ended when the retried request still answers 401', async () => {
+    store.set('stale-access', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(authResponse('access-2', 'refresh-2'))
+      .mockResolvedValueOnce(makeResponse({ status: 401 }));
+
+    const client = new ApiClient(store, BASE);
+    await client.get('/me').catch(() => undefined);
+
+    expect(store.get()).toEqual({ accessToken: null, refreshToken: null });
+    expect(store.sessionEnded).toBe(true);
+  });
+
+  it('UI-44 marks the session ended on a 401 when only an access token was stored', async () => {
+    localStorage.setItem('cookbook.accessToken', 'stale-access');
+    fetchMock.mockResolvedValueOnce(makeResponse({ status: 401 }));
+
+    const client = new ApiClient(store, BASE);
+    await client.get('/me').catch(() => undefined);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store.sessionEnded).toBe(true);
+  });
+
+  it('UI-44 never marks a session ended for a wrong password with no tokens stored', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ statusCode: 401, message: 'Unauthorized', error: 'Unauthorized' }, 401),
+    );
+
+    const client = new ApiClient(store, BASE);
+    const error = (await client
+      .post('/auth/sign-in', { username: 'rotem', password: 'wrong' })
+      .catch((cause: unknown) => cause)) as ApiError;
+
+    expect(error.status).toBe(401);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store.sessionEnded).toBe(false);
+  });
+
+  it('UI-44 leaves sessionEnded false on a network failure or a 5xx', async () => {
+    store.set('access-1', 'refresh-1');
+    fetchMock
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(makeResponse({ status: 502 }));
+
+    const client = new ApiClient(store, BASE);
+    await client.get('/me').catch(() => undefined);
+    await client.get('/me').catch(() => undefined);
+
+    expect(store.sessionEnded).toBe(false);
   });
 });
 

@@ -25,6 +25,9 @@ const MODES: readonly { value: AuthMode; label: string }[] = [
   { value: 'sign-up', label: 'Sign up' },
 ];
 
+/** UI-44: shown above the form when the client ended the session after a 401. */
+export const SESSION_ENDED_MESSAGE = 'Your session ended. Sign in again.';
+
 /** AUTH-5 message for a username that is not 3–32 of `[a-z0-9_.-]`. */
 const USERNAME_MESSAGE =
   'Use 3 to 32 characters: letters, numbers, underscore, dot or hyphen.';
@@ -82,7 +85,7 @@ function validate(
  * under the form.
  */
 export function AuthScreen(): ReactElement {
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, sessionEnded } = useAuth();
   const ids = useId();
   const usernameId = `${ids}-username`;
   const passwordId = `${ids}-password`;
@@ -151,6 +154,11 @@ export function AuthScreen(): ReactElement {
       <p className="text-muted page-lead">
         Recipes for family and friends.
       </p>
+
+      {/* UI-44: only after a session ended on a 401; a sign-out shows nothing. */}
+      {sessionEnded ? (
+        <InlineError className="mb-4">{SESSION_ENDED_MESSAGE}</InlineError>
+      ) : null}
 
       <Segmented
         label="Sign in or sign up"

@@ -1,6 +1,6 @@
-// SPEC.md §7 (COOK-1..COOK-10) and §11.5 UI-15, laid out from the design guide
-// §6 "Cook mode". The screen is full-width without the nav bar; the shell hides
-// the bar on the cook route (UI-16).
+// SPEC.md §7 (COOK-1..COOK-10) and §11.5 UI-15/UI-47/UI-50, laid out from the
+// design guide §6 "Cook mode". The screen is full-width without the nav bar; the
+// shell hides the bar on the cook route (UI-16).
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactElement } from 'react';
 import {
@@ -101,6 +101,9 @@ export function CookScreen({
   const audioRef = useRef<AudioContext | null>(null);
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState<string | null>(null);
+  // UI-47: whether the shown answer replies to a typed question ("Answer") or
+  // is the no-question tip ("Tip for this step").
+  const [answerForQuestion, setAnswerForQuestion] = useState(false);
   const [asking, setAsking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
 
@@ -249,6 +252,7 @@ export function CookScreen({
         return;
       }
       setAnswer(response.answer);
+      setAnswerForQuestion(trimmed.length > 0);
       setQuota(response.quota);
       setAsking(false);
     } catch (cause) {
@@ -325,7 +329,7 @@ export function CookScreen({
         <Button variant="icon" onClick={onExit} title="Leave cook mode">
           <Icon.X size={15} />
         </Button>
-        <span dir="auto" className="cook-title">
+        <span dir="auto" className="cook-title bidi-text">
           {recipe.title}
         </span>
         {timers.length === 0 ? null : (
@@ -367,8 +371,9 @@ export function CookScreen({
           {`Step ${safeIndex + 1} of ${stepCount}`}
         </Kicker>
         {/* UI-3: the step text is the screen's heading, so it takes the h1 token. */}
-        {/* UI-41: user-written text lines up by its own direction. */}
-        <h1 dir="auto" className="cook-step">
+        {/* UI-41/UI-50: user-written text reads in its own direction; the
+            stage keeps the page's left alignment. */}
+        <h1 dir="auto" className="cook-step bidi-text">
           {step.text}
         </h1>
 
@@ -426,9 +431,10 @@ export function CookScreen({
           // UI-15: at most 40% of the window high; a long answer scrolls inside.
           <div className="cook-answer">
             <Kicker tone="accent-2" className="mb-1">
-              Tip for this step
+              {answerForQuestion ? 'Answer' : 'Tip for this step'}
             </Kicker>
-            <div dir="auto" className="cook-answer-text">
+            {/* UI-41/UI-50: AI text, directional inside the left-aligned panel. */}
+            <div dir="auto" className="cook-answer-text bidi-text">
               {answer}
             </div>
           </div>

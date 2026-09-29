@@ -5,7 +5,9 @@
 // Sync) and DISC-10 (In your recipes + Start cooking on a recipe the caller has
 // a copy of); UI-19 (shared tag and owner byline), UI-20 (catalogue photo),
 // UI-24 (comment divider on shared recipes), UI-25 (upload notice), UI-29 (fork
-// Sync confirmation), UI-38 (inline SAVE-9 link) and UI-41 (dir="auto").
+// Sync confirmation), UI-38 (inline SAVE-9 link), UI-41 (dir="auto"), UI-47
+// (no rating footnote, the fork banner wording) and UI-50 (bidi-text elements,
+// the step minutes tag outside the step text).
 import {
   fireEvent,
   render,
@@ -18,7 +20,11 @@ import type {
   RecipeDetailDto,
 } from '@rsn/shared/util-contracts';
 import { RecipeDetailScreen } from './recipe-detail-screen';
-import { clearUploadNotice, setUploadNotice } from './upload-notice';
+import {
+  clearUploadNotice,
+  setUploadNotice,
+  uploadNoticeText,
+} from './upload-notice';
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -192,6 +198,8 @@ const SHARED_WITH_ME: RecipeDetailDto = {
 };
 
 const BANNER_TEXT = 'The original has changed since you saved it';
+/** UI-47: a fork's banner says "forked". */
+const FORK_BANNER_TEXT = 'The original has changed since you forked it';
 
 /**
  * SAVE-9: the attribution paragraph by its whole text, since the linked title
@@ -499,10 +507,21 @@ describe('RecipeDetailScreen', () => {
     expect(onOpenRecipe).toHaveBeenCalledWith('r9');
   });
 
-  it('SAVE-10 shows the update banner on a fork that is behind', async () => {
+  it('SAVE-10 UI-47 shows the update banner on a fork that is behind, saying "since you forked it"', async () => {
     show({ ...FORK, updateAvailable: true });
 
-    expect(await screen.findByText(BANNER_TEXT)).toBeTruthy();
+    const banner = await screen.findByRole('status');
+    expect(within(banner).getByText(FORK_BANNER_TEXT)).toBeTruthy();
+    expect(within(banner).queryByText(BANNER_TEXT)).toBeNull();
+    expect(within(banner).getByRole('button', { name: /Sync/ })).toBeTruthy();
+  });
+
+  it('UI-47 keeps "since you saved it" on the banner of a saved copy', async () => {
+    show({ ...SAVED_COPY, updateAvailable: true });
+
+    const banner = await screen.findByRole('status');
+    expect(within(banner).getByText(BANNER_TEXT)).toBeTruthy();
+    expect(within(banner).queryByText(FORK_BANNER_TEXT)).toBeNull();
   });
 
   it('SAVE-10 shows no update banner when the copy is up to date', async () => {
@@ -578,15 +597,13 @@ describe('RecipeDetailScreen', () => {
     expect(screen.queryByText('Update available')).toBeNull();
   });
 
-  it('UI-19 tags a recipe shared with the caller "Shared with you by <owner>" and shows "by <owner>" under the title', async () => {
+  it('UI-19 tags a recipe shared with the caller "Shared with you by <owner>" and shows no "by <owner>" byline', async () => {
     show({ ...SHARED_WITH_ME, sharedWithUserIds: ['u1', 'u3'] });
 
     expect(await screen.findByText('Shared with you by noa')).toBeTruthy();
     expect(screen.queryByText(/Shared with \d+ friends?/)).toBeNull();
-    const byline = screen.getByText('by noa');
-    expect(byline.tagName).toBe('P');
-    // UI-19: the same muted line style as the SAVE-9 attribution.
-    expect(byline.classList.contains('byline')).toBe(true);
+    // UI-19: the tag already names the owner, so there is no byline.
+    expect(screen.queryByText('by noa')).toBeNull();
   });
 
   it("UI-19 shows the owner's friend count on the owner's own shared recipe and no byline", async () => {
@@ -600,7 +617,10 @@ describe('RecipeDetailScreen', () => {
   it('UI-19 shows "by <owner>" on a public preview and not on a saved copy', async () => {
     const { unmount } = show(PUBLIC_UNSAVED);
 
-    expect(await screen.findByText('by noa')).toBeTruthy();
+    const byline = await screen.findByText('by noa');
+    expect(byline.tagName).toBe('P');
+    // UI-19: the same muted line style as the SAVE-9 attribution.
+    expect(byline.classList.contains('byline')).toBe(true);
     unmount();
 
     show(SAVED_COPY);
@@ -664,8 +684,11 @@ describe('RecipeDetailScreen', () => {
   });
 
   it('UI-25 shows the upload notice the editor left for this recipe, once', async () => {
-    const text =
-      'The recipe was saved, but 1 image(s) could not be uploaded: Images must be 5 MB or smaller.';
+    const text = uploadNoticeText(1, 'Images must be 5 MB or smaller.');
+    // UI-47: the notice counts in words.
+    expect(text).toBe(
+      'The recipe was saved, but 1 image could not be uploaded: Images must be 5 MB or smaller.',
+    );
     setUploadNotice('r1', text);
     try {
       const { unmount } = show(OWN);
@@ -705,7 +728,7 @@ describe('RecipeDetailScreen', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(mocks.api.syncRecipe).not.toHaveBeenCalled();
-    expect(screen.getByText(BANNER_TEXT)).toBeTruthy();
+    expect(screen.getByText(FORK_BANNER_TEXT)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /Sync/ }));
     dialog = screen.getByRole('dialog');
@@ -743,6 +766,50 @@ describe('RecipeDetailScreen', () => {
     expect(link.classList.contains('btn')).toBe(false);
     expect(link.parentElement?.tagName).toBe('P');
     expect(link.parentElement?.classList.contains('byline')).toBe(true);
+  });
+
+  it('UI-47 shows no footnote under the rating input', async () => {
+    show(PUBLIC_UNSAVED);
+
+    const stars = await screen.findByRole('radiogroup', {
+      name: 'Your rating',
+    });
+    expect(stars).toBeTruthy();
+    expect(screen.queryByText(/Whole stars only/)).toBeNull();
+    expect(screen.queryByText(/quarter steps/)).toBeNull();
+  });
+
+  it('UI-50 puts the title, description and step text in bidi-text elements', async () => {
+    show(OWN);
+
+    const title = await screen.findByRole('heading', {
+      level: 1,
+      name: 'Shakshuka',
+    });
+    expect(title.classList.contains('bidi-text')).toBe(true);
+    expect(
+      screen.getByText('Eggs poached in tomato.').classList.contains('bidi-text'),
+    ).toBe(true);
+    const step = screen.getByText('Fry the onion.');
+    expect(step.getAttribute('dir')).toBe('auto');
+    expect(step.classList.contains('bidi-text')).toBe(true);
+  });
+
+  it("UI-50 keeps a step's minutes tag outside its directional text element", async () => {
+    show({ ...OWN, steps: [{ text: 'טגנו את הבצל.', durationMinutes: 5 }] });
+
+    const step = await screen.findByText('טגנו את הבצל.');
+    expect(step.getAttribute('dir')).toBe('auto');
+    const minutes = screen.getByText(/5 min/);
+    expect(step.contains(minutes)).toBe(false);
+    expect(minutes.closest('[dir]')).toBeNull();
+    // Both still sit in the same step row, the tag after the text.
+    const row = step.closest('.step-text');
+    expect(row).not.toBeNull();
+    expect(row?.contains(minutes)).toBe(true);
+    expect(
+      step.compareDocumentPosition(minutes) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
   });
 
   it('UI-41 gives the title, description, ingredient names and step text dir="auto"', async () => {

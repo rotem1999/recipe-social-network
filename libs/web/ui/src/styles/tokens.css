@@ -522,6 +522,32 @@ textarea.input {
    below is built from the tokens above; no new colour is introduced.
    ══════════════════════════════════════════════════════════════════════ */
 
+/* UI-42: the elevation scale's top step. Dialogs sit above every page element,
+   including `.washed` photos (whose filter opens a stacking context), the
+   `.card-above` layer (1) and the nav menu (20). */
+:root {
+  --z-dialog: 1000;
+}
+/* UI-42: Dialog portals into document.body; this keeps the backdrop on top. */
+.dialog-backdrop {
+  z-index: var(--z-dialog);
+}
+/* UI-50: user/AI text reads in its own direction; a Hebrew paragraph lines up on
+   the right, while clamped titles in cards and recommendation lists stay left-aligned. */
+.bidi-text {
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+.bidi-text.card-clamp {
+  text-align: left;
+}
+/* UI-45: the editor's growing step textarea (height set from JS). */
+textarea.input.textarea-grow {
+  min-height: 0;
+  resize: none;
+  overflow-y: hidden;
+}
+
 /* the prototype's <style> block */
 a:hover {
   color: var(--color-accent-600);

@@ -1,6 +1,6 @@
-// SPEC.md NUT-1..6, NUT-11 and UI-15, design guide §5: the nutrition patch under
-// the ingredients. The headline is the NUT-11 range between both estimates; the
-// mode switch (ingredient mode by default, NUT-4) picks the breakdown below it.
+// SPEC.md NUT-1..6, NUT-11, UI-15 and UI-48, design guide §5: the nutrition patch
+// under the ingredients. The headline is the NUT-11 range between both estimates;
+// the mode switch (ingredient mode by default, NUT-4) picks the breakdown below it.
 // A miss reads "nutrition data unavailable" (NUT-5).
 import { useState } from 'react';
 import type { ReactElement } from 'react';
@@ -99,24 +99,30 @@ export function NutritionPatch({
 
       {/* NUT-6 ingredients mode: one row per ingredient, unmatched ones named. */}
       {data !== null && data.mode === 'ingredients' ? (
-        <ul className="list-reset stack gap-1 mt-3">
-          {data.ingredients.map((ingredient, index) => (
-            <li
-              key={`${index}-${ingredient.name}`}
-              className="nutrition-row"
-            >
-              {/* UI-41: ingredient names are user text. */}
-              <span dir="auto">{ingredient.name}</span>
-              <span
-                className={ingredient.kcal === null ? 'text-muted' : undefined}
-              >
-                {ingredient.kcal === null
-                  ? UNAVAILABLE
-                  : `${formatKcal(ingredient.kcal)} kcal`}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <>
+          {/* UI-48: the rows do not follow the servings stepper (UI-14), so they say so. */}
+          <p className="text-muted text-caption m-0 mt-3 mb-1">
+            For the recipe as written ({data.servings}{' '}
+            {data.servings === 1 ? 'serving' : 'servings'})
+          </p>
+          <ul className="list-reset stack gap-1">
+            {data.ingredients.map((ingredient, index) => (
+              <li key={`${index}-${ingredient.name}`} className="nutrition-row">
+                {/* UI-41: ingredient names are user text. */}
+                <span dir="auto">{ingredient.name}</span>
+                <span
+                  className={
+                    ingredient.kcal === null ? 'text-muted' : undefined
+                  }
+                >
+                  {ingredient.kcal === null
+                    ? UNAVAILABLE
+                    : `${formatKcal(ingredient.kcal)} kcal`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
       ) : null}
 
       {/* NUT-6 meal mode: the FNDDS description the total was taken from. */}

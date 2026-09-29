@@ -4,9 +4,13 @@
 // is handed over here, keyed by recipe id, without a detour through the shell.
 const notices = new Map<string, string>();
 
-/** UI-25: "The recipe was saved, but N image(s) could not be uploaded: <message>". */
+/**
+ * UI-25/UI-47: "The recipe was saved, but 1 image could not be uploaded: <message>",
+ * counting in words ("2 images").
+ */
 export function uploadNoticeText(failed: number, message: string): string {
-  return `The recipe was saved, but ${failed} image(s) could not be uploaded: ${message}`;
+  const images = failed === 1 ? '1 image' : `${failed} images`;
+  return `The recipe was saved, but ${images} could not be uploaded: ${message}`;
 }
 
 /** Called by the editor before it hands the new recipe to the shell. */

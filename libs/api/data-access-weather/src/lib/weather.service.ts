@@ -62,7 +62,7 @@ export class WeatherService {
   constructor(private readonly config: ConfigService) {}
 
   /**
-   * WX-10: weather context for one IANA timezone, or null when there is no
+   * WX-10: weather context for one timezone, or null when there is no
    * city segment, the city cannot be geocoded, or Open-Meteo is unreachable —
    * recommendations must still work without weather.
    */
@@ -103,7 +103,8 @@ export class WeatherService {
   /**
    * WX-9: forward geocoding, city name → coordinates. Null when Open-Meteo
    * returns no hit, or a hit whose `name` is not the city itself (compared
-   * case-insensitively, underscores as spaces), so a fuzzy match such as
+   * case-insensitively, underscores as spaces, diacritics removed, or the city
+   * followed by " City"; BUG-025), so a fuzzy match such as
    * "UTC" → Utrecht never becomes weather context (BUG-017). Cached per city
    * for 30 minutes (WX-10).
    */
@@ -246,11 +247,25 @@ function localHourIn(timezone: string): number {
   return Number(hour) % 24;
 }
 
-/** WX-9: a geocoding hit names the city segment itself, ignoring case and underscores. */
+/**
+ * WX-9 (BUG-025): a geocoding hit names the city segment itself, ignoring
+ * case, underscores and diacritics (`Sao_Paulo` = "São Paulo"), or names it
+ * followed by " City" (`Ho_Chi_Minh` = "Ho Chi Minh City").
+ */
 function sameCityName(hitName: string, city: string): boolean {
-  const normalise = (value: string): string =>
-    value.replace(/_/g, ' ').trim().toLowerCase();
-  return normalise(hitName) === normalise(city);
+  const hit = comparableCityName(hitName);
+  const segment = comparableCityName(city);
+  return hit === segment || hit === `${segment} city`;
+}
+
+/** WX-9: underscores as spaces, Unicode NFD without combining marks, lower case. */
+function comparableCityName(value: string): string {
+  return value
+    .replace(/_/g, ' ')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .trim()
+    .toLowerCase();
 }
 
 function readCache<T>(

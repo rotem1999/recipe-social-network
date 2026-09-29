@@ -1,10 +1,14 @@
-// SPEC.md COM-1..3, UI-15 and UI-32, design guide §5: the comment list. Votes
-// render on public recipes only (COM-2); the author can delete their own comment
-// (COM-3) after a confirmation.
+// SPEC.md COM-1..3, UI-15, UI-32, UI-46 and UI-50, design guide §5: the comment
+// list. Votes render on public recipes only (COM-2); the author can delete their
+// own comment (COM-3) after a confirmation.
 import { useState } from 'react';
 import type { KeyboardEvent, ReactElement } from 'react';
 import type { CommentDto } from '@rsn/shared/util-contracts';
-import { COMMENT_MAX_LENGTH } from '@rsn/shared/util-domain';
+import {
+  COMMENT_MAX_LENGTH,
+  formatDate,
+  formatDateTime,
+} from '@rsn/shared/util-domain';
 import {
   ApiError,
   useApi,
@@ -52,25 +56,9 @@ function ageLabel(createdAt: string, now: number): string {
   if (elapsed < WEEK_MS) {
     return `${Math.floor(elapsed / DAY_MS)} d ago`;
   }
-  // A fixed month list, because the locale's short month differs ("Sept", "Sep 3,").
-  return `${created.getDate()} ${MONTHS[created.getMonth()]} ${created.getFullYear()}`;
+  // UI-46: the app's one date format, "3 Sep 2026", whatever the OS locale.
+  return formatDate(created);
 }
-
-/** UI-32: the three-letter months of "3 Sep 2026". */
-const MONTHS = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-] as const;
 
 /** COM-1: the comment section of a public or shared recipe. */
 export function CommentsSection({
@@ -197,7 +185,8 @@ export function CommentsSection({
                 <time
                   className="text-muted comment-age"
                   dateTime={comment.createdAt}
-                  title={new Date(comment.createdAt).toLocaleString()}
+                  // UI-46: the hover text is "29 Sep 2026, 01:07".
+                  title={formatDateTime(comment.createdAt)}
                 >
                   {ageLabel(comment.createdAt, now)}
                 </time>
@@ -213,8 +202,9 @@ export function CommentsSection({
                   </Button>
                 ) : null}
               </div>
-              {/* UI-41: comments are user text, so they carry dir="auto". */}
-              <div dir="auto" className="text-body">
+              {/* UI-41/UI-50: comments are user text, so they carry dir="auto";
+                  the row stays left-aligned. */}
+              <div dir="auto" className="text-body bidi-text">
                 {comment.body}
               </div>
             </div>

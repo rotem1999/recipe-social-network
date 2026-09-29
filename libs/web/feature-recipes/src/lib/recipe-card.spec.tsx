@@ -1,7 +1,7 @@
 // SPEC.md §11.5 UI-10 (meta line), UI-13 (star row) and SAVE-10 (the Home
 // card's "Update available" tag on a copy that is behind its source), UI-36 (an
 // `article` whose title is a real button, the tag above the title, the clamp)
-// and UI-38 / UI-41. The card is presentational, so it needs no API mock
+// and UI-38 / UI-41 / UI-50. The card is presentational, so it needs no API mock
 // (libs/web/CLAUDE.md).
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { RecipeCardDto } from '@rsn/shared/util-contracts';
@@ -210,5 +210,18 @@ describe('RecipeCard', () => {
 
     const title = screen.getByRole('button', { name: 'שקשוקה' });
     expect(title.querySelector('[dir="auto"]')?.textContent).toBe('שקשוקה');
+  });
+
+  it('UI-50 keeps the title button left-aligned and clamps the title text in a bidi-text element', () => {
+    const { container } = render(
+      <RecipeCard recipe={card({ title: 'שקשוקה' })} onOpen={vi.fn()} />,
+    );
+
+    const title = screen.getByRole('button', { name: 'שקשוקה' });
+    expect(title.hasAttribute('dir')).toBe(false);
+    expect(container.querySelector('article')?.hasAttribute('dir')).toBe(false);
+    const text = title.querySelector('[dir="auto"]');
+    expect(text?.classList.contains('bidi-text')).toBe(true);
+    expect(text?.classList.contains('card-clamp')).toBe(true);
   });
 });

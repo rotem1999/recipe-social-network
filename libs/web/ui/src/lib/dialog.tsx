@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { cx } from './class-names';
 
 export interface DialogProps {
@@ -28,7 +29,13 @@ function focusablesIn(panel: HTMLElement): HTMLElement[] {
   );
 }
 
-/** UI-3: the guide's `.dialog-backdrop` + `.dialog` at the top elevation. */
+/**
+ * UI-3: the guide's `.dialog-backdrop` + `.dialog` at the top elevation.
+ * UI-42: rendered into `document.body` through a React portal, with the
+ * backdrop at `--z-dialog`, so no stacking context on the opening screen (a
+ * `.washed` photo's filter, say) can paint over the dialog or its buttons.
+ * React events still bubble through the component tree, as before.
+ */
 export function Dialog({
   title,
   children,
@@ -119,7 +126,7 @@ export function Dialog({
     }
   };
 
-  return (
+  return createPortal(
     <div
       className="dialog-backdrop"
       onMouseDown={onBackdropMouseDown}
@@ -144,6 +151,7 @@ export function Dialog({
           <div className="dialog-actions">{actions}</div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

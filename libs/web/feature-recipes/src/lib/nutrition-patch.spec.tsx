@@ -1,7 +1,8 @@
 // SPEC.md NUT-11 (the headline range between both estimates, its wording, the
 // USDA source line and "Not counted: …"; a response without `estimate` reads as
 // null), NUT-4 (the mode switch picks the breakdown, not the headline), NUT-5
-// ("nutrition data unavailable") and UI-41 (ingredient names are user text).
+// ("nutrition data unavailable"), UI-41 (ingredient names are user text) and
+// UI-48 (the breakdown says it is for the recipe as written).
 // `@rsn/web/data-access-api` is mocked at the module boundary.
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type {
@@ -202,6 +203,57 @@ describe('NutritionPatch', () => {
 
     expect(await screen.findByText('195 kcal')).toBeTruthy();
     expect(screen.getByText('nutrition data unavailable')).toBeTruthy();
+  });
+
+  it('UI-48 heads the ingredient breakdown "For the recipe as written (N servings)"', async () => {
+    const { container } = render(<NutritionPatch recipeId="r1" />);
+
+    const heading = await screen.findByText(
+      'For the recipe as written (2 servings)',
+    );
+    // The heading sits above the rows it describes.
+    const rows = container.querySelector('.nutrition-row');
+    expect(rows).not.toBeNull();
+    expect(
+      heading.compareDocumentPosition(rows as Element) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
+  it('UI-48 says "1 serving" when the recipe is written for one', async () => {
+    mocks.api.getNutrition.mockResolvedValue({
+      ...ingredientsResponse(RANGE),
+      servings: 1,
+    });
+    render(<NutritionPatch recipeId="r1" />);
+
+    expect(
+      await screen.findByText('For the recipe as written (1 serving)'),
+    ).toBeTruthy();
+    expect(screen.queryByText(/1 servings/)).toBeNull();
+  });
+
+  it('UI-48 shows no "For the recipe as written" heading in meal mode, which has no rows', async () => {
+    mocks.api.getNutrition.mockImplementation(
+      async (_id: string, mode: 'ingredients' | 'meal') =>
+        mode === 'ingredients'
+          ? ingredientsResponse(RANGE)
+          : {
+              ...ingredientsResponse(RANGE),
+              mode: 'meal',
+              ingredients: [],
+              matchedDescription: 'Chicken teriyaki with rice',
+            },
+    );
+    render(<NutritionPatch recipeId="r1" />);
+    await screen.findByText('For the recipe as written (2 servings)');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Meal name' }));
+
+    await screen.findByText(
+      'Matched "Chicken teriyaki with rice" in FoodData Central.',
+    );
+    expect(screen.queryByText(/For the recipe as written/)).toBeNull();
   });
 
   it('UI-41 gives the ingredient names of the breakdown dir="auto"', async () => {

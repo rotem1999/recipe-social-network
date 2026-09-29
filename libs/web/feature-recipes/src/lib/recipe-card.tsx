@@ -62,8 +62,9 @@ export function RecipeCard({
           onClick={() => onOpen(recipe.id)}
         >
           {/* UI-41: the title is user text, so it carries dir="auto".
-              UI-36: clamped to two lines; the full title is in `title`. */}
-          <span dir="auto" className="card-clamp">
+              UI-36: clamped to two lines; the full title is in `title`.
+              UI-50: the clamp and ellipsis follow the text; the card stays left-aligned. */}
+          <span dir="auto" className="card-clamp bidi-text">
             {recipe.title}
           </span>
           {/* UI-36: stretches the title button's click area over the whole card. */}

@@ -9,6 +9,7 @@ import type {
   FriendsResponse,
   UserSearchResultDto,
 } from '@rsn/shared/util-contracts';
+import { formatDate } from '@rsn/shared/util-domain';
 import { ApiError, useApi, useRequest } from '@rsn/web/data-access-api';
 import {
   Button,
@@ -20,7 +21,7 @@ import {
   Tag,
 } from '@rsn/web/ui';
 
-/** FR-4: the search only runs once the box holds something worth matching. */
+/** FR-4 / UI-49: the search only runs once the box holds at least 2 characters. */
 const MIN_QUERY_LENGTH = 2;
 /** Keystrokes settle for this long before `GET /users/search` is called. */
 const SEARCH_DEBOUNCE_MS = 300;
@@ -43,12 +44,13 @@ function initialOf(username: string): string {
   return username.slice(0, 1).toUpperCase();
 }
 
-/** "Friends since 3 May 2026" for a FriendDto's ISO `since` (invalid dates are dropped). */
+/**
+ * UI-46: "Friends since 3 May 2026" for a FriendDto's ISO `since`, in the app's
+ * one date format; an unreadable date drops the line.
+ */
 function sinceLine(since: string): string | null {
-  const date = new Date(since);
-  return Number.isNaN(date.getTime())
-    ? null
-    : `Friends since ${date.toLocaleDateString()}`;
+  const date = formatDate(since);
+  return date === '' ? null : `Friends since ${date}`;
 }
 
 interface PersonRowProps {
@@ -236,6 +238,8 @@ export function FriendsScreen(): ReactElement {
   };
 
   const searched = query.trim().length >= MIN_QUERY_LENGTH;
+  // UI-49: something typed, but too short to search — say so instead of going quiet.
+  const tooShort = !searched && query.trim().length > 0;
 
   return (
     <main className="screen screen-narrow">
@@ -255,8 +259,14 @@ export function FriendsScreen(): ReactElement {
         autoCorrect="off"
         spellCheck={false}
         onChange={(event) => setQuery(event.target.value)}
+        aria-describedby={tooShort ? `${searchId}-hint` : undefined}
         className="mt-4"
       />
+      {tooShort ? (
+        <p id={`${searchId}-hint`} className="text-muted field-hint">
+          Type at least 2 characters
+        </p>
+      ) : null}
 
       {searchError === null ? null : <InlineError>{searchError}</InlineError>}
 

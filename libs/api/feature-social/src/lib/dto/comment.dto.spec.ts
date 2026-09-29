@@ -114,4 +114,37 @@ describe('CommentRequestDto', () => {
 
     expect(error.getStatus()).toBe(400);
   });
+
+  /** The 400's message list. */
+  function messagesOf(error: BadRequestException): string[] {
+    return (error.getResponse() as { message: string[] }).message;
+  }
+
+  it.each([
+    ['empty', ''],
+    ['whitespace only', '  \n\t '],
+  ])('UI-43 answers an %s comment with "Write a comment"', async (_name, body) => {
+    const error = await failureOf(validate({ body }));
+
+    expect(messagesOf(error)).toEqual(['Write a comment']);
+  });
+
+  it('UI-43 answers a comment that is not text with "Write a comment"', async () => {
+    const error = await failureOf(validate({ body: 42 }));
+
+    expect(messagesOf(error)).toContain('Write a comment');
+    for (const message of messagesOf(error)) {
+      expect(message).not.toMatch(/^body /);
+    }
+  });
+
+  it('UI-43 answers a 2001-character comment with "Comments can be at most 2000 characters"', async () => {
+    const error = await failureOf(
+      validate({ body: 'x'.repeat(COMMENT_MAX_LENGTH + 1) }),
+    );
+
+    expect(messagesOf(error)).toEqual([
+      'Comments can be at most 2000 characters',
+    ]);
+  });
 });

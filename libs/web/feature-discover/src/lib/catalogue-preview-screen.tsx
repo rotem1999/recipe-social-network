@@ -5,8 +5,7 @@
 // and a Cook button on that copy.
 import { useCallback, useState } from 'react';
 import type { ReactElement } from 'react';
-import type { Ingredient } from '@rsn/shared/util-domain';
-import { totalMinutes } from '@rsn/shared/util-domain';
+import { formatQuantity, totalMinutes } from '@rsn/shared/util-domain';
 import { useApi, useRequest } from '@rsn/web/data-access-api';
 import { Button, Icon, InlineError, Tag, WashedImage } from '@rsn/web/ui';
 import { errorMessage } from './error-message';
@@ -18,16 +17,6 @@ export interface CataloguePreviewScreenProps {
   onSaved(recipeId: string): void;
   /** DISC-10: opens cook mode on the caller's existing copy of this meal. */
   onCook(recipeId: string): void;
-}
-
-/** §3.1.1: an empty quantity means "to taste"; `none` carries no unit word. */
-function measure(ingredient: Ingredient): string {
-  if (ingredient.quantity === null) {
-    return 'to taste';
-  }
-  return ingredient.unit === 'none'
-    ? String(ingredient.quantity)
-    : `${ingredient.quantity} ${ingredient.unit}`;
 }
 
 export function CataloguePreviewScreen({
@@ -145,7 +134,8 @@ export function CataloguePreviewScreen({
                     className="measure-row"
                   >
                     <span className="ingredient-qty measure-qty">
-                      {measure(ingredient)}
+                      {/* UI-37 / UI-51: the shared formatter, as the saved copy reads. */}
+                      {formatQuantity(ingredient.quantity, ingredient.unit)}
                     </span>
                     <span dir="auto" className="grow">
                       {ingredient.name}

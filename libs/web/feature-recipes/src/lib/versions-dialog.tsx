@@ -1,8 +1,9 @@
-// SPEC.md REC-7 and UI-12: the version list behind the "vN" tag. Picking a
-// version opens it read-only; there is no restore.
+// SPEC.md REC-7, UI-12, UI-46 and UI-50: the version list behind the "vN" tag.
+// Picking a version opens it read-only; there is no restore.
 import { useState } from 'react';
 import type { ReactElement } from 'react';
 import type { RecipeDetailDto } from '@rsn/shared/util-contracts';
+import { formatDateTime } from '@rsn/shared/util-domain';
 import { ApiError, useApi, useRequest } from '@rsn/web/data-access-api';
 import { Button, Dialog, InlineError, Tag } from '@rsn/web/ui';
 
@@ -11,12 +12,6 @@ export interface VersionsDialogProps {
   /** Called with the version the owner picked, read-only (REC-7). */
   onPick: (version: RecipeDetailDto, versionNumber: number) => void;
   onClose: () => void;
-}
-
-/** A version's creation time in the viewer's own locale. */
-function formatDate(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
 }
 
 /** REC-7: every version stays viewable; visibility applies to the whole history. */
@@ -70,12 +65,13 @@ export function VersionsDialog({
           <div key={version.versionNumber} className="version-row">
             <span className="version-number">v{version.versionNumber}</span>
             <span className="grow">
-              {/* UI-41: the title is user text. */}
-              <span dir="auto" className="text-body">
+              {/* UI-41/UI-50: the title is user text. */}
+              <span dir="auto" className="text-body bidi-text">
                 {version.title}
               </span>
               <span className="text-muted text-small version-date">
-                {formatDate(version.createdAt)}
+                {/* UI-46: "29 Sep 2026, 01:07", independent of the OS locale. */}
+                {formatDateTime(version.createdAt)}
               </span>
             </span>
             {version.isCurrent ? <Tag tone="accent-2">Current</Tag> : null}

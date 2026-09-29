@@ -2,6 +2,15 @@ import { afterEach, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { Dialog } from './dialog';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+// UI-42 checks the checked-in stylesheet (read-only): Vitest's default `css`
+// setting blanks CSS imports, `?raw` included, so the text is read directly.
+const tokensCss = readFileSync(
+  resolve(import.meta.dirname, '../styles/tokens.css'),
+  'utf8',
+);
 
 afterEach(cleanup);
 
@@ -14,7 +23,7 @@ afterEach(cleanup);
  */
 describe('Dialog (UI-3)', () => {
   it('UI-3 renders the CookBook dialog shell with its title and body', () => {
-    const { container } = render(
+    const { baseElement } = render(
       <Dialog title="Delete recipe" onClose={vi.fn()}>
         This cannot be undone.
       </Dialog>,
@@ -22,31 +31,31 @@ describe('Dialog (UI-3)', () => {
 
     const dialog = screen.getByRole('dialog');
     expect(dialog.getAttribute('aria-modal')).toBe('true');
-    expect(container.querySelector('.dialog-title')?.textContent).toBe(
+    expect(baseElement.querySelector('.dialog-title')?.textContent).toBe(
       'Delete recipe',
     );
-    expect(container.querySelector('.dialog-body')?.textContent).toBe(
+    expect(baseElement.querySelector('.dialog-body')?.textContent).toBe(
       'This cannot be undone.',
     );
     // The title element is the accessible name of the dialog.
     expect(dialog.getAttribute('aria-labelledby')).toBe(
-      container.querySelector('.dialog-title')?.id,
+      baseElement.querySelector('.dialog-title')?.id,
     );
   });
 
   it('UI-3 omits the body and the action row when neither is given', () => {
-    const { container } = render(<Dialog title="Empty" onClose={vi.fn()} />);
+    const { baseElement } = render(<Dialog title="Empty" onClose={vi.fn()} />);
 
-    expect(container.querySelector('.dialog-body')).toBeNull();
-    expect(container.querySelector('.dialog-actions')).toBeNull();
+    expect(baseElement.querySelector('.dialog-body')).toBeNull();
+    expect(baseElement.querySelector('.dialog-actions')).toBeNull();
   });
 
   it('UI-3 renders the action row when actions are given', () => {
-    const { container } = render(
+    const { baseElement } = render(
       <Dialog title="Delete recipe" actions={<button>Delete</button>} onClose={vi.fn()} />,
     );
 
-    expect(container.querySelector('.dialog-actions')?.textContent).toBe(
+    expect(baseElement.querySelector('.dialog-actions')?.textContent).toBe(
       'Delete',
     );
   });
@@ -71,11 +80,11 @@ describe('Dialog (UI-3)', () => {
 
   it('UI-6 calls onClose when the backdrop is clicked', () => {
     const onClose = vi.fn();
-    const { container } = render(
+    const { baseElement } = render(
       <Dialog title="Delete recipe" onClose={onClose} />,
     );
 
-    const backdrop = container.querySelector('.dialog-backdrop');
+    const backdrop = baseElement.querySelector('.dialog-backdrop');
     if (backdrop === null) {
       throw new Error('the dialog backdrop was not rendered');
     }
@@ -111,10 +120,10 @@ describe('Dialog (UI-3)', () => {
 
   it('UI-22 closes when the press and the release both land on the backdrop', () => {
     const onClose = vi.fn();
-    const { container } = render(
+    const { baseElement } = render(
       <Dialog title="Delete recipe" onClose={onClose} />,
     );
-    const backdrop = backdropOf(container);
+    const backdrop = backdropOf(baseElement);
 
     fireEvent.mouseDown(backdrop);
     fireEvent.click(backdrop);
@@ -124,12 +133,12 @@ describe('Dialog (UI-3)', () => {
 
   it('UI-22 stays open when a drag starts inside the panel and ends on the backdrop', () => {
     const onClose = vi.fn();
-    const { container } = render(
+    const { baseElement } = render(
       <Dialog title="Delete recipe" onClose={onClose}>
         <input aria-label="Name" />
       </Dialog>,
     );
-    const backdrop = backdropOf(container);
+    const backdrop = backdropOf(baseElement);
 
     // The browser fires click on the common ancestor, the backdrop.
     fireEvent.mouseDown(screen.getByLabelText('Name'));
@@ -140,12 +149,12 @@ describe('Dialog (UI-3)', () => {
 
   it('UI-22 closes on a later real backdrop click after a drag from the panel', () => {
     const onClose = vi.fn();
-    const { container } = render(
+    const { baseElement } = render(
       <Dialog title="Delete recipe" onClose={onClose}>
         This cannot be undone.
       </Dialog>,
     );
-    const backdrop = backdropOf(container);
+    const backdrop = backdropOf(baseElement);
 
     fireEvent.mouseDown(screen.getByRole('dialog'));
     fireEvent.click(backdrop);
@@ -236,6 +245,68 @@ describe('Dialog (UI-3)', () => {
   });
 });
 
+/**
+ * UI-42: the dialog renders into `document.body` through a portal, outside the
+ * screen that opens it, and its backdrop sits at `--z-dialog`, above every other
+ * elevation in the `libs/web/ui` stylesheet.
+ */
+describe('Dialog portal and elevation (UI-42)', () => {
+  it('UI-42 renders the backdrop as a direct child of document.body, not inside the opening screen', () => {
+    const { container } = render(
+      <section className="washed" data-testid="screen">
+        <Dialog title="Remove recipe" onClose={vi.fn()} actions={ACTIONS} />
+      </section>,
+    );
+
+    const screenElement = screen.getByTestId('screen');
+    const backdrop = backdropOf(document.body);
+    expect(backdrop.parentElement).toBe(document.body);
+    expect(screenElement.contains(backdrop)).toBe(false);
+    expect(container.contains(backdrop)).toBe(false);
+    expect(backdrop.contains(screen.getByRole('dialog'))).toBe(true);
+  });
+
+  it('UI-42 removes the portalled backdrop from document.body when the dialog unmounts', () => {
+    const { unmount } = render(
+      <Dialog title="Remove recipe" onClose={vi.fn()} />,
+    );
+    expect(document.body.querySelector('.dialog-backdrop')).not.toBeNull();
+
+    unmount();
+
+    expect(document.body.querySelector('.dialog-backdrop')).toBeNull();
+  });
+
+  it('UI-42 defines --z-dialog and puts .dialog-backdrop at var(--z-dialog)', () => {
+    const zDialog = zDialogValue();
+    expect(zDialog).toBeGreaterThan(0);
+    expect(tokensCss).toMatch(
+      /\.dialog-backdrop\s*\{[^}]*z-index:\s*var\(--z-dialog\)\s*;/,
+    );
+  });
+
+  it('UI-42 keeps every other z-index in the ui stylesheet below --z-dialog', () => {
+    const zDialog = zDialogValue();
+    const numeric = [...tokensCss.matchAll(/z-index:\s*(-?\d+)\s*;/g)].map(
+      (match) => Number(match[1]),
+    );
+
+    expect(numeric.length).toBeGreaterThan(0);
+    for (const value of numeric) {
+      expect(value).toBeLessThan(zDialog);
+    }
+  });
+});
+
+/** The `--z-dialog` value declared in the ui stylesheet. */
+function zDialogValue(): number {
+  const match = /--z-dialog:\s*(\d+)\s*;/.exec(tokensCss);
+  if (match === null) {
+    throw new Error('--z-dialog is not declared in tokens.css');
+  }
+  return Number(match[1]);
+}
+
 /** Two action buttons: Cancel first, Delete last. */
 const ACTIONS = (
   <>
@@ -244,8 +315,8 @@ const ACTIONS = (
   </>
 );
 
-function backdropOf(container: HTMLElement): HTMLElement {
-  const backdrop = container.querySelector('.dialog-backdrop');
+function backdropOf(root: HTMLElement): HTMLElement {
+  const backdrop = root.querySelector('.dialog-backdrop');
   if (!(backdrop instanceof HTMLElement)) {
     throw new Error('the dialog backdrop was not rendered');
   }

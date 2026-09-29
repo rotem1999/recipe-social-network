@@ -2,7 +2,7 @@
 // copy is removed with "Remove from my recipes") and SAVE-8 (a saved copy stays
 // private, so its row has no Visibility select and no Share…); UI-28 (Shared
 // opens the Share dialog without writing, Public asks first, Private writes at
-// once).
+// once) and UI-51 (the Share dialog's Save needs a ticked friend).
 import {
   fireEvent,
   render,
@@ -224,6 +224,48 @@ describe('OwnerActions', () => {
     );
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith(shared));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('UI-51 keeps the Share dialog Save disabled until a friend is ticked', async () => {
+    show(OWN);
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Visibility' }), {
+      target: { value: 'shared' },
+    });
+    const dialog = await screen.findByRole('dialog');
+    const save = within(dialog).getByRole('button', {
+      name: 'Save',
+    }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.click(save);
+    expect(mocks.api.setVisibility).not.toHaveBeenCalled();
+
+    const noa = await within(dialog).findByLabelText('noa');
+    fireEvent.click(noa);
+    expect(save.disabled).toBe(false);
+
+    // Unticking the only friend disables Save again.
+    fireEvent.click(noa);
+    expect(save.disabled).toBe(true);
+    expect(mocks.api.setVisibility).not.toHaveBeenCalled();
+  });
+
+  it('UI-51 enables Save at once when Share… opens on friends the recipe is already shared with', async () => {
+    show({ ...OWN, visibility: 'shared', sharedWithUserIds: ['u2'] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Share…/ }));
+    const dialog = await screen.findByRole('dialog');
+    const noa = (await within(dialog).findByLabelText(
+      'noa',
+    )) as HTMLInputElement;
+    expect(noa.checked).toBe(true);
+    const save = within(dialog).getByRole('button', {
+      name: 'Save',
+    }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+
+    fireEvent.click(noa);
+    expect(save.disabled).toBe(true);
   });
 
   it('UI-28 choosing "Public" asks "Publish to everyone?" and Cancel writes nothing', async () => {

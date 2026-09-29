@@ -1,7 +1,8 @@
 // SPEC.md COOK-1 (the live step tracker), COOK-2 / COOK-9 (one request per
 // question, carrying the recipe and the current step, nothing kept between
 // steps), COOK-8 (the daily quota, counted server-side and shown here) and
-// §3.1.1 (only a step with durationMinutes gets a timer).
+// §3.1.1 (only a step with durationMinutes gets a timer); UI-47 (the answer's
+// heading) and UI-50 (user and AI text in its own bidi-text element).
 import {
   act,
   fireEvent,
@@ -387,6 +388,76 @@ describe('CookScreen', () => {
     const answer = await screen.findByText(ANSWER.answer);
     expect(answer.getAttribute('dir')).toBe('auto');
     expect(answer.closest('.cook-answer')).not.toBeNull();
+  });
+
+  it('UI-47 heads the answer to a typed question "Answer"', async () => {
+    show();
+
+    fireEvent.change(
+      await screen.findByLabelText('Question about this step'),
+      { target: { value: 'Can I use shallots?' } },
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: /Ask about this step/ }),
+    );
+
+    const answer = await screen.findByText(ANSWER.answer);
+    const box = answer.closest('.cook-answer') as HTMLElement;
+    expect(within(box).getByText('Answer')).toBeTruthy();
+    expect(within(box).queryByText('Tip for this step')).toBeNull();
+  });
+
+  it('UI-47 heads the answer to an ask without a question "Tip for this step"', async () => {
+    show();
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Ask about this step/ }),
+    );
+
+    const answer = await screen.findByText(ANSWER.answer);
+    const box = answer.closest('.cook-answer') as HTMLElement;
+    expect(within(box).getByText('Tip for this step')).toBeTruthy();
+    expect(within(box).queryByText('Answer')).toBeNull();
+  });
+
+  it('UI-47 COOK-2 treats a blank question as no question and heads the answer "Tip for this step"', async () => {
+    show();
+
+    fireEvent.change(
+      await screen.findByLabelText('Question about this step'),
+      { target: { value: '   ' } },
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: /Ask about this step/ }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.api.cookAsk).toHaveBeenCalledWith({
+        recipeId: 'r1',
+        stepIndex: 0,
+        question: undefined,
+      }),
+    );
+    const answer = await screen.findByText(ANSWER.answer);
+    const box = answer.closest('.cook-answer') as HTMLElement;
+    expect(within(box).getByText('Tip for this step')).toBeTruthy();
+  });
+
+  it('UI-50 puts the recipe title, the step text and the AI answer in bidi-text elements', async () => {
+    show();
+
+    const step = await screen.findByRole('heading', { level: 1 });
+    expect(step.classList.contains('bidi-text')).toBe(true);
+    const title = screen.getByText('Shakshuka');
+    expect(title.getAttribute('dir')).toBe('auto');
+    expect(title.classList.contains('bidi-text')).toBe(true);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /Ask about this step/ }),
+    );
+    const answer = await screen.findByText(ANSWER.answer);
+    expect(answer.getAttribute('dir')).toBe('auto');
+    expect(answer.classList.contains('bidi-text')).toBe(true);
   });
 
   it('UI-41 gives the recipe title, the step text and the question box dir="auto"', async () => {

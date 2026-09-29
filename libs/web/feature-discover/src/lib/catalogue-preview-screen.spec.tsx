@@ -197,4 +197,55 @@ describe('CataloguePreviewScreen', () => {
       'auto',
     );
   });
+
+  it('UI-51 / UI-37 formats preview quantities with the shared formatter: "2 pieces", "2½ cups"', async () => {
+    mocks.api.cataloguePreview.mockResolvedValue({
+      ...PREVIEW,
+      ingredients: [
+        { quantity: 2, unit: 'piece', name: 'eggs' },
+        { quantity: 2.5, unit: 'cup', name: 'milk' },
+      ],
+    });
+    show({});
+
+    expect(await screen.findByText('2 pieces')).toBeTruthy();
+    expect(screen.getByText('2½ cups')).toBeTruthy();
+    expect(screen.queryByText('2 piece')).toBeNull();
+    expect(screen.queryByText('2.5 cup')).toBeNull();
+  });
+
+  it('UI-51 / UI-37 keeps the singular after 1 and after a fraction below 1 in the preview', async () => {
+    mocks.api.cataloguePreview.mockResolvedValue({
+      ...PREVIEW,
+      ingredients: [
+        { quantity: 1, unit: 'cup', name: 'flour' },
+        { quantity: 0.75, unit: 'cup', name: 'sugar' },
+        { quantity: 1.5, unit: 'tbsp', name: 'olive oil' },
+        { quantity: 0.5, unit: 'piece', name: 'lemon' },
+      ],
+    });
+    show({});
+
+    expect(await screen.findByText('1 cup')).toBeTruthy();
+    expect(screen.getByText('¾ cup')).toBeTruthy();
+    expect(screen.getByText('1½ tbsp')).toBeTruthy();
+    // `piece` never shows fraction glyphs.
+    expect(screen.getByText('0.5 pieces')).toBeTruthy();
+  });
+
+  it('UI-51 / UI-37 reads an empty quantity as "to taste" with `none` and as the unit alone otherwise', async () => {
+    mocks.api.cataloguePreview.mockResolvedValue({
+      ...PREVIEW,
+      ingredients: [
+        { quantity: null, unit: 'none', name: 'salt' },
+        { quantity: null, unit: 'pinch', name: 'nutmeg' },
+        { quantity: 3, unit: 'none', name: 'onions' },
+      ],
+    });
+    show({});
+
+    expect(await screen.findByText('to taste')).toBeTruthy();
+    expect(screen.getByText('pinch')).toBeTruthy();
+    expect(screen.getByText('3')).toBeTruthy();
+  });
 });

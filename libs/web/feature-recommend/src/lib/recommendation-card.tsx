@@ -65,18 +65,22 @@ export function RecommendationCard({
                 <li key={pick.recipe.id} className="row gap-4 wrap">
                   <div className="grow" style={{ minWidth: '180px' }}>
                     <h3 className="mb-1">
-                      {/* UI-41: `start`, so a right-to-left title lines up on the right. */}
+                      {/* UI-50: the button keeps the page's left alignment; only
+                          the title text is directional (UI-41), and it is clamped
+                          to two lines like cards (UI-36), the full title in `title`. */}
                       <button
                         type="button"
                         onClick={() => onOpen(pick.recipe.id)}
                         className="plain-button inherit-font"
-                        dir="auto"
+                        title={pick.recipe.title}
                       >
-                        {pick.recipe.title}
+                        <span dir="auto" className="card-clamp bidi-text">
+                          {pick.recipe.title}
+                        </span>
                       </button>
                     </h3>
-                    {/* UI-41: the model's reason is AI-written text. */}
-                    <p dir="auto" className="recommendation-reason">
+                    {/* UI-41/UI-50: the model's reason is AI-written text. */}
+                    <p dir="auto" className="recommendation-reason bidi-text">
                       {pick.reason}
                     </p>
                   </div>

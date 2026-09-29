@@ -260,4 +260,87 @@ describe('RecipeWriteDto', () => {
       ).resolves.toBeInstanceOf(RecipeWriteDto);
     });
   });
+
+  describe('UI-43 messages written for people', () => {
+    /** The 400's message list; this pipe has Nest's default exception factory. */
+    async function messagesOf(overrides: Record<string, unknown>): Promise<string[]> {
+      const error = await failureOf(validate(body(overrides)));
+      expect(error).toBeInstanceOf(BadRequestException);
+      return (error.getResponse() as { message: string[] }).message;
+    }
+
+    it.each([
+      ['an empty title', { title: '' }, 'Give the recipe a title'],
+      [
+        'a title over 200 characters',
+        { title: 't'.repeat(RECIPE_TITLE_MAX_LENGTH + 1) },
+        'Title can be at most 200 characters',
+      ],
+      [
+        'a description over 500 characters',
+        { description: 'd'.repeat(RECIPE_DESCRIPTION_MAX_LENGTH + 1) },
+        'Description can be at most 500 characters',
+      ],
+      ['an unknown category', { category: 'Cuisine' }, 'Choose a category'],
+      ['0 servings', { servings: 0 }, 'Servings must be at least 1'],
+      ['7 servings', { servings: MAX_SERVINGS + 1 }, 'Servings can be at most 6'],
+      ['2.5 servings', { servings: 2.5 }, 'Servings must be a whole number'],
+      ['no ingredients', { ingredients: [] }, 'Add at least one ingredient'],
+      [
+        '51 ingredients',
+        { ingredients: Array.from({ length: MAX_INGREDIENTS + 1 }, () => ingredient()) },
+        'A recipe can have at most 50 ingredients',
+      ],
+      ['no steps', { steps: [] }, 'Add at least one step'],
+      [
+        '61 steps',
+        { steps: Array.from({ length: MAX_STEPS + 1 }, () => step()) },
+        'A recipe can have at most 60 steps',
+      ],
+      ['negative prep minutes', { prepMinutes: -1 }, "Prep minutes can't be negative"],
+      ['negative cook minutes', { cookMinutes: -1 }, "Cook minutes can't be negative"],
+      [
+        'cook minutes over 1440',
+        { cookMinutes: MAX_PREP_COOK_MINUTES + 1 },
+        'Cook minutes can be at most 1440',
+      ],
+    ])('UI-43 answers %s with a sentence written for people', async (_name, overrides, expected) => {
+      const messages = await messagesOf(overrides);
+
+      expect(messages).toContain(expected);
+    });
+
+    it.each([
+      ['an empty ingredient name', { ingredients: [ingredient({ name: '' })] }, 'Name this ingredient'],
+      ['an unknown unit', { ingredients: [ingredient({ unit: 'ounce' })] }, 'Choose a unit'],
+      ['a quantity of 0', { ingredients: [ingredient({ quantity: 0 })] }, 'Quantity must be more than 0'],
+      [
+        'a quantity over 10000',
+        { ingredients: [ingredient({ quantity: MAX_INGREDIENT_QUANTITY + 1 })] },
+        'Quantity can be at most 10000',
+      ],
+      ['an empty step', { steps: [step({ text: '' })] }, 'Write this step'],
+      ['a step of 0 minutes', { steps: [step({ durationMinutes: 0 })] }, 'Minutes must be at least 1'],
+    ])('UI-43 answers %s inside the lists with a sentence written for people', async (_name, overrides, expected) => {
+      const messages = await messagesOf(overrides);
+
+      // Nest's default factory puts the property path in front; the global
+      // exceptionFactory in apps/api/src/main.ts removes it (covered in main.spec.ts).
+      expect(messages.some((message) => message.endsWith(expected))).toBe(true);
+    });
+
+    it('UI-43 never sends a class-validator default text for a top-level field', async () => {
+      const messages = await messagesOf({
+        title: '',
+        category: 'Cuisine',
+        servings: 0,
+        prepMinutes: -1,
+      });
+
+      for (const message of messages) {
+        expect(message).not.toMatch(/^(title|category|servings|prepMinutes) /);
+        expect(message).not.toMatch(/must be one of the following values|must not be less than/);
+      }
+    });
+  });
 });

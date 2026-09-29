@@ -326,6 +326,130 @@ describe('FriendsScreen', () => {
     await waitFor(() => expect(mocks.api.searchUsers).toHaveBeenCalledTimes(2));
     expect(mocks.api.searchUsers).toHaveBeenLastCalledWith('no');
   });
+
+  it('UI-49 says "Type at least 2 characters" for exactly 1 character and sends no request', async () => {
+    render(<FriendsScreen />);
+    await waitFor(() => expect(mocks.api.getFriends).toHaveBeenCalled());
+    const box = screen.getByLabelText('Find by username or email');
+
+    fireEvent.change(box, { target: { value: 'n' } });
+    await sleep(AFTER_DEBOUNCE_MS);
+
+    const hint = screen.getByText('Type at least 2 characters');
+    expect(mocks.api.searchUsers).not.toHaveBeenCalled();
+    // The hint is the input's description, so a screen reader reads it too.
+    expect(hint.id).not.toBe('');
+    expect(box.getAttribute('aria-describedby')).toBe(hint.id);
+  });
+
+  it('UI-49 counts characters after trimming: one letter between spaces still gets the hint', async () => {
+    render(<FriendsScreen />);
+    await waitFor(() => expect(mocks.api.getFriends).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText('Find by username or email'), {
+      target: { value: '  n  ' },
+    });
+    await sleep(AFTER_DEBOUNCE_MS);
+
+    expect(screen.getByText('Type at least 2 characters')).toBeTruthy();
+    expect(mocks.api.searchUsers).not.toHaveBeenCalled();
+  });
+
+  it('UI-49 shows no hint on an empty field', async () => {
+    render(<FriendsScreen />);
+    await waitFor(() => expect(mocks.api.getFriends).toHaveBeenCalled());
+    const box = screen.getByLabelText('Find by username or email');
+
+    expect(screen.queryByText('Type at least 2 characters')).toBeNull();
+    expect(box.getAttribute('aria-describedby')).toBeNull();
+
+    fireEvent.change(box, { target: { value: 'n' } });
+    expect(screen.getByText('Type at least 2 characters')).toBeTruthy();
+    fireEvent.change(box, { target: { value: '' } });
+
+    expect(screen.queryByText('Type at least 2 characters')).toBeNull();
+    expect(box.getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('UI-49 shows no hint for a field of spaces only (nothing left after trimming)', async () => {
+    render(<FriendsScreen />);
+    await waitFor(() => expect(mocks.api.getFriends).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText('Find by username or email'), {
+      target: { value: '   ' },
+    });
+    await sleep(AFTER_DEBOUNCE_MS);
+
+    expect(screen.queryByText('Type at least 2 characters')).toBeNull();
+    expect(mocks.api.searchUsers).not.toHaveBeenCalled();
+  });
+
+  it('UI-49 drops the hint and searches once a second character is typed', async () => {
+    render(<FriendsScreen />);
+    await waitFor(() => expect(mocks.api.getFriends).toHaveBeenCalled());
+    const box = screen.getByLabelText('Find by username or email');
+
+    fireEvent.change(box, { target: { value: 'n' } });
+    expect(screen.getByText('Type at least 2 characters')).toBeTruthy();
+
+    await typeQuery('no');
+
+    expect(screen.queryByText('Type at least 2 characters')).toBeNull();
+    expect(box.getAttribute('aria-describedby')).toBeNull();
+    expect(mocks.api.searchUsers).toHaveBeenCalledTimes(1);
+  });
+
+  it('UI-46 reads "Friends since 29 Sep 2026" under a friend', async () => {
+    mocks.api.getFriends.mockResolvedValue({
+      friends: [
+        { userId: 'u2', username: 'noa', since: '2026-09-29T12:00:00.000Z' },
+      ],
+      incoming: [],
+      outgoing: [],
+    });
+    render(<FriendsScreen />);
+
+    expect(await screen.findByText('Friends since 29 Sep 2026')).toBeTruthy();
+  });
+
+  it('UI-46 formats "Friends since" independently of the system locale', async () => {
+    const localeDate = vi
+      .spyOn(Date.prototype, 'toLocaleDateString')
+      .mockReturnValue('29/09/2026');
+    const localeString = vi
+      .spyOn(Date.prototype, 'toLocaleString')
+      .mockReturnValue('29/09/2026, 12:00:00');
+    try {
+      mocks.api.getFriends.mockResolvedValue({
+        friends: [
+          { userId: 'u2', username: 'noa', since: '2026-05-03T12:00:00.000Z' },
+        ],
+        incoming: [],
+        outgoing: [],
+      });
+      render(<FriendsScreen />);
+
+      expect(await screen.findByText('Friends since 3 May 2026')).toBeTruthy();
+      expect(screen.queryByText(/29\/09\/2026/)).toBeNull();
+    } finally {
+      localeDate.mockRestore();
+      localeString.mockRestore();
+    }
+  });
+
+  it('UI-46 drops the "Friends since" line for an unreadable date and keeps the friend', async () => {
+    mocks.api.getFriends.mockResolvedValue({
+      friends: [{ userId: 'u2', username: 'noa', since: 'not a date' }],
+      incoming: [],
+      outgoing: [],
+    });
+    render(<FriendsScreen />);
+
+    expect(await screen.findByText('noa')).toBeTruthy();
+    expect(screen.queryByText(/Friends since/)).toBeNull();
+    expect(screen.queryByText(/Invalid Date/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
+  });
 });
 
 /** UI-26 fixtures: the empty state text and a mapped client error. */

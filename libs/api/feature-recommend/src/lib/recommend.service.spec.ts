@@ -581,11 +581,12 @@ describe('RecommendService.recommend cache (WX-10)', () => {
     expect(harness.quota.consume).toHaveBeenCalledTimes(2);
   });
 
-  it('WX-10 "Show another" calls the model even when the plain request is cached, and its answer replaces the cached one', async () => {
+  it('WX-10 "Show another" calls the model even when the plain request is cached, and its answer never replaces the cached plain one', async () => {
     const harness = homeHarness();
     await harness.service.recommend(USER, HOME);
 
-    // An excluded id outside the candidates leaves the sent list, and so the key, unchanged.
+    // An excluded id outside the candidates leaves the sent candidate list
+    // unchanged; the answer still goes to the Show-another slot (PERF-003).
     harness.openRouter.chat.mockResolvedValueOnce(
       chatResult('{"picks":[{"id":"b","reason":"lighter"}]}'),
     );
@@ -599,7 +600,35 @@ describe('RecommendService.recommend cache (WX-10)', () => {
     expect(another.picks.map((pick) => pick.recipe.id)).toEqual(['b']);
     expect(
       afterwards.picks.map((pick) => [pick.recipe.id, pick.reason]),
-    ).toEqual([['b', 'lighter']]);
+    ).toEqual([['a', 'warming']]);
+  });
+
+  it('WX-10 after "Show another" excludes a candidate, a later plain visit in the same hour gets the plain answer from the cache', async () => {
+    const harness = homeHarness();
+    await harness.service.recommend(USER, HOME);
+
+    harness.openRouter.chat.mockResolvedValueOnce(
+      chatResult('{"picks":[{"id":"b","reason":"lighter"}]}'),
+    );
+    await harness.service.recommend(USER, { ...HOME, excludeRecipeIds: ['a'] });
+    harness.calls.length = 0;
+    const afterwards = await harness.service.recommend(USER, HOME);
+
+    expect(harness.openRouter.chat).toHaveBeenCalledTimes(2);
+    expect(harness.quota.consume).toHaveBeenCalledTimes(2);
+    expect(harness.calls).toEqual(['current']);
+    expect(
+      afterwards.picks.map((pick) => [pick.recipe.id, pick.reason]),
+    ).toEqual([['a', 'warming']]);
+  });
+
+  it('WX-10 a "Show another" answer does not seed the plain slot when no plain answer was cached', async () => {
+    const harness = homeHarness('{"picks":[{"id":"b","reason":"lighter"}]}');
+
+    await harness.service.recommend(USER, { ...HOME, excludeRecipeIds: ['a'] });
+    await harness.service.recommend(USER, HOME);
+
+    expect(harness.openRouter.chat).toHaveBeenCalledTimes(2);
   });
 
   it('WX-10 an answer with no usable pick is not cached', async () => {

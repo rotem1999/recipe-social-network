@@ -2,7 +2,8 @@
 // tokens in localStorage, one automatic refresh on 401. SPEC.md §11.6: JSON in and
 // out, errors shaped as `ApiErrorResponse` (`{ statusCode, message, error }`).
 // UI-26: network failures and 5xx answers reach the screen as CookBook's own
-// words, and only a rejected refresh or a second 401 clears the tokens.
+// words (UI-43: except the API's own assistant and storage texts), and only a
+// rejected refresh or a second 401 clears the tokens, ending the session (UI-44).
 import type {
   ApiErrorResponse,
   AuthResponse,
@@ -18,16 +19,27 @@ const REFRESH_PATH = '/auth/refresh';
 /** UI-26: the message of every request that never got an HTTP answer (status 0). */
 export const NETWORK_ERROR_MESSAGE = "Can't reach CookBook's server.";
 
-/** UI-26: the message of every 5xx answer; the server's own text is never shown. */
+/** UI-26: the message of every 5xx answer except the texts of {@link SERVER_OWN_MESSAGES}. */
 export const SERVER_ERROR_MESSAGE =
   "Something went wrong on CookBook's server. Try again.";
+
+/**
+ * UI-43: the API's own user-facing 5xx texts (COOK-10, §11.6, IMG-3), shown as
+ * they are when a 5xx body's `message` is exactly one of them.
+ */
+export const SERVER_OWN_MESSAGES: readonly string[] = [
+  'The assistant is unavailable right now',
+  "The assistant didn't answer. Ask again.",
+  'Image storage is unavailable right now',
+];
 
 /** HTTP verbs used by the §11.6 surface. */
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /**
  * A non-2xx response from the API. `message` comes from `ApiErrorResponse`;
- * the array form produced by the global ValidationPipe (§11.6) is joined.
+ * of the array form produced by the global ValidationPipe (§11.6) only the
+ * first entry is kept (UI-43).
  */
 export class ApiError extends Error {
   readonly status: number;
@@ -74,11 +86,31 @@ function resolveBaseUrl(): string {
   return base.replace(/\/+$/, '');
 }
 
-/** Turns a failed response into an ApiError, joining ValidationPipe message arrays. */
+/** Reads a 5xx body; UI-43 keeps only the texts of {@link SERVER_OWN_MESSAGES}. */
+async function toServerError(response: Response): Promise<ApiError> {
+  let message = SERVER_ERROR_MESSAGE;
+  let error: string | undefined;
+  try {
+    const body = (await response.json()) as ApiErrorResponse;
+    if (
+      typeof body?.message === 'string' &&
+      SERVER_OWN_MESSAGES.includes(body.message)
+    ) {
+      message = body.message;
+      error = body.error;
+    }
+  } catch {
+    // Not a JSON error body (proxy or gateway page); the UI-26 text stands.
+  }
+  return new ApiError(response.status, message, error);
+}
+
+/** Turns a failed response into an ApiError; a ValidationPipe array keeps its first entry. */
 async function toApiError(response: Response): Promise<ApiError> {
   if (response.status >= 500) {
-    // UI-26: "Internal server error" and similar texts never reach the screen.
-    return new ApiError(response.status, SERVER_ERROR_MESSAGE);
+    // UI-26: "Internal server error" and similar texts never reach the screen;
+    // UI-43: the API's own assistant and storage texts do.
+    return toServerError(response);
   }
   let message =
     response.statusText || `Request failed with status ${response.status}`;
@@ -86,7 +118,11 @@ async function toApiError(response: Response): Promise<ApiError> {
   try {
     const body = (await response.json()) as ApiErrorResponse;
     if (Array.isArray(body?.message)) {
-      message = body.message.join(', ');
+      // UI-43 / SEC-006: every DTO message is a sentence for people; the first one is shown.
+      const [first] = body.message;
+      if (typeof first === 'string' && first.length > 0) {
+        message = first;
+      }
     } else if (typeof body?.message === 'string' && body.message.length > 0) {
       message = body.message;
     }
@@ -195,8 +231,9 @@ export class ApiClient {
 
     if (!response.ok) {
       if (response.status === 401) {
-        // UI-26: still 401 after the one refresh; the app returns to sign-in (UI-9).
-        this.tokens.clear();
+        // UI-26: still 401 after the one refresh; the app returns to sign-in (UI-9)
+        // and says the session ended (UI-44).
+        this.tokens.endSession();
       }
       throw await toApiError(response);
     }
@@ -236,7 +273,8 @@ export class ApiClient {
   private async exchangeRefreshToken(): Promise<boolean> {
     const refreshToken = this.tokens.getRefreshToken();
     if (refreshToken === null) {
-      this.tokens.clear();
+      // UI-44: a 401 with no refresh token ends a session only if one was stored.
+      this.tokens.endSession();
       return false;
     }
     // A network failure rejects with status 0 and keeps the tokens (UI-26).
@@ -249,8 +287,8 @@ export class ApiClient {
       body: JSON.stringify({ refreshToken }),
     });
     if (response.status === 401 || response.status === 403) {
-      // UI-26: the API rejected the refresh token; the session is over.
-      this.tokens.clear();
+      // UI-26: the API rejected the refresh token; the session is over (UI-44).
+      this.tokens.endSession();
       return false;
     }
     if (!response.ok) {

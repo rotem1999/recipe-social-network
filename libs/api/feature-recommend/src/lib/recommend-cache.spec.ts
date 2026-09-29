@@ -100,6 +100,59 @@ describe('RecommendCache (WX-10)', () => {
 
     expect(cache.get(USER_A, 'home', 'key-1')).toEqual(PICKS);
   });
+
+  it('WX-10 a Show-another answer (excluded ids) never replaces the plain answer', () => {
+    const cache = new RecommendCache();
+    const another = [{ id: 'b', reason: 'lighter' }];
+    cache.set(USER_A, 'home', 'key-1', PICKS);
+
+    cache.set(USER_A, 'home', 'key-1', another, ['a']);
+
+    expect(cache.get(USER_A, 'home', 'key-1')).toEqual(PICKS);
+    expect(cache.get(USER_A, 'home', 'key-1', ['a'])).toEqual(another);
+  });
+
+  it('WX-10 the plain slot and the Show-another slot are read separately', () => {
+    const cache = new RecommendCache();
+    cache.set(USER_A, 'home', 'key-1', PICKS, ['a']);
+
+    expect(cache.get(USER_A, 'home', 'key-1')).toBeUndefined();
+    expect(cache.get(USER_A, 'home', 'key-1', [])).toBeUndefined();
+    expect(cache.get(USER_A, 'home', 'key-1', ['a'])).toEqual(PICKS);
+  });
+
+  it('WX-10 an empty exclusion list is the plain slot', () => {
+    const cache = new RecommendCache();
+    cache.set(USER_A, 'home', 'key-1', PICKS, []);
+
+    expect(cache.get(USER_A, 'home', 'key-1')).toEqual(PICKS);
+  });
+
+  it('WX-10 a later Show-another answer replaces only the Show-another slot', () => {
+    const cache = new RecommendCache();
+    cache.set(USER_A, 'home', 'plain', PICKS);
+    cache.set(USER_A, 'home', 'another-1', [{ id: 'b', reason: '1' }], ['a']);
+
+    cache.set(USER_A, 'home', 'another-2', [{ id: 'c', reason: '2' }], ['a', 'b']);
+
+    expect(cache.get(USER_A, 'home', 'plain')).toEqual(PICKS);
+    expect(cache.get(USER_A, 'home', 'another-1', ['a'])).toBeUndefined();
+    expect(cache.get(USER_A, 'home', 'another-2', ['a', 'b'])).toEqual([
+      { id: 'c', reason: '2' },
+    ]);
+  });
+
+  it('WX-10 the Show-another slot is per user and scope too, and expires after 60 minutes', () => {
+    const cache = new RecommendCache();
+    cache.set(USER_A, 'home', 'key-1', PICKS, ['a']);
+
+    expect(cache.get(USER_B, 'home', 'key-1', ['a'])).toBeUndefined();
+    expect(cache.get(USER_A, 'discover', 'key-1', ['a'])).toBeUndefined();
+
+    jest.advanceTimersByTime(60 * MINUTE);
+
+    expect(cache.get(USER_A, 'home', 'key-1', ['a'])).toBeUndefined();
+  });
 });
 
 describe('recommendCacheKey (WX-10)', () => {
@@ -168,5 +221,35 @@ describe('recommendCacheKey (WX-10)', () => {
   it('WX-10 returns null (never cached) for a timezone Intl does not know', () => {
     expect(key({ timezone: 'Mars/Olympus_Mons' })).toBeNull();
     expect(key({ timezone: 'Foo/Bar' })).toBeNull();
+  });
+
+  it('WX-10 the plain key is unchanged by an absent or empty exclusion list', () => {
+    expect(key({ excludedIds: [] })).toBe(key());
+    expect(key({ excludedIds: undefined })).toBe(key());
+  });
+
+  it('WX-10 a Show-another key carries its exclusions, so it differs from the plain key', () => {
+    expect(key({ excludedIds: ['z'] })).not.toBe(key());
+    expect(key({ excludedIds: ['z'] })).not.toBe(key({ excludedIds: ['y'] }));
+  });
+
+  it('WX-10 the exclusions in the key ignore order and duplicates', () => {
+    expect(key({ excludedIds: ['y', 'z', 'y'] })).toBe(
+      key({ excludedIds: ['z', 'y'] }),
+    );
+  });
+
+  it('WX-10 a Show-another key still follows the local hour, weather word and candidates', () => {
+    const another = { excludedIds: ['z'] };
+
+    expect(key({ ...another, condition: 'rain' })).not.toBe(key(another));
+    expect(key({ ...another, candidateIds: ['a'] })).not.toBe(key(another));
+    const first = key(another);
+    jest.setSystemTime(new Date(T0.getTime() + 50 * MINUTE)); // 11:00 local
+    expect(key(another)).not.toBe(first);
+  });
+
+  it('WX-10 a Show-another key is null for a timezone Intl does not know', () => {
+    expect(key({ timezone: 'Foo/Bar', excludedIds: ['z'] })).toBeNull();
   });
 });

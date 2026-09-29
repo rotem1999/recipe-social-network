@@ -66,7 +66,13 @@ export function ShareDialog({
           <Button variant="secondary" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" loading={busy} onClick={() => void save()}>
+          {/* UI-51: sharing needs at least one friend (REC-2). */}
+          <Button
+            variant="primary"
+            loading={busy}
+            disabled={selected.length === 0}
+            onClick={() => void save()}
+          >
             Save
           </Button>
         </>
