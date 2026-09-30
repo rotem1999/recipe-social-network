@@ -119,6 +119,45 @@ describe('OpenRouterService', () => {
     expect(body.response_format).toBeUndefined();
   });
 
+  it('COOK-10 sends the reasoning object when the input gives one', async () => {
+    fetchMock.mockResolvedValue(okResponse(completionBody()));
+
+    await service({ OPENROUTER_KEY: 'test-key' }).chat(
+      chatInput({ reasoning: { effort: 'none' } }),
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.reasoning).toEqual({ effort: 'none' });
+  });
+
+  it('WX-10 sends the reasoning object alongside the JSON response format', async () => {
+    fetchMock.mockResolvedValue(okResponse(completionBody()));
+
+    await service({ OPENROUTER_KEY: 'test-key' }).chat(
+      chatInput({
+        feature: 'recommend',
+        reasoning: { effort: 'none' },
+        responseFormatJson: true,
+      }),
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.reasoning).toEqual({ effort: 'none' });
+    expect(body.response_format).toEqual({ type: 'json_object' });
+  });
+
+  it('COOK-10 omits the reasoning field entirely when the input gives none', async () => {
+    fetchMock.mockResolvedValue(okResponse(completionBody()));
+
+    await service({ OPENROUTER_KEY: 'test-key' }).chat(chatInput());
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(Object.prototype.hasOwnProperty.call(body, 'reasoning')).toBe(false);
+  });
+
   it('COOK-3 sends the configured model and trims a trailing slash off the base URL', async () => {
     fetchMock.mockResolvedValue(okResponse(completionBody()));
 

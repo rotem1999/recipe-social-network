@@ -12,6 +12,15 @@ export interface ChatMessage {
   content: string;
 }
 
+/**
+ * The request's `reasoning` object (COOK-10, WX-10). §16 O14: `effort: "none"`
+ * switches reasoning off; `minimax/minimax-m3` supports only on or off, so no
+ * other effort level is offered here.
+ */
+export interface ChatReasoning {
+  effort: 'none';
+}
+
 /** Input of {@link OpenRouterService.chat}. */
 export interface ChatInput {
   feature: ChatFeature;
@@ -19,6 +28,8 @@ export interface ChatInput {
   messages: ChatMessage[];
   maxTokens: number;
   temperature: number;
+  /** Sent as the request's `reasoning` object when present (COOK-10, WX-10, §16 O14). */
+  reasoning?: ChatReasoning;
   /** Ask the model for a JSON object (WX-10 expects `{"picks":[…]}`). */
   responseFormatJson?: boolean;
 }

@@ -33,6 +33,9 @@ const MAX_CANDIDATES = 30;
 const MAX_TOKENS = 1500;
 const TEMPERATURE = 0.5;
 
+/** WX-10: the reason given when exactly one candidate remains (no model call). */
+export const ONLY_CANDIDATE_REASON = 'The only recipe left to suggest';
+
 /** The pick objects the model is asked for (WX-10); every field is unverified. */
 interface RawPick {
   id?: unknown;
@@ -77,6 +80,17 @@ export class RecommendService {
     // Nothing to rank: no model call, so no quota is spent (COOK-8).
     if (candidates.length === 0) {
       return { picks: [], weather, quota: await this.quota.current(user.id) };
+    }
+
+    // WX-10 (PERF-003): one candidate left is the pick without a model call
+    // and without a quota unit (COOK-8). It is not cached: the answer costs
+    // nothing to rebuild, and the cache slots stay for model answers.
+    if (candidates.length === 1) {
+      return {
+        picks: [{ recipe: candidates[0], reason: ONLY_CANDIDATE_REASON }],
+        weather,
+        quota: await this.quota.current(user.id),
+      };
     }
 
     // WX-10: keyed by local date and hour, weather word and the exact
@@ -125,6 +139,8 @@ export class RecommendService {
       messages,
       maxTokens: MAX_TOKENS,
       temperature: TEMPERATURE,
+      // WX-10 "as in COOK-10", §16 O14: reasoning switched off.
+      reasoning: { effort: 'none' },
     });
 
     const picks = this.picksFrom(result.text, candidates, body.scope);
@@ -148,7 +164,8 @@ export class RecommendService {
 
   /**
    * WX-10: for `home` the caller's own and saved recipes (WX-4), for
-   * `discover` the newest public ones; minus the excluded ids, at most 30.
+   * `discover` the newest public ones that are not the caller's own and that
+   * the caller has no live copy of; minus the excluded ids, at most 30.
    */
   private async candidatesFor(
     userId: string,
@@ -156,10 +173,14 @@ export class RecommendService {
     excluded: Set<string>,
   ): Promise<RecipeCardDto[]> {
     if (scope === 'discover') {
+      // WX-10 (BUG-027): not the caller's own recipes, and none the caller has
+      // a live copy of (DISC-10). The Discover feed itself keeps them.
       const { cards } = await this.recipeDto.listPublicCards(userId, {
         page: 1,
         pageSize: MAX_CANDIDATES,
         excludeIds: [...excluded],
+        excludeOwnerId: userId,
+        excludeCopiedBy: userId,
       });
       return cards.filter((card) => !excluded.has(card.id));
     }

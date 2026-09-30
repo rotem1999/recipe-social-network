@@ -80,6 +80,29 @@ export function scoreHit(name: string, hit: UsdaFoodHit): number | null {
 }
 
 /**
+ * NUT-8, NUT-9: the hits that pass the NUT-8 skips (so they contain the head
+ * word), in score order: higher score first, a tie to the description with
+ * fewer words, then to USDA's order. The first is the chosen food; NUT-9 reads
+ * piece weights from the next ones when the chosen food has none.
+ */
+export function rankFoods(
+  name: string,
+  hits: readonly UsdaFoodHit[],
+): UsdaFoodHit[] {
+  const scored: { hit: UsdaFoodHit; score: number; length: number; index: number }[] = [];
+  hits.forEach((hit, index) => {
+    const score = scoreHit(name, hit);
+    if (score === null) return;
+    scored.push({ hit, score, length: toWords(hit.description).length, index });
+  });
+  return scored
+    .sort(
+      (a, b) => b.score - a.score || a.length - b.length || a.index - b.index,
+    )
+    .map(({ hit }) => hit);
+}
+
+/**
  * NUT-8: the highest-scoring hit; a tie goes to the description with fewer
  * words, then to USDA's order; null when all are skipped.
  */
@@ -87,18 +110,5 @@ export function chooseFood(
   name: string,
   hits: readonly UsdaFoodHit[],
 ): UsdaFoodHit | null {
-  let best: UsdaFoodHit | null = null;
-  let bestScore = Number.NEGATIVE_INFINITY;
-  let bestLength = Number.POSITIVE_INFINITY;
-  for (const hit of hits) {
-    const score = scoreHit(name, hit);
-    if (score === null) continue;
-    const length = toWords(hit.description).length;
-    if (score > bestScore || (score === bestScore && length < bestLength)) {
-      best = hit;
-      bestScore = score;
-      bestLength = length;
-    }
-  }
-  return best;
+  return rankFoods(name, hits)[0] ?? null;
 }

@@ -44,7 +44,11 @@ export class RecommendPromptBuilder {
 function systemMessage(scope: RecommendScope): string {
   const max = MAX_PICKS[scope];
   const picks =
-    max === 1 ? 'exactly 1 pick' : `at most ${max} picks, best first`;
+    max === 1
+      ? 'exactly 1 pick'
+      : // WX-4: with reasoning off the model tends to stop at one pick unless told
+        // to fill the list (2026-09-30).
+        `${max} picks, best first, or every recipe in the list when it has fewer than ${max}`;
   return [
     'You pick recipes from a fixed list to suit the weather and the time of day.',
     `Answer with strict JSON only: {"picks":[{"id":"…","reason":"…"}]} with ${picks}.`,

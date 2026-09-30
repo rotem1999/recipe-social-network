@@ -2,7 +2,8 @@
 // question, carrying the recipe and the current step, nothing kept between
 // steps), COOK-8 (the daily quota, counted server-side and shown here) and
 // §3.1.1 (only a step with durationMinutes gets a timer); UI-47 (the answer's
-// heading) and UI-50 (user and AI text in its own bidi-text element).
+// heading), UI-50 (user and AI text in its own bidi-text element) and UI-52
+// (an ask abandoned after 20 seconds shows its line and re-reads the quota).
 import {
   act,
   fireEvent,
@@ -18,7 +19,13 @@ import type {
 } from '@rsn/shared/util-contracts';
 import { CookScreen } from './cook-screen';
 import type { CookScreenProps } from './cook-screen';
-import { ApiError } from '@rsn/web/data-access-api';
+import {
+  ApiClient,
+  ApiError,
+  createEndpoints,
+  timeoutError,
+  TokenStore,
+} from '@rsn/web/data-access-api';
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -510,6 +517,109 @@ describe('CookScreen', () => {
 
     expect(mocks.api.cookQuota).toHaveBeenCalledTimes(1);
     expect(screen.getByText('3 of 100 AI asks left today')).toBeTruthy();
+  });
+
+  it('UI-52 shows the timeout line under the question when an ask is abandoned', async () => {
+    mocks.api.cookAsk.mockRejectedValue(timeoutError());
+    show();
+    await screen.findByText('3 of 100 AI asks left today');
+
+    fireEvent.change(screen.getByLabelText('Question about this step'), {
+      target: { value: 'Can I use butter?' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Ask about this step/ }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe(
+      'The assistant is taking too long. Try again.',
+    );
+    // Under the question: the line follows the question box.
+    const questionBox = screen.getByLabelText('Question about this step');
+    expect(
+      questionBox.compareDocumentPosition(alert) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.queryByText('Reading the recipe…')).toBeNull();
+    // Ask stays available for another try.
+    expect(
+      (
+        screen.getByRole('button', {
+          name: /Ask about this step/,
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+  });
+
+  it('UI-52 COOK-8 re-reads the quota after a timeout, so a unit already counted shows as spent', async () => {
+    mocks.api.cookQuota
+      .mockResolvedValueOnce(QUOTA)
+      .mockResolvedValueOnce({ used: 98, limit: 100, remaining: 2 });
+    mocks.api.cookAsk.mockRejectedValue(timeoutError());
+    show();
+    await screen.findByText('3 of 100 AI asks left today');
+
+    fireEvent.click(screen.getByRole('button', { name: /Ask about this step/ }));
+
+    expect(
+      await screen.findByText('2 of 100 AI asks left today'),
+    ).toBeTruthy();
+    expect(mocks.api.cookQuota).toHaveBeenCalledTimes(2);
+  });
+
+  it('UNSPECIFIED UI-52 treats only the client timeout as a timeout: a server 408 does not re-read the quota', async () => {
+    mocks.api.cookAsk.mockRejectedValue(new ApiError(408, 'Request Timeout'));
+    show();
+    await screen.findByText('3 of 100 AI asks left today');
+
+    fireEvent.click(screen.getByRole('button', { name: /Ask about this step/ }));
+
+    expect(await screen.findByText('Request Timeout')).toBeTruthy();
+    expect(mocks.api.cookQuota).toHaveBeenCalledTimes(1);
+  });
+
+  it('UI-52 abandons a real cookAsk after 20 seconds and shows the timeout line', async () => {
+    const hanging = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError')),
+          );
+        }),
+    );
+    const real = createEndpoints(
+      new ApiClient(new TokenStore(), 'http://localhost:3000/api/v1'),
+    );
+    mocks.api.cookAsk.mockImplementation(real.cookAsk);
+    mocks.api.cookQuota
+      .mockResolvedValueOnce(QUOTA)
+      .mockResolvedValueOnce({ used: 98, limit: 100, remaining: 2 });
+    show();
+    await screen.findByText('3 of 100 AI asks left today');
+
+    vi.stubGlobal('fetch', hanging);
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(
+        screen.getByRole('button', { name: /Ask about this step/ }),
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(19_999);
+      });
+      expect(screen.getByText('Reading the recipe…')).toBeTruthy();
+      expect(screen.queryByRole('alert')).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+
+      expect(screen.getByRole('alert').textContent).toBe(
+        'The assistant is taking too long. Try again.',
+      );
+      expect(hanging.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      expect(screen.getByText('2 of 100 AI asks left today')).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('UI-45 shows the cook-mode step text with its line breaks (text-pre-line)', async () => {

@@ -2,7 +2,11 @@
 // USDA portions. Pure function, no I/O; portions use the client's §9 shape.
 import type { UsdaFoodPortion } from '@rsn/api/data-access-usda';
 
-import { pickPieceGrams } from './portion-picker';
+import {
+  isHouseholdMeasure,
+  pickMeasureGrams,
+  pickPieceGrams,
+} from './portion-picker';
 
 /** FNDDS: the text is `portionDescription`, `amount` undefined (client gives null). */
 function fndds(
@@ -232,5 +236,111 @@ describe('pickPieceGrams with container words (NUT-8, NUT-9)', () => {
   it('NUT-8 "Celery stalks" finds "1 stalk" over "1 medium" by rule (1)', () => {
     const portions = [fndds('1 medium', 60, 1), fndds('1 stalk', 40, 2)];
     expect(pickPieceGrams(portions, 'Celery stalks', undefined)).toBe(40);
+  });
+});
+
+describe('isHouseholdMeasure (NUT-6)', () => {
+  it.each(['cup', 'tbsp', 'tsp'] as const)(
+    'NUT-6 counts `%s` as a household measure',
+    (unit) => {
+      expect(isHouseholdMeasure(unit)).toBe(true);
+    },
+  );
+
+  it.each(['g', 'kg', 'ml', 'l', 'pinch', 'piece', 'none'] as const)(
+    'NUT-6 does not count `%s` as a household measure',
+    (unit) => {
+      expect(isHouseholdMeasure(unit)).toBe(false);
+    },
+  );
+});
+
+describe('pickMeasureGrams (NUT-6)', () => {
+  it('NUT-6 takes the FNDDS "1 cup" portion for `cup` (3 cups of dry rice weigh what USDA says a cup weighs)', () => {
+    const portions = [
+      fndds('1 tbsp', 12, 1),
+      fndds('1 cup', 185, 2),
+      fndds('Quantity not specified', 100, 3),
+    ];
+    expect(pickMeasureGrams(portions, 'cup')).toBe(185);
+  });
+
+  it('NUT-6 divides by a leading fraction ("1/2 cup", 100 g → 200 g per cup)', () => {
+    expect(pickMeasureGrams([fndds('1/2 cup', 100, 1)], 'cup')).toBe(200);
+  });
+
+  it('NUT-6 divides by a leading mixed number ("1 1/2 cups", 300 g → 200 g per cup)', () => {
+    expect(pickMeasureGrams([fndds('1 1/2 cups', 300, 1)], 'cup')).toBe(200);
+  });
+
+  it('NUT-6 divides by a leading unicode fraction ("½ cup", 120 g → 240 g per cup)', () => {
+    expect(pickMeasureGrams([fndds('½ cup', 120, 1)], 'cup')).toBe(240);
+  });
+
+  it('NUT-6 divides by a leading count ("2 tablespoons", 30 g → 15 g per tbsp)', () => {
+    expect(pickMeasureGrams([fndds('2 tablespoons', 30, 1)], 'tbsp')).toBe(15);
+  });
+
+  it('NUT-6 takes `gramWeight` as is when the FNDDS text starts with no number ("cup, packed")', () => {
+    expect(pickMeasureGrams([fndds('cup, packed', 220, 1)], 'cup')).toBe(220);
+  });
+
+  it('NUT-6 reads an SR Legacy `modifier` portion with the NUT-9 weight per unit (gramWeight ÷ amount)', () => {
+    expect(pickMeasureGrams([srLegacy('cup, chopped', 1, 160, 1)], 'cup')).toBe(
+      160,
+    );
+    expect(pickMeasureGrams([srLegacy('cup, chopped', 2, 320, 1)], 'cup')).toBe(
+      160,
+    );
+  });
+
+  it('NUT-6 a modifier text keeps its `amount`, so a number inside the text is not a divisor', () => {
+    // The client keeps `amount` only for modifier text (NUT-9); that text is not a portionDescription.
+    expect(pickMeasureGrams([srLegacy('2 cups', 1, 300, 1)], 'cup')).toBe(300);
+  });
+
+  it('NUT-6 matches `tbsp` by "tbsp" or "tablespoon"', () => {
+    expect(pickMeasureGrams([fndds('1 Tbsp', 14, 1)], 'tbsp')).toBe(14);
+    expect(pickMeasureGrams([fndds('1 tablespoon', 13, 1)], 'tbsp')).toBe(13);
+  });
+
+  it('NUT-6 matches `tsp` by "tsp" or "teaspoon"', () => {
+    expect(pickMeasureGrams([fndds('1 tsp', 4.2, 1)], 'tsp')).toBe(4.2);
+    expect(pickMeasureGrams([fndds('1 teaspoon', 4, 1)], 'tsp')).toBe(4);
+  });
+
+  it('NUT-6 never takes one measure for another', () => {
+    const portions = [
+      fndds('1 cup', 185, 1),
+      fndds('1 tablespoon', 12, 2),
+      fndds('1 teaspoon', 4, 3),
+    ];
+    expect(pickMeasureGrams([portions[1], portions[2]], 'cup')).toBeNull();
+    expect(pickMeasureGrams([portions[0], portions[2]], 'tbsp')).toBeNull();
+    expect(pickMeasureGrams([portions[0], portions[1]], 'tsp')).toBeNull();
+    expect(pickMeasureGrams(portions, 'tbsp')).toBe(12);
+    expect(pickMeasureGrams(portions, 'tsp')).toBe(4);
+  });
+
+  it('NUT-6 reads the text as NUT-9 words ("cupcake" is not a cup)', () => {
+    expect(pickMeasureGrams([fndds('1 cupcake', 60, 1)], 'cup')).toBeNull();
+  });
+
+  it('NUT-6 takes the first matching portion in `sequenceNumber` order, not array order', () => {
+    const portions = [
+      fndds('1 cup, sliced', 110, 3),
+      fndds('1 cup, chopped', 150, 2),
+    ];
+    expect(pickMeasureGrams(portions, 'cup')).toBe(150);
+  });
+
+  it('NUT-6 returns null when no portion names the measure, and for no portions', () => {
+    expect(
+      pickMeasureGrams(
+        [fndds('1 medium', 110, 1), fndds('Quantity not specified', 100, 2)],
+        'cup',
+      ),
+    ).toBeNull();
+    expect(pickMeasureGrams([], 'cup')).toBeNull();
   });
 });

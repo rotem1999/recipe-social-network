@@ -73,6 +73,8 @@ export class CookService {
       messages,
       maxTokens: MAX_TOKENS,
       temperature: TEMPERATURE,
+      // COOK-10, §16 O14: reasoning switched off.
+      reasoning: { effort: 'none' },
     });
 
     // COOK-10: an answer with no text is a 503; the call is already logged

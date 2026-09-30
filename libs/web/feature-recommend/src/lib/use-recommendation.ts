@@ -8,7 +8,13 @@ import type {
   RecommendationDto,
   WeatherContextDto,
 } from '@rsn/shared/util-contracts';
-import { ApiError, useApi, useTimezone } from '@rsn/web/data-access-api';
+import {
+  AI_TIMEOUT_MESSAGE,
+  ApiError,
+  isTimeoutError,
+  useApi,
+  useTimezone,
+} from '@rsn/web/data-access-api';
 
 /**
  * WX-10: the model is asked for up to 3 ranked picks on Home (WX-4) and 1 on
@@ -24,7 +30,7 @@ export interface RecommendationState {
   weather: WeatherContextDto | null;
   quota: QuotaDto | null;
   loading: boolean;
-  /** "No recommendation right now" (no pick at all), the 429 line, or an API error message. */
+  /** "No recommendation right now" (no pick at all), the 429 line, the UI-52 timeout line, or an API error message. */
   message: string | null;
   /** UI-18: the muted "No other suggestions right now" after an empty re-prompt; the picks stay. */
   notice: string | null;
@@ -105,6 +111,12 @@ export function useRecommendation(
       // so "No recommendation right now" never sits next to picks.
       if (hadPicks && cause instanceof ApiError && cause.status === 400) {
         setNotice('No other suggestions right now');
+        return;
+      }
+      // UI-52: a request abandoned after 20 seconds is the card's message,
+      // never "No recommendation right now"; with picks on screen they stay.
+      if (isTimeoutError(cause)) {
+        setMessage(AI_TIMEOUT_MESSAGE);
         return;
       }
       // COOK-8: cook mode and recommendations share one daily quota.

@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   signOut: vi.fn(),
   retry: vi.fn(),
   onCook: vi.fn(),
+  // UI-35: the editor-draft clearer the shell calls on the UI-40 Discard.
+  clearEditorDraft: vi.fn(),
   // UI-38: what the stubbed HomeScreen passes to its recommendation slot.
   hasCandidates: true,
   // The last props the stubbed CookScreen received (UI-35).
@@ -60,6 +62,8 @@ vi.mock('@rsn/web/feature-auth', () => ({
 vi.mock('@rsn/web/feature-recipes', async () => {
   const { useEffect } = await import('react');
   return {
+    clearEditorDraft: mocks.clearEditorDraft,
+    DRAFT_STORAGE_KEY: 'cookbook.draft',
     HomeScreen: ({
       onCook,
       onOpenRecipe,
@@ -363,7 +367,7 @@ describe('App route storage (UI-35)', () => {
     expect(screen.getByText('home screen')).toBeTruthy();
   });
 
-  it('UI-35 restores the editor route, not its unsaved text', () => {
+  it('UI-35 restores the editor route (the editor restores its own unsaved fields)', () => {
     sessionStorage.setItem(
       ROUTE_KEY,
       JSON.stringify({
@@ -650,6 +654,7 @@ describe('App unsaved-editor guard (UI-40)', () => {
     mocks.status = 'signed-in';
     mocks.user = null;
     mocks.signOut.mockReset();
+    mocks.clearEditorDraft.mockReset();
     sessionStorage.clear();
   });
 
@@ -766,6 +771,64 @@ describe('App unsaved-editor guard (UI-40)', () => {
 
     expect(discardDialog()).toBeNull();
     expect(mocks.signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('UI-35 UI-40 Discard clears the editor draft before leaving for the chosen tab', () => {
+    render(<App />);
+    openDirtyEditor();
+    click('Discover');
+    expect(mocks.clearEditorDraft).not.toHaveBeenCalled();
+
+    click('Discard');
+
+    expect(mocks.clearEditorDraft).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('discover screen')).toBeTruthy();
+  });
+
+  it('UI-35 UI-40 Keep editing keeps the editor draft', () => {
+    render(<App />);
+    openDirtyEditor();
+    click('Discover');
+
+    click('Keep editing');
+
+    expect(mocks.clearEditorDraft).not.toHaveBeenCalled();
+  });
+
+  it('UI-35 UI-40 Discard on sign-out clears the editor draft before signing out', () => {
+    render(<App />);
+    openDirtyEditor();
+
+    click('Account menu for rotem');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+    click('Discard');
+
+    expect(mocks.clearEditorDraft).toHaveBeenCalledTimes(1);
+    expect(mocks.signOut).toHaveBeenCalledTimes(1);
+    expect(mocks.clearEditorDraft.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.signOut.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it('UI-35 keeps the editor draft when the session ends under a changed editor', () => {
+    const { rerender } = render(<App />);
+    openDirtyEditor();
+
+    mocks.status = 'signed-out';
+    rerender(<App />);
+
+    expect(screen.getByText('auth screen')).toBeTruthy();
+    expect(mocks.clearEditorDraft).not.toHaveBeenCalled();
+  });
+
+  it('UI-35 the shell leaves the draft to the editor when nothing asked: an unchanged editor or Save', () => {
+    render(<App />);
+    click('New recipe');
+    click('Friends');
+    openDirtyEditor();
+    click('editor save');
+
+    expect(mocks.clearEditorDraft).not.toHaveBeenCalled();
   });
 
   it('UI-40 Save leaves a changed editor without asking', () => {

@@ -90,6 +90,10 @@ export class OpenRouterService {
           messages: input.messages,
           max_tokens: input.maxTokens,
           temperature: input.temperature,
+          // COOK-10, WX-10, §16 O14: `{ effort: "none" }` switches reasoning off.
+          ...(input.reasoning === undefined
+            ? {}
+            : { reasoning: { ...input.reasoning } }),
           ...(input.responseFormatJson === true
             ? { response_format: { type: 'json_object' } }
             : {}),

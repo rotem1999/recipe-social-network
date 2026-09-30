@@ -68,7 +68,8 @@ function parseRoute(value: unknown): Route | null {
         ? { name: 'catalogue', mealId: raw['mealId'], from: raw['from'] }
         : null;
     case 'editor': {
-      // UI-35: the route comes back; the editor's unsaved text does not.
+      // UI-35: the route comes back; the editor restores its own unsaved
+      // fields from `cookbook.draft` (editor-draft in feature-recipes).
       const id = raw['id'];
       const from = raw['from'];
       if ((id !== undefined && !isId(id)) || (from !== undefined && !isTab(from))) {

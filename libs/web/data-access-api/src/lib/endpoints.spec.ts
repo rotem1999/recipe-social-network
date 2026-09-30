@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, vi } from 'vitest';
 import type { Mock } from 'vitest';
-import { ApiClient } from './client';
+import {
+  AI_TIMEOUT_MESSAGE,
+  ApiClient,
+  ApiError,
+  isTimeoutError,
+} from './client';
 import { createEndpoints } from './endpoints';
 import type { Endpoints } from './endpoints';
 import { TokenStore } from './tokens';
@@ -128,6 +133,57 @@ describe('createEndpoints (§11.6)', () => {
     const [url, init] = call();
     expect(url).toBe(`${BASE}/cook/ask`);
     expect(init.method).toBe('POST');
+  });
+
+  it('UI-52 gives POST cook/ask an abort signal', async () => {
+    await api.cookAsk({ recipeId: 'r-1', stepIndex: 0, question: 'Why?' });
+
+    expect(call()[1].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('UI-52 gives POST recommend an abort signal', async () => {
+    await api.recommend({ timezone: 'Asia/Jerusalem', scope: 'home' });
+
+    const [url, init] = call();
+    expect(url).toBe(`${BASE}/recommend`);
+    expect(init.method).toBe('POST');
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('UI-52 gives no abort signal to the other requests, such as GET cook/quota', async () => {
+    await api.cookQuota();
+    await api.syncRecipe('copy-1');
+
+    expect(call(0)[1].signal).toBeUndefined();
+    expect(call(1)[1].signal).toBeUndefined();
+  });
+
+  it('UI-52 abandons POST cook/ask and POST recommend after 20 seconds with the timeout error', async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementation(
+        () => new Promise<Response>(() => undefined),
+      );
+      const outcomes: unknown[] = [];
+      api
+        .cookAsk({ recipeId: 'r-1', stepIndex: 0, question: 'Why?' })
+        .catch((cause: unknown) => outcomes.push(cause));
+      api
+        .recommend({ timezone: 'Asia/Jerusalem', scope: 'home' })
+        .catch((cause: unknown) => outcomes.push(cause));
+
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(outcomes).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(outcomes).toHaveLength(2);
+      for (const outcome of outcomes) {
+        expect(isTimeoutError(outcome)).toBe(true);
+        expect((outcome as ApiError).message).toBe(AI_TIMEOUT_MESSAGE);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('COOK-8 reads the daily quota with GET cook/quota', async () => {

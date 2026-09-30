@@ -37,7 +37,7 @@ Full description in `.claude/README.md`. Guard behaviours learned: a Bash comman
 
 ## Next step
 
-Current (2026-09-30): finish the QA loop on `fix/qa-review-2026-09-29`, then Rotem merges PR #4 and PR #5; answer the open product questions (AI latency, dry-goods density, piece fallback, orphan images, draft survival, single-candidate skip, own recipes in Discover recommendations); run the e2e suites.
+Current (2026-09-30): the QA loop ended with round 6 on `fix/qa-review-2026-09-29` (Rotem's decisions on AI latency, dry-goods density, piece fallback, orphan images, draft survival, single-candidate skip and own recipes in Discover recommendations are built; Rotem asked for no further app-critic run). Next: Rotem merges PR #4 and PR #5; run the e2e suites.
 
 Original plan of 2026-09-28 (Rotem: "then we'll run the program and test what and if needs changes"), steps 1 and 2 done on 2026-09-29:
 

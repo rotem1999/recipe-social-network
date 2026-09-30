@@ -252,23 +252,21 @@ export class RecipesService {
   /**
    * REC-6, SAVE-4, SAVE-7, §12.1: an own recipe or a fork is soft-deleted so saved copies
    * keep their attribution and images; a saved copy is removed outright, together with
-   * the image objects it owns (IMG-7).
+   * the image objects it owns (IMG-7). Either way the recipe stops being live, so every
+   * image path it carried is offered to the IMG-7 release rule afterwards.
    */
   async remove(userId: string, id: string): Promise<void> {
     const recipe = await this.access.loadOrThrow(id);
     this.access.assertIsOwner(userId, recipe);
+    const versionRows = await this.versions.find({
+      where: { recipeId: recipe.id },
+      select: { imagePaths: true },
+    });
+    const allPaths = [
+      ...new Set(versionRows.flatMap((row) => row.imagePaths ?? [])),
+    ];
     if (isSavedCopy(recipe)) {
-      const versionRows = await this.versions.find({
-        where: { recipeId: recipe.id },
-        select: { imagePaths: true },
-      });
-      const ownedPaths = [
-        ...new Set(
-          versionRows
-            .flatMap((row) => row.imagePaths ?? [])
-            .filter((path) => ownsImage(recipe.id, path)),
-        ),
-      ];
+      const ownedPaths = allPaths.filter((path) => ownsImage(recipe.id, path));
       await this.dataSource.transaction(async (manager) => {
         // current_version_id points at a version, so it is cleared before the cascade.
         await manager.update(
@@ -279,9 +277,15 @@ export class RecipesService {
         await manager.delete(RecipeEntity, { id: recipe.id });
       });
       for (const path of ownedPaths) await this.removeObject(path);
+      // IMG-7: the copy's linked images may have been the last live link to a deleted source's.
+      await this.releaseUnusedImages(
+        allPaths.filter((path) => !ownsImage(recipe.id, path)),
+      );
       return;
     }
     await this.recipes.update({ id: recipe.id }, { deletedAt: new Date() });
+    // IMG-7: its own objects stay while a live recipe still shows them; the rest go now.
+    await this.releaseUnusedImages(allPaths);
   }
 
   /**
@@ -429,6 +433,9 @@ export class RecipesService {
       throw new BadRequestException('This recipe has no update to take');
     }
     const sourceVersion = source.currentVersion;
+    // loadOrThrow joins the current version; the images it shows before the sync.
+    const previousPaths = copy.currentVersion?.imagePaths ?? [];
+    const nextPaths = sourceVersion.imagePaths ?? [];
 
     await this.dataSource.transaction(async (manager) => {
       const nextNumber = (await this.maxVersionNumber(manager, copy.id)) + 1;
@@ -437,10 +444,14 @@ export class RecipesService {
         copy,
         contentOf(sourceVersion),
         nextNumber,
-        sourceVersion.imagePaths ?? [],
+        nextPaths,
         { syncedVersionNumber: sourceVersion.versionNumber },
       );
     });
+    // IMG-7: the copy's current version no longer shows the images the sync left out.
+    await this.releaseUnusedImages(
+      previousPaths.filter((path) => !nextPaths.includes(path)),
+    );
     return this.get(userId, id);
   }
 
@@ -531,15 +542,11 @@ export class RecipesService {
     const next = paths.filter((_, position) => position !== index);
     if (!ownsImage(recipe.id, objectPath)) {
       await this.versions.update({ id: version.id }, { imagePaths: next });
+      // IMG-7 (BUG-028): this copy may have been the last live recipe showing a deleted source's image.
+      await this.releaseUnusedImages([objectPath]);
       return { imageUrls: await this.signedUrls(next) };
     }
-    await this.dataSource.query(
-      `UPDATE "recipe_versions"
-       SET "image_paths" = array_remove("image_paths", $1), "updated_at" = now()
-       WHERE $1 = ANY("image_paths")`,
-      [objectPath],
-    );
-    await this.removeObject(objectPath);
+    await this.deleteImageEverywhere(objectPath);
     return { imageUrls: await this.signedUrls(next) };
   }
 
@@ -621,6 +628,63 @@ export class RecipesService {
   }
 
   /**
+   * IMG-7 (2026-09-30, BUG-028): called after a recipe stopped showing these paths (an image
+   * removal on a copy, a sync, or removing a recipe). An image whose owning recipe (the
+   * `<recipeId>` of its path) is soft-deleted or gone is deleted once no live recipe shows
+   * it, where "shows" means the path is in the current version of a recipe row whose
+   * `deleted_at` is null. A hard-deleted saved copy has no rows left, so it counts for
+   * nothing; past versions (REC-7) of any recipe, and every version of a soft-deleted
+   * recipe, keep no object alive, and the path is dropped from them before the object goes.
+   * An image whose owner is live is left alone: only that owner deletes it.
+   */
+  private async releaseUnusedImages(paths: string[]): Promise<void> {
+    for (const path of new Set(paths)) {
+      const ownerId = owningRecipeId(path);
+      // A path not in the IMG-6 shape names no recipe, so nobody is known to hold its rights.
+      if (ownerId === null) continue;
+      try {
+        const owner = await this.recipes.findOne({
+          where: { id: ownerId },
+          select: { id: true, deletedAt: true },
+        });
+        if (owner !== null && owner.deletedAt === null) continue;
+        const rows: { shown: boolean }[] = await this.dataSource.query(
+          `SELECT EXISTS (
+             SELECT 1 FROM "recipes" "live"
+             JOIN "recipe_versions" "shown_version"
+               ON "shown_version"."id" = "live"."current_version_id"
+             WHERE "live"."deleted_at" IS NULL
+               AND $1 = ANY("shown_version"."image_paths")
+           ) AS "shown"`,
+          [path],
+        );
+        if (rows[0]?.shown === true) continue;
+        await this.deleteImageEverywhere(path);
+      } catch (error: unknown) {
+        // The caller's own change is done; a failed clean-up only leaves an unused object.
+        const reason = error instanceof Error ? error.message : 'unknown error';
+        this.logger.warn(
+          `Could not release image ${path} (${reason}); the object is left unused`,
+        );
+      }
+    }
+  }
+
+  /**
+   * IMG-7: the path leaves every version of every recipe first, then the object leaves the
+   * bucket, so no version ever points at a deleted object.
+   */
+  private async deleteImageEverywhere(objectPath: string): Promise<void> {
+    await this.dataSource.query(
+      `UPDATE "recipe_versions"
+       SET "image_paths" = array_remove("image_paths", $1), "updated_at" = now()
+       WHERE $1 = ANY("image_paths")`,
+      [objectPath],
+    );
+    await this.removeObject(objectPath);
+  }
+
+  /**
    * IMG-7: the bucket is changed after the database, so a failed delete only leaves an
    * unused object behind; it is logged and the request still succeeds.
    */
@@ -647,6 +711,15 @@ export class RecipesService {
 /** IMG-6, IMG-7: an image belongs to the recipe whose id is in its object path. */
 function ownsImage(recipeId: string, objectPath: string): boolean {
   return objectPath.startsWith(`recipes/${recipeId}/`);
+}
+
+/** IMG-6 object path `recipes/<recipeId>/<uuid>.<ext>`: the owning recipe's id. */
+const OBJECT_PATH_OWNER =
+  /^recipes\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\//i;
+
+/** IMG-7: the recipe an image belongs to, or null for a path not in the IMG-6 shape. */
+function owningRecipeId(objectPath: string): string | null {
+  return OBJECT_PATH_OWNER.exec(objectPath)?.[1] ?? null;
 }
 
 /** A stored version read back as §3.1.1 content (used when a copy is made). */

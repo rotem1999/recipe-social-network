@@ -3,9 +3,11 @@
 // empty pick list, and the 429 the shared daily quota of COOK-8 raises); UI-18
 // (the ranked list, its replacement and the empty re-prompt), UI-38 (the
 // no-candidates line and the loading texts), UI-41 (dir="auto" on AI text),
-// UI-43 (a 400 reads "No recommendation right now") and UI-50 (directional
-// title text inside a left-aligned button, clamped like cards).
+// UI-43 (a 400 reads "No recommendation right now"), UI-50 (directional
+// title text inside a left-aligned button, clamped like cards) and UI-52 (a
+// request abandoned after 20 seconds is the card's message; picks stay).
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -18,7 +20,13 @@ import type {
   RecommendationDto,
   WeatherContextDto,
 } from '@rsn/shared/util-contracts';
-import { ApiError } from '@rsn/web/data-access-api';
+import {
+  ApiClient,
+  ApiError,
+  createEndpoints,
+  timeoutError,
+  TokenStore,
+} from '@rsn/web/data-access-api';
 import {
   DiscoverRecommendation,
   HomeRecommendation,
@@ -564,6 +572,143 @@ describe('HomeRecommendation', () => {
 
     expect(await screen.findByText('Daily AI limit reached')).toBeTruthy();
   });
+
+  it('UI-52 shows the timeout line as the card message when the first request is abandoned', async () => {
+    mocks.api.recommend.mockRejectedValue(timeoutError());
+    render(
+      <HomeRecommendation
+        onCook={vi.fn()}
+        onOpen={vi.fn()}
+        onWeather={vi.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByText('The assistant is taking too long. Try again.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('No recommendation right now')).toBeNull();
+    expect(screen.queryAllByRole('listitem')).toHaveLength(0);
+  });
+
+  it('UI-52 UI-18 keeps the picks and shows the timeout line when the re-prompt is abandoned', async () => {
+    mocks.api.recommend
+      .mockResolvedValueOnce(FIRST)
+      .mockRejectedValueOnce(timeoutError());
+    render(
+      <HomeRecommendation
+        onCook={vi.fn()}
+        onOpen={vi.fn()}
+        onWeather={vi.fn()}
+      />,
+    );
+
+    await screen.findByText('Ramen');
+    fireEvent.click(screen.getByRole('button', { name: /Show another/ }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe(
+      'The assistant is taking too long. Try again.',
+    );
+    expect(screen.getAllByRole('listitem')).toHaveLength(3);
+    expect(screen.getByText('Ramen')).toBeTruthy();
+    expect(screen.getByText('Lentil soup')).toBeTruthy();
+    expect(screen.getByText('Shakshuka')).toBeTruthy();
+    expect(screen.queryByText('No recommendation right now')).toBeNull();
+    expect(screen.queryByText('No other suggestions right now')).toBeNull();
+  });
+
+  it('UNSPECIFIED UI-52 leaves Show another usable for another try after a timeout', async () => {
+    mocks.api.recommend
+      .mockResolvedValueOnce(FIRST)
+      .mockRejectedValueOnce(timeoutError())
+      .mockResolvedValueOnce(SECOND);
+    render(
+      <HomeRecommendation
+        onCook={vi.fn()}
+        onOpen={vi.fn()}
+        onWeather={vi.fn()}
+      />,
+    );
+
+    await screen.findByText('Ramen');
+    fireEvent.click(screen.getByRole('button', { name: /Show another/ }));
+    await screen.findByText('The assistant is taking too long. Try again.');
+    const more = screen.getByRole('button', { name: /Show another/ });
+    await waitFor(() =>
+      expect((more as HTMLButtonElement).disabled).toBe(false),
+    );
+
+    fireEvent.click(more);
+
+    expect(await screen.findByText('Onion soup')).toBeTruthy();
+    expect(
+      screen.queryByText('The assistant is taking too long. Try again.'),
+    ).toBeNull();
+    // WX-5: the abandoned request showed nothing new, so the same ids stay excluded.
+    expect(mocks.api.recommend).toHaveBeenLastCalledWith({
+      timezone: TIMEZONE,
+      scope: 'home',
+      excludeRecipeIds: ['r1', 'r2', 'r3'],
+    });
+  });
+
+  it('UNSPECIFIED UI-52 treats only the client timeout as a timeout: a server 408 keeps its own text', async () => {
+    mocks.api.recommend.mockRejectedValue(new ApiError(408, 'Request Timeout'));
+    render(
+      <HomeRecommendation
+        onCook={vi.fn()}
+        onOpen={vi.fn()}
+        onWeather={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText('Request Timeout')).toBeTruthy();
+    expect(
+      screen.queryByText('The assistant is taking too long. Try again.'),
+    ).toBeNull();
+  });
+
+  it('UI-52 abandons a real POST /recommend after 20 seconds and shows the timeout line', async () => {
+    const hanging = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError')),
+          );
+        }),
+    );
+    const real = createEndpoints(
+      new ApiClient(new TokenStore(), 'http://localhost:3000/api/v1'),
+    );
+    mocks.api.recommend.mockImplementation(real.recommend);
+    vi.stubGlobal('fetch', hanging);
+    vi.useFakeTimers();
+    try {
+      render(
+        <HomeRecommendation
+          onCook={vi.fn()}
+          onOpen={vi.fn()}
+          onWeather={vi.fn()}
+        />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(19_999);
+      });
+      expect(screen.getByText('Choosing from your recipes…')).toBeTruthy();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+
+      expect(
+        screen.getByText('The assistant is taking too long. Try again.'),
+      ).toBeTruthy();
+      expect(hanging.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe('DiscoverRecommendation', () => {
@@ -611,5 +756,15 @@ describe('DiscoverRecommendation', () => {
       await screen.findByText('No recommendation right now'),
     ).toBeTruthy();
     expect(screen.queryByText('Unknown time zone')).toBeNull();
+  });
+
+  it('UI-52 shows the timeout line on Discover when the request is abandoned', async () => {
+    mocks.api.recommend.mockRejectedValue(timeoutError());
+    render(<DiscoverRecommendation onOpen={vi.fn()} />);
+
+    expect(
+      await screen.findByText('The assistant is taking too long. Try again.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('No recommendation right now')).toBeNull();
   });
 });

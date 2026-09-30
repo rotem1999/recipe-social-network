@@ -252,6 +252,91 @@ async function failureOf<T extends { message: string }>(
   throw new Error('the call was expected to reject');
 }
 
+/*
+ * IMG-7 release rule (2026-09-30): only paths in the IMG-6 shape
+ * `recipes/<recipeId>/<uuid>.<ext>` name an owning recipe, so these fixtures use real
+ * UUIDs. None of them is a real object.
+ */
+const RELEASE_OWN_ID = '3b0f6f7e-2c1d-4e5a-9b8c-7d6e5f4a3b2c';
+const RELEASE_SOURCE_ID = '9a8b7c6d-5e4f-4321-8fed-cba987654321';
+const RELEASE_COPY_ID = '5c1e7a2b-3d4f-4a6b-8c9d-0e1f2a3b4c5d';
+const RELEASE_GRAND_ID = '1b2c3d4e-5f60-4718-89ab-cdef01234567';
+const RELEASE_OWN_IMG = `recipes/${RELEASE_OWN_ID}/0c9b8a7f-6e5d-4c4b-8a39-281706f5e4d3.png`;
+const RELEASE_SOURCE_IMG = `recipes/${RELEASE_SOURCE_ID}/3f2e1d0c-9b8a-4765-8432-10fedcba9876.png`;
+const RELEASE_COPY_IMG = `recipes/${RELEASE_COPY_ID}/7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918.png`;
+const RELEASE_GRAND_IMG = `recipes/${RELEASE_GRAND_ID}/2d3c4b5a-6978-4867-a5b4-c3d2e1f0a9b8.png`;
+
+/** The IMG-7 owner lookup answer: the owning recipe's id and `deleted_at`, or null when gone. */
+type OwnerRow = { id: string; deletedAt: Date | null } | null;
+
+/**
+ * Routes `recipes.findOne` by the shape of its options: the IMG-7 owner lookup selects
+ * `{ id, deletedAt }`; the SAVE-10 source lookup filters on `deletedAt`; anything else is
+ * `loadOrThrow`. An owner missing from `owners` is gone (null).
+ */
+function routeFindOne(
+  h: Harness,
+  route: {
+    load: RecipeEntity;
+    source?: RecipeEntity | null;
+    owners?: Record<string, OwnerRow>;
+    ownerError?: unknown;
+  },
+): void {
+  h.recipes.findOne.mockImplementation(
+    async (options: {
+      where: { id: string; deletedAt?: unknown };
+      select?: Record<string, boolean>;
+    }) => {
+      if (options.select !== undefined) {
+        if (route.ownerError !== undefined) throw route.ownerError;
+        return route.owners?.[options.where.id] ?? null;
+      }
+      if ('deletedAt' in options.where) return route.source ?? null;
+      return route.load;
+    },
+  );
+}
+
+/**
+ * Answers the IMG-7 "is it shown by a live current version" query from `shown` (false when
+ * a path is missing), or throws `shown` when it is an Error; every other query is a sweep.
+ */
+function routeQueries(h: Harness, shown: Record<string, boolean> | Error = {}): void {
+  h.dataSource.query.mockImplementation(async (sql: string, parameters: unknown[]) => {
+    if (sql.includes('SELECT EXISTS')) {
+      if (shown instanceof Error) throw shown;
+      return [{ shown: shown[parameters[0] as string] ?? false }];
+    }
+    return [];
+  });
+}
+
+/** The paths the IMG-7 "shown" query was asked about, in order. */
+function existsChecks(h: Harness): string[] {
+  return (h.dataSource.query.mock.calls as [string, unknown[]][])
+    .filter(([sql]) => sql.includes('SELECT EXISTS'))
+    .map(([, parameters]) => parameters[0] as string);
+}
+
+/** The paths swept out of every version (`array_remove`), in order. */
+function sweptPaths(h: Harness): string[] {
+  return (h.dataSource.query.mock.calls as [string, unknown[]][])
+    .filter(([sql]) => sql.includes('array_remove'))
+    .map(([, parameters]) => parameters[0] as string);
+}
+
+/** The recipe ids the IMG-7 owner lookup was asked about, in order. */
+function ownerLookups(h: Harness): string[] {
+  return (
+    h.recipes.findOne.mock.calls as [
+      { where: { id: string }; select?: Record<string, boolean> },
+    ][]
+  )
+    .filter(([options]) => options.select !== undefined)
+    .map(([options]) => options.where.id);
+}
+
 describe('RecipesService', () => {
   describe('REC-1, REC-7 create', () => {
     it('REC-1 stores a private recipe owned by the caller with no saved or forked origin', async () => {
@@ -1888,23 +1973,31 @@ describe('RecipesService', () => {
           forkedAt: AT,
         },
       ],
-    ])('IMG-7, SAVE-7 keeps the image objects of %s it soft-deletes', async (_name, overrides) => {
+    ])('IMG-7, SAVE-7 keeps the image objects of %s it soft-deletes while a live copy shows them', async (_name, overrides) => {
       const h = harness();
-      h.recipes.findOne.mockResolvedValue(
-        recipeRow({
-          ownerId: ME,
-          currentVersion: versionRow({ imagePaths: ['recipes/recipe-1/a.jpg'] }),
-          ...overrides,
+      const soft = recipeRow({
+        id: RELEASE_OWN_ID,
+        ownerId: ME,
+        currentVersion: versionRow({
+          recipeId: RELEASE_OWN_ID,
+          imagePaths: [RELEASE_OWN_IMG],
         }),
-      );
+        ...overrides,
+      });
+      routeFindOne(h, {
+        load: soft,
+        owners: { [RELEASE_OWN_ID]: { id: RELEASE_OWN_ID, deletedAt: AT } },
+      });
+      routeQueries(h, { [RELEASE_OWN_IMG]: true });
       h.versions.find.mockResolvedValue([
-        versionRow({ imagePaths: ['recipes/recipe-1/a.jpg'] }),
+        versionRow({ recipeId: RELEASE_OWN_ID, imagePaths: [RELEASE_OWN_IMG] }),
       ]);
 
-      await h.service.remove(ME, 'recipe-1');
+      await h.service.remove(ME, RELEASE_OWN_ID);
 
+      expect(existsChecks(h)).toEqual([RELEASE_OWN_IMG]);
+      expect(sweptPaths(h)).toEqual([]);
       expect(h.images.remove).not.toHaveBeenCalled();
-      expect(h.dataSource.query).not.toHaveBeenCalled();
     });
 
     describe('IMG-7, SAVE-7 image objects of a saved copy', () => {
@@ -2128,6 +2221,653 @@ describe('RecipesService', () => {
         ForbiddenException,
       );
       expect(h.dataSource.transaction).not.toHaveBeenCalled();
+      expect(h.images.remove).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('RecipesService IMG-7 release of images no live recipe shows (2026-09-30, BUG-028)', () => {
+  const SWEEP =
+    'UPDATE "recipe_versions" SET "image_paths" = array_remove("image_paths", $1), "updated_at" = now() WHERE $1 = ANY("image_paths")';
+
+  afterEach(() => jest.restoreAllMocks());
+
+  function quietWarn(): jest.SpyInstance {
+    return jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+  }
+
+  /** A saved copy of the source that links the source's image and owns one of its own. */
+  function copyRecipe(imagePaths = [RELEASE_SOURCE_IMG, RELEASE_COPY_IMG]): RecipeEntity {
+    return recipeRow({
+      id: RELEASE_COPY_ID,
+      ownerId: ME,
+      savedFromRecipeId: RELEASE_SOURCE_ID,
+      syncedVersionNumber: 2,
+      currentVersionId: 'copy-version-2',
+      currentVersion: versionRow({
+        id: 'copy-version-2',
+        recipeId: RELEASE_COPY_ID,
+        versionNumber: 2,
+        imagePaths,
+      }),
+    });
+  }
+
+  const LIVE = (id: string): OwnerRow => ({ id, deletedAt: null });
+  const SOFT_DELETED = (id: string): OwnerRow => ({ id, deletedAt: AT });
+
+  describe('after an image removal on a copy', () => {
+    it('IMG-7 releases a linked image whose owner is soft-deleted and that no live current version shows: swept everywhere, then deleted', async () => {
+      const h = harness();
+      routeFindOne(h, {
+        load: copyRecipe(),
+        owners: { [RELEASE_SOURCE_ID]: SOFT_DELETED(RELEASE_SOURCE_ID) },
+      });
+      routeQueries(h);
+
+      await h.service.removeImage(ME, RELEASE_COPY_ID, 0);
+
+      expect(h.versions.update).toHaveBeenCalledWith(
+        { id: 'copy-version-2' },
+        { imagePaths: [RELEASE_COPY_IMG] },
+      );
+      expect(existsChecks(h)).toEqual([RELEASE_SOURCE_IMG]);
+      expect(sweptPaths(h)).toEqual([RELEASE_SOURCE_IMG]);
+      expect(h.images.remove).toHaveBeenCalledTimes(1);
+      expect(h.images.remove).toHaveBeenCalledWith(RELEASE_SOURCE_IMG);
+    });
+
+    it('IMG-7 changes the database first: the copy update, the check and the sweep come before the bucket delete', async () => {
+      const h = harness();
+      routeFindOne(h, {
+        load: copyRecipe(),
+        owners: { [RELEASE_SOURCE_ID]: SOFT_DELETED(RELEASE_SOURCE_ID) },
+      });
+      routeQueries(h);
+
+      await h.service.removeImage(ME, RELEASE_COPY_ID, 0);
+
+      const [checkOrder, sweepOrder] = h.dataSource.query.mock.invocationCallOrder;
+      expect(h.versions.update.mock.invocationCallOrder[0]).toBeLessThan(checkOrder);
+      expect(checkOrder).toBeLessThan(sweepOrder);
+      expect(sweepOrder).toBeLessThan(h.images.remove.mock.invocationCallOrder[0]);
+    });
+
+    it('IMG-7 releases a linked image whose owning recipe is gone (no row)', async () => {
+      const h = harness();
+      routeFindOne(h, { load: copyRecipe(), owners: { [RELEASE_SOURCE_ID]: null } });
+      routeQueries(h);
+
+      await h.service.removeImage(ME, RELEASE_COPY_ID, 0);
+
+      expect(sweptPaths(h)).toEqual([RELEASE_SOURCE_IMG]);
+      expect(h.images.remove).toHaveBeenCalledWith(RELEASE_SOURCE_IMG);
+    });
+
+    it('IMG-7 keeps a linked image of a soft-deleted owner while a live recipe current version still shows it', async () => {
+      const h = harness();
+      routeFindOne(h, {
+        load: copyRecipe(),
+        owners: { [RELEASE_SOURCE_ID]: SOFT_DELETED(RELEASE_SOURCE_ID) },
+      });
+      routeQueries(h, { [RELEASE_SOURCE_IMG]: true });
+
+      await h.service.removeImage(ME, RELEASE_COPY_ID, 0);
+
+      expect(existsChecks(h)).toEqual([RELEASE_SOURCE_IMG]);
+      expect(sweptPaths(h)).toEqual([]);
+      expect(h.images.remove).not.toHaveBeenCalled();
+    });
+
+    it('IMG-7 leaves a linked image of a live owner alone without asking who shows it: only the owner deletes it', async () => {
+      const h = harness();
+      routeFindOne(h, {
+        load: copyRecipe(),
+        owners: { [RELEASE_SOURCE_ID]: LIVE(RELEASE_SOURCE_ID) },
+      });
+      routeQueries(h);
+
+      await h.service.removeImage(ME, RELEASE_COPY_ID, 0);
+
+      expect(ownerLookups(h)).toEqual([RELEASE_SOURCE_ID]);
+      expect(existsChecks(h)).toEqual([]);
+      expect(sweptPaths(h)).toEqual([]);
+      expect(h.images.remove).not.toHaveBeenCalled();
+    });
+
+    it('IMG-7 looks the owner up by the <recipeId> of the path, reading only its id and deleted_at', async () => {
+      const h = harness();
+      routeFindOne(h, {
+        load: copyRecipe(),
+        owners: { [RELEASE_SOURCE_ID]: LIVE(RELEASE_SOURCE_ID) },
+      });
+
+      await h.service.removeImage(ME, RELEASE_COPY_ID, 0);
+
+      expect(h.recipes.findOne).toHaveBeenCalledWith({
+        where: { id: RELEASE_SOURCE_ID },
+        select: { id: true, deletedAt: true },
+      });
+    });
+
+    it('IMG-7 counts only current versions of live recipes as showing a path', async () => {
+      const h = harness();
+      routeFindOne(h, {
+        load: copyRecipe(),
+        owners: { [RELEASE_SOURCE_ID]: SOFT_DELETED(RELEASE_SOURCE_ID) },
+      });
+      routeQueries(h);
+
+      await h.service.removeImage(ME, RELEASE_COPY_ID, 0);
+
+      const [sql, parameters] = (h.dataSource.query.mock.calls as [string, unknown[]][]).find(
+        ([text]) => text.includes('SELECT EXISTS'),
+      ) as [string, unknown[]];
+      const collapsed = sql.replace(/\s+/g, ' ');
+      expect(collapsed).toContain('"live"."deleted_at" IS NULL');
+      expect(collapsed).toContain(
+        '"shown_version"."id" = "live"."current_version_id"',
+      );
+      expect(collapsed).toContain('$1 = ANY("shown_version"."image_paths")');
+      expect(parameters).toEqual([RELEASE_SOURCE_IMG]);
+    });
+
+    it('IMG-7 drops the released path with the same every-version sweep as the owner removal', async () => {
+      const h = harness();
+      routeFindOne(h, {
+        load: copyRecipe(),
+        owners: { [RELEASE_SOURCE_ID]: SOFT_DELETED(RELEASE_SOURCE_ID) },
+      });
+      routeQueries(h);
+
+      await h.service.removeImage(ME, RELEASE_COPY_ID, 0);
+
+      const sweep = (h.dataSource.query.mock.calls as [string, unknown[]][]).find(
+        ([text]) => text.includes('array_remove'),
+      ) as [string, unknown[]];
+      expect(sweep[0].replace(/\s+/g, ' ').trim()).toBe(SWEEP);
+      expect(sweep[1]).toEqual([RELEASE_SOURCE_IMG]);
+    });
+
+    it('IMG-7 does not check a path outside the IMG-6 shape (no <recipeId> UUID)', async () => {
+      const h = harness();
+      routeFindOne(h, {
+        load: copyRecipe(['recipes/source-1/a.jpg', RELEASE_COPY_IMG]),
+      });
+      routeQueries(h);
+
+      await h.service.removeImage(ME, RELEASE_COPY_ID, 0);
+
+      expect(ownerLookups(h)).toEqual([]);
+      expect(h.dataSource.query).not.toHaveBeenCalled();
+      expect(h.images.remove).not.toHaveBeenCalled();
+    });
+
+    it('IMG-7 an owner removal of its own image sweeps and deletes without the release check', async () => {
+      const h = harness();
+      routeFindOne(h, { load: copyRecipe() });
+      routeQueries(h);
+
+      await h.service.removeImage(ME, RELEASE_COPY_ID, 1);
+
+      expect(ownerLookups(h)).toEqual([]);
+      expect(existsChecks(h)).toEqual([]);
+      expect(sweptPaths(h)).toEqual([RELEASE_COPY_IMG]);
+      expect(h.images.remove).toHaveBeenCalledWith(RELEASE_COPY_IMG);
+    });
+
+    it('IMG-7 a failed owner lookup is logged with the path and the error message, and the request succeeds', async () => {
+      const warn = quietWarn();
+      const h = harness();
+      routeFindOne(h, {
+        load: copyRecipe(),
+        ownerError: new Error('connection reset'),
+      });
+      h.images.signedUrls.mockResolvedValue(['https://signed.example/copy']);
+
+      await expect(h.service.removeImage(ME, RELEASE_COPY_ID, 0)).resolves.toEqual({
+        imageUrls: ['https://signed.example/copy'],
+      });
+      expect(h.versions.update).toHaveBeenCalledWith(
+        { id: 'copy-version-2' },
+        { imagePaths: [RELEASE_COPY_IMG] },
+      );
+      expect(h.images.remove).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(RELEASE_SOURCE_IMG));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('connection reset'));
+    });
+
+    it('IMG-7 a failed "shown" query is logged and leaves the object and the versions alone', async () => {
+      const warn = quietWarn();
+      const h = harness();
+      routeFindOne(h, {
+        load: copyRecipe(),
+        owners: { [RELEASE_SOURCE_ID]: SOFT_DELETED(RELEASE_SOURCE_ID) },
+      });
+      routeQueries(h, new Error('statement timeout'));
+
+      await expect(h.service.removeImage(ME, RELEASE_COPY_ID, 0)).resolves.toBeDefined();
+      expect(sweptPaths(h)).toEqual([]);
+      expect(h.images.remove).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(RELEASE_SOURCE_IMG));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('statement timeout'));
+    });
+
+    it('IMG-7 a failed sweep during a release is logged and deletes no object', async () => {
+      const warn = quietWarn();
+      const h = harness();
+      routeFindOne(h, {
+        load: copyRecipe(),
+        owners: { [RELEASE_SOURCE_ID]: SOFT_DELETED(RELEASE_SOURCE_ID) },
+      });
+      h.dataSource.query.mockImplementation(async (sql: string) => {
+        if (sql.includes('SELECT EXISTS')) return [{ shown: false }];
+        throw new Error('deadlock detected');
+      });
+
+      await expect(h.service.removeImage(ME, RELEASE_COPY_ID, 0)).resolves.toBeDefined();
+      expect(h.images.remove).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('deadlock detected'));
+    });
+
+    it('IMG-7 a bucket delete that fails during a release is logged and the request succeeds', async () => {
+      const warn = quietWarn();
+      const h = harness();
+      routeFindOne(h, {
+        load: copyRecipe(),
+        owners: { [RELEASE_SOURCE_ID]: SOFT_DELETED(RELEASE_SOURCE_ID) },
+      });
+      routeQueries(h);
+      h.images.remove.mockRejectedValue(new Error('bucket unavailable'));
+
+      await expect(h.service.removeImage(ME, RELEASE_COPY_ID, 0)).resolves.toBeDefined();
+      expect(sweptPaths(h)).toEqual([RELEASE_SOURCE_IMG]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(RELEASE_SOURCE_IMG));
+    });
+  });
+
+  describe('after a sync', () => {
+    const SOURCE_VERSION = versionRow({
+      id: 'source-version-3',
+      recipeId: RELEASE_SOURCE_ID,
+      versionNumber: 3,
+      imagePaths: [RELEASE_SOURCE_IMG],
+    });
+
+    function syncRoute(
+      h: Harness,
+      previous: string[],
+      owners: Record<string, OwnerRow>,
+    ): void {
+      routeFindOne(h, {
+        load: copyRecipe(previous),
+        source: recipeRow({
+          id: RELEASE_SOURCE_ID,
+          ownerId: OWNER,
+          visibility: 'public',
+          currentVersionId: SOURCE_VERSION.id,
+          currentVersion: SOURCE_VERSION,
+        }),
+        owners,
+      });
+      h.manager.findOne.mockResolvedValue(versionRow({ versionNumber: 2 }));
+    }
+
+    it('IMG-7 offers only the paths the sync left out of the copy current version', async () => {
+      const h = harness();
+      syncRoute(h, [RELEASE_GRAND_IMG, RELEASE_SOURCE_IMG, RELEASE_COPY_IMG], {
+        [RELEASE_GRAND_ID]: SOFT_DELETED(RELEASE_GRAND_ID),
+        [RELEASE_COPY_ID]: LIVE(RELEASE_COPY_ID),
+      });
+      routeQueries(h);
+
+      await h.service.sync(ME, RELEASE_COPY_ID);
+
+      expect(ownerLookups(h)).toEqual([RELEASE_GRAND_ID, RELEASE_COPY_ID]);
+      expect(existsChecks(h)).toEqual([RELEASE_GRAND_IMG]);
+      expect(sweptPaths(h)).toEqual([RELEASE_GRAND_IMG]);
+      expect(h.images.remove).toHaveBeenCalledTimes(1);
+      expect(h.images.remove).toHaveBeenCalledWith(RELEASE_GRAND_IMG);
+    });
+
+    it('IMG-7 runs the check after the sync transaction wrote the new version', async () => {
+      const h = harness();
+      syncRoute(h, [RELEASE_GRAND_IMG], {
+        [RELEASE_GRAND_ID]: SOFT_DELETED(RELEASE_GRAND_ID),
+      });
+      routeQueries(h);
+
+      await h.service.sync(ME, RELEASE_COPY_ID);
+
+      expect(h.manager.update).toHaveBeenCalledWith(
+        RecipeEntity,
+        { id: RELEASE_COPY_ID },
+        { currentVersionId: 'generated-1', syncedVersionNumber: 3 },
+      );
+      expect(h.manager.update.mock.invocationCallOrder[0]).toBeLessThan(
+        h.dataSource.query.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('IMG-7 keeps a dropped path that another live recipe current version still shows', async () => {
+      const h = harness();
+      syncRoute(h, [RELEASE_GRAND_IMG], {
+        [RELEASE_GRAND_ID]: SOFT_DELETED(RELEASE_GRAND_ID),
+      });
+      routeQueries(h, { [RELEASE_GRAND_IMG]: true });
+
+      await h.service.sync(ME, RELEASE_COPY_ID);
+
+      expect(sweptPaths(h)).toEqual([]);
+      expect(h.images.remove).not.toHaveBeenCalled();
+    });
+
+    it('IMG-7 checks nothing when the sync keeps every path', async () => {
+      const h = harness();
+      syncRoute(h, [RELEASE_SOURCE_IMG], {});
+      routeQueries(h);
+
+      await h.service.sync(ME, RELEASE_COPY_ID);
+
+      expect(ownerLookups(h)).toEqual([]);
+      expect(h.dataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('IMG-7 a failed check after a sync is logged and the sync still returns the detail', async () => {
+      const warn = quietWarn();
+      const h = harness();
+      syncRoute(h, [RELEASE_GRAND_IMG], {
+        [RELEASE_GRAND_ID]: SOFT_DELETED(RELEASE_GRAND_ID),
+      });
+      routeQueries(h, new Error('statement timeout'));
+
+      await expect(h.service.sync(ME, RELEASE_COPY_ID)).resolves.toBe(DETAIL);
+      expect(h.images.remove).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(RELEASE_GRAND_IMG));
+    });
+  });
+
+  describe('after removing a saved copy', () => {
+    function removeCopyRoute(h: Harness, owners: Record<string, OwnerRow>): void {
+      routeFindOne(h, { load: copyRecipe(), owners });
+      h.versions.find.mockResolvedValue([
+        versionRow({
+          id: 'copy-version-1',
+          recipeId: RELEASE_COPY_ID,
+          imagePaths: [RELEASE_GRAND_IMG, RELEASE_SOURCE_IMG],
+        }),
+        versionRow({
+          id: 'copy-version-2',
+          recipeId: RELEASE_COPY_ID,
+          versionNumber: 2,
+          imagePaths: [RELEASE_SOURCE_IMG, RELEASE_COPY_IMG],
+        }),
+      ]);
+    }
+
+    it('IMG-7 releases the linked images of deleted owners that the copy was the last live recipe to show', async () => {
+      const h = harness();
+      removeCopyRoute(h, {
+        [RELEASE_SOURCE_ID]: SOFT_DELETED(RELEASE_SOURCE_ID),
+        [RELEASE_GRAND_ID]: null,
+      });
+      routeQueries(h);
+
+      await h.service.remove(ME, RELEASE_COPY_ID);
+
+      expect(existsChecks(h)).toEqual([RELEASE_GRAND_IMG, RELEASE_SOURCE_IMG]);
+      expect(sweptPaths(h)).toEqual([RELEASE_GRAND_IMG, RELEASE_SOURCE_IMG]);
+      expect(h.images.remove).toHaveBeenCalledTimes(3);
+      expect(h.images.remove).toHaveBeenCalledWith(RELEASE_COPY_IMG);
+      expect(h.images.remove).toHaveBeenCalledWith(RELEASE_GRAND_IMG);
+      expect(h.images.remove).toHaveBeenCalledWith(RELEASE_SOURCE_IMG);
+    });
+
+    it('IMG-7 offers only the linked paths: the copy own objects are deleted without a check', async () => {
+      const h = harness();
+      removeCopyRoute(h, {
+        [RELEASE_SOURCE_ID]: LIVE(RELEASE_SOURCE_ID),
+        [RELEASE_GRAND_ID]: LIVE(RELEASE_GRAND_ID),
+      });
+      routeQueries(h);
+
+      await h.service.remove(ME, RELEASE_COPY_ID);
+
+      expect(ownerLookups(h)).toEqual([RELEASE_GRAND_ID, RELEASE_SOURCE_ID]);
+      expect(h.images.remove).toHaveBeenCalledTimes(1);
+      expect(h.images.remove).toHaveBeenCalledWith(RELEASE_COPY_IMG);
+      expect(sweptPaths(h)).toEqual([]);
+    });
+
+    it('IMG-7 runs the check after the copy row is hard-deleted', async () => {
+      const h = harness();
+      removeCopyRoute(h, {
+        [RELEASE_SOURCE_ID]: SOFT_DELETED(RELEASE_SOURCE_ID),
+        [RELEASE_GRAND_ID]: SOFT_DELETED(RELEASE_GRAND_ID),
+      });
+      routeQueries(h);
+
+      await h.service.remove(ME, RELEASE_COPY_ID);
+
+      expect(h.manager.delete.mock.invocationCallOrder[0]).toBeLessThan(
+        h.dataSource.query.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('IMG-7 keeps a linked image of a deleted owner that another live copy still shows', async () => {
+      const h = harness();
+      removeCopyRoute(h, {
+        [RELEASE_SOURCE_ID]: SOFT_DELETED(RELEASE_SOURCE_ID),
+        [RELEASE_GRAND_ID]: SOFT_DELETED(RELEASE_GRAND_ID),
+      });
+      routeQueries(h, { [RELEASE_SOURCE_IMG]: true });
+
+      await h.service.remove(ME, RELEASE_COPY_ID);
+
+      expect(sweptPaths(h)).toEqual([RELEASE_GRAND_IMG]);
+      expect(h.images.remove).not.toHaveBeenCalledWith(RELEASE_SOURCE_IMG);
+      expect(h.images.remove).toHaveBeenCalledWith(RELEASE_GRAND_IMG);
+    });
+
+    it('IMG-7 a failed check after removing a copy is logged and the removal still succeeds', async () => {
+      const warn = quietWarn();
+      const h = harness();
+      removeCopyRoute(h, {});
+      h.recipes.findOne.mockImplementation(async (options: { select?: unknown }) => {
+        if (options.select !== undefined) throw new Error('connection reset');
+        return copyRecipe();
+      });
+
+      await expect(h.service.remove(ME, RELEASE_COPY_ID)).resolves.toBeUndefined();
+      expect(h.manager.delete).toHaveBeenCalledWith(RecipeEntity, { id: RELEASE_COPY_ID });
+      expect(h.images.remove).toHaveBeenCalledWith(RELEASE_COPY_IMG);
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(RELEASE_GRAND_IMG));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(RELEASE_SOURCE_IMG));
+    });
+  });
+
+  describe('after soft-deleting a recipe or fork', () => {
+    function ownRecipe(overrides: Partial<RecipeEntity> = {}): RecipeEntity {
+      return recipeRow({
+        id: RELEASE_OWN_ID,
+        ownerId: ME,
+        currentVersionId: 'own-version-2',
+        currentVersion: versionRow({
+          id: 'own-version-2',
+          recipeId: RELEASE_OWN_ID,
+          versionNumber: 2,
+          imagePaths: [RELEASE_OWN_IMG],
+        }),
+        ...overrides,
+      });
+    }
+
+    it('IMG-7 a soft-deleted recipe that no live copy shows loses its objects at once', async () => {
+      const h = harness();
+      routeFindOne(h, {
+        load: ownRecipe(),
+        owners: { [RELEASE_OWN_ID]: SOFT_DELETED(RELEASE_OWN_ID) },
+      });
+      routeQueries(h);
+      h.versions.find.mockResolvedValue([
+        versionRow({ recipeId: RELEASE_OWN_ID, imagePaths: [RELEASE_OWN_IMG] }),
+      ]);
+
+      await h.service.remove(ME, RELEASE_OWN_ID);
+
+      expect(h.recipes.update).toHaveBeenCalledWith(
+        { id: RELEASE_OWN_ID },
+        { deletedAt: expect.any(Date) },
+      );
+      expect(existsChecks(h)).toEqual([RELEASE_OWN_IMG]);
+      expect(sweptPaths(h)).toEqual([RELEASE_OWN_IMG]);
+      expect(h.images.remove).toHaveBeenCalledWith(RELEASE_OWN_IMG);
+    });
+
+    it('IMG-7 soft-deletes first, then checks, sweeps and deletes the object', async () => {
+      const h = harness();
+      routeFindOne(h, {
+        load: ownRecipe(),
+        owners: { [RELEASE_OWN_ID]: SOFT_DELETED(RELEASE_OWN_ID) },
+      });
+      routeQueries(h);
+      h.versions.find.mockResolvedValue([
+        versionRow({ recipeId: RELEASE_OWN_ID, imagePaths: [RELEASE_OWN_IMG] }),
+      ]);
+
+      await h.service.remove(ME, RELEASE_OWN_ID);
+
+      const [checkOrder, sweepOrder] = h.dataSource.query.mock.invocationCallOrder;
+      expect(h.recipes.update.mock.invocationCallOrder[0]).toBeLessThan(checkOrder);
+      expect(checkOrder).toBeLessThan(sweepOrder);
+      expect(sweepOrder).toBeLessThan(h.images.remove.mock.invocationCallOrder[0]);
+    });
+
+    it('IMG-7 offers every path of every version of the soft-deleted recipe, each once', async () => {
+      const h = harness();
+      const pastImg = `recipes/${RELEASE_OWN_ID}/6a5b4c3d-2e1f-4a0b-9c8d-7e6f5a4b3c2d.png`;
+      routeFindOne(h, {
+        load: ownRecipe(),
+        owners: { [RELEASE_OWN_ID]: SOFT_DELETED(RELEASE_OWN_ID) },
+      });
+      routeQueries(h);
+      h.versions.find.mockResolvedValue([
+        versionRow({ recipeId: RELEASE_OWN_ID, imagePaths: [pastImg, RELEASE_OWN_IMG] }),
+        versionRow({
+          recipeId: RELEASE_OWN_ID,
+          versionNumber: 2,
+          imagePaths: [RELEASE_OWN_IMG],
+        }),
+        versionRow({
+          recipeId: RELEASE_OWN_ID,
+          versionNumber: 3,
+          imagePaths: null as unknown as string[],
+        }),
+      ]);
+
+      await h.service.remove(ME, RELEASE_OWN_ID);
+
+      expect(h.versions.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { recipeId: RELEASE_OWN_ID } }),
+      );
+      expect(existsChecks(h)).toEqual([pastImg, RELEASE_OWN_IMG]);
+      expect(h.images.remove).toHaveBeenCalledTimes(2);
+    });
+
+    it('IMG-7 a soft-deleted fork keeps the source images it linked while the source is live', async () => {
+      const h = harness();
+      routeFindOne(h, {
+        load: ownRecipe({
+          savedFromRecipeId: RELEASE_SOURCE_ID,
+          forkedFromRecipeId: RELEASE_SOURCE_ID,
+          forkedAt: AT,
+        }),
+        owners: {
+          [RELEASE_OWN_ID]: SOFT_DELETED(RELEASE_OWN_ID),
+          [RELEASE_SOURCE_ID]: LIVE(RELEASE_SOURCE_ID),
+        },
+      });
+      routeQueries(h);
+      h.versions.find.mockResolvedValue([
+        versionRow({
+          recipeId: RELEASE_OWN_ID,
+          imagePaths: [RELEASE_SOURCE_IMG, RELEASE_OWN_IMG],
+        }),
+      ]);
+
+      await h.service.remove(ME, RELEASE_OWN_ID);
+
+      expect(h.recipes.update).toHaveBeenCalledWith(
+        { id: RELEASE_OWN_ID },
+        { deletedAt: expect.any(Date) },
+      );
+      expect(h.manager.delete).not.toHaveBeenCalled();
+      expect(existsChecks(h)).toEqual([RELEASE_OWN_IMG]);
+      expect(h.images.remove).toHaveBeenCalledTimes(1);
+      expect(h.images.remove).toHaveBeenCalledWith(RELEASE_OWN_IMG);
+    });
+
+    it('IMG-7 a soft-deleted fork releases a linked image of a deleted source that nothing else shows', async () => {
+      const h = harness();
+      routeFindOne(h, {
+        load: ownRecipe({
+          savedFromRecipeId: RELEASE_SOURCE_ID,
+          forkedFromRecipeId: RELEASE_SOURCE_ID,
+          forkedAt: AT,
+          currentVersion: versionRow({
+            recipeId: RELEASE_OWN_ID,
+            imagePaths: [RELEASE_SOURCE_IMG],
+          }),
+        }),
+        owners: { [RELEASE_SOURCE_ID]: SOFT_DELETED(RELEASE_SOURCE_ID) },
+      });
+      routeQueries(h);
+      h.versions.find.mockResolvedValue([
+        versionRow({ recipeId: RELEASE_OWN_ID, imagePaths: [RELEASE_SOURCE_IMG] }),
+      ]);
+
+      await h.service.remove(ME, RELEASE_OWN_ID);
+
+      expect(sweptPaths(h)).toEqual([RELEASE_SOURCE_IMG]);
+      expect(h.images.remove).toHaveBeenCalledWith(RELEASE_SOURCE_IMG);
+    });
+
+    it('IMG-7 a failed check after a soft delete is logged and the soft delete stands', async () => {
+      const warn = quietWarn();
+      const h = harness();
+      routeFindOne(h, {
+        load: ownRecipe(),
+        owners: { [RELEASE_OWN_ID]: SOFT_DELETED(RELEASE_OWN_ID) },
+      });
+      routeQueries(h, new Error('statement timeout'));
+      h.versions.find.mockResolvedValue([
+        versionRow({ recipeId: RELEASE_OWN_ID, imagePaths: [RELEASE_OWN_IMG] }),
+      ]);
+
+      await expect(h.service.remove(ME, RELEASE_OWN_ID)).resolves.toBeUndefined();
+      expect(h.recipes.update).toHaveBeenCalledWith(
+        { id: RELEASE_OWN_ID },
+        { deletedAt: expect.any(Date) },
+      );
+      expect(h.images.remove).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(RELEASE_OWN_IMG));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('statement timeout'));
+    });
+
+    it('IMG-7, REC-6 checks nothing when someone other than the owner tries to remove the recipe', async () => {
+      const h = harness();
+      routeFindOne(h, { load: ownRecipe({ ownerId: OWNER }) });
+      routeQueries(h);
+
+      await expect(h.service.remove(ME, RELEASE_OWN_ID)).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(ownerLookups(h)).toEqual([]);
+      expect(h.dataSource.query).not.toHaveBeenCalled();
       expect(h.images.remove).not.toHaveBeenCalled();
     });
   });

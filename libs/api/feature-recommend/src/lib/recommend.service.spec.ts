@@ -19,8 +19,9 @@ import type {
 } from '@rsn/api/feature-recipes';
 import type { RecipeCardDto } from '@rsn/shared/util-contracts';
 
+import { RecommendCache } from './recommend-cache';
 import { RecommendPromptBuilder } from './recommend-prompt.builder';
-import { RecommendService } from './recommend.service';
+import { ONLY_CANDIDATE_REASON, RecommendService } from './recommend.service';
 import { WeatherLineBuilder } from './weather-line.builder';
 
 /**
@@ -169,7 +170,7 @@ describe('RecommendService.recommend (WX-5, WX-10, COOK-8)', () => {
 
   it('COOK-8 consumes the quota before the model call when there are candidates', async () => {
     const harness = makeHarness('{"picks":[]}');
-    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a'));
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
 
     await harness.service.recommend(USER, {
       timezone: 'Asia/Jerusalem',
@@ -181,7 +182,7 @@ describe('RecommendService.recommend (WX-5, WX-10, COOK-8)', () => {
 
   it('WX-10 sends one recommend-feature request with max_tokens 1500 and temperature 0.5', async () => {
     const harness = makeHarness('{"picks":[]}');
-    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a'));
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
 
     await harness.service.recommend(USER, {
       timezone: 'Asia/Jerusalem',
@@ -193,6 +194,20 @@ describe('RecommendService.recommend (WX-5, WX-10, COOK-8)', () => {
     expect(input.userId).toBe(USER.id);
     expect(input.maxTokens).toBe(1500);
     expect(input.temperature).toBe(0.5);
+  });
+
+  it('WX-10 switches reasoning off with reasoning { effort: "none" } and asks for a JSON object', async () => {
+    const harness = makeHarness('{"picks":[]}');
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
+
+    await harness.service.recommend(USER, {
+      timezone: 'Asia/Jerusalem',
+      scope: 'home',
+    });
+
+    expect(harness.openRouter.chat).toHaveBeenCalledTimes(1);
+    const [input] = harness.openRouter.chat.mock.calls[0];
+    expect(input.reasoning).toEqual({ effort: 'none' });
   });
 
   it('WX-10 keeps only picks whose id is in the candidate list', async () => {
@@ -264,7 +279,7 @@ describe('RecommendService.recommend (WX-5, WX-10, COOK-8)', () => {
 
   it('WX-10 yields empty picks for an answer that is not JSON', async () => {
     const harness = makeHarness('No recommendation right now, sorry.');
-    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a'));
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
 
     const response = await harness.service.recommend(USER, {
       timezone: 'Asia/Jerusalem',
@@ -277,7 +292,7 @@ describe('RecommendService.recommend (WX-5, WX-10, COOK-8)', () => {
 
   it('WX-10 yields empty picks when the JSON carries no picks array', async () => {
     const harness = makeHarness('{"answer":"I would cook ramen"}');
-    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a'));
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
 
     const response = await harness.service.recommend(USER, {
       timezone: 'Asia/Jerusalem',
@@ -289,7 +304,9 @@ describe('RecommendService.recommend (WX-5, WX-10, COOK-8)', () => {
 
   it('WX-5 removes the already-recommended ids from the personal candidates', async () => {
     const harness = makeHarness('{"picks":[{"id":"b","reason":"next"}]}');
-    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
+    harness.recipes.candidatesForRecommend.mockResolvedValue(
+      entities('a', 'b', 'c'),
+    );
 
     const response = await harness.service.recommend(USER, {
       timezone: 'Asia/Jerusalem',
@@ -299,14 +316,16 @@ describe('RecommendService.recommend (WX-5, WX-10, COOK-8)', () => {
 
     expect(harness.recipeDto.cardsFor).toHaveBeenCalledWith(USER.id, [
       expect.objectContaining({ id: 'b' }),
+      expect.objectContaining({ id: 'c' }),
     ]);
+    expect(harness.openRouter.chat).toHaveBeenCalledTimes(1);
     expect(response.picks.map((pick) => pick.recipe.id)).toEqual(['b']);
   });
 
   it('WX-5 removes the already-recommended ids from the Discover candidates', async () => {
     const harness = makeHarness('{"picks":[{"id":"b","reason":"next"}]}');
     harness.recipeDto.listPublicCards.mockResolvedValue({
-      cards: [card('a'), card('b')],
+      cards: [card('a'), card('b'), card('c')],
       hasMore: false,
     });
 
@@ -320,7 +339,10 @@ describe('RecommendService.recommend (WX-5, WX-10, COOK-8)', () => {
       page: 1,
       pageSize: 30,
       excludeIds: ['a'],
+      excludeOwnerId: USER.id,
+      excludeCopiedBy: USER.id,
     });
+    expect(harness.openRouter.chat).toHaveBeenCalledTimes(1);
     expect(response.picks.map((pick) => pick.recipe.id)).toEqual(['b']);
   });
 
@@ -363,7 +385,7 @@ describe('RecommendService.recommend (WX-5, WX-10, COOK-8)', () => {
 
   it('WX-10 still recommends, without weather, for a city Open-Meteo cannot geocode', async () => {
     const harness = makeHarness('{"picks":[{"id":"a","reason":"comfort food"}]}');
-    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a'));
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
     harness.weather.weatherFor.mockResolvedValue(null);
 
     const response = await harness.service.recommend(USER, {
@@ -380,7 +402,7 @@ describe('RecommendService.recommend (WX-5, WX-10, COOK-8)', () => {
 
   it('WX-10 reports an empty reason when the model omitted one', async () => {
     const harness = makeHarness('{"picks":[{"id":"a"}]}');
-    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a'));
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
 
     const response = await harness.service.recommend(USER, {
       timezone: 'Asia/Jerusalem',
@@ -392,7 +414,7 @@ describe('RecommendService.recommend (WX-5, WX-10, COOK-8)', () => {
 
   it('§11.6 an OpenRouter failure reaches the client as the neutral 503', async () => {
     const harness = makeHarness();
-    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a'));
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
     harness.openRouter.chat.mockRejectedValue(
       new ServiceUnavailableException('The assistant is unavailable right now'),
     );
@@ -405,6 +427,191 @@ describe('RecommendService.recommend (WX-5, WX-10, COOK-8)', () => {
     expect((error as ServiceUnavailableException).message).toBe(
       'The assistant is unavailable right now',
     );
+  });
+});
+
+describe('RecommendService.recommend discover candidates (WX-10, BUG-027)', () => {
+  it('WX-10 asks for public cards that are not the caller own and that the caller has no live copy of', async () => {
+    const harness = makeHarness('{"picks":[{"id":"b","reason":"fresh"}]}');
+    harness.recipeDto.listPublicCards.mockResolvedValue({
+      cards: [card('a'), card('b')],
+      hasMore: false,
+    });
+
+    await harness.service.recommend(USER, {
+      timezone: 'Asia/Jerusalem',
+      scope: 'discover',
+    });
+
+    expect(harness.recipeDto.listPublicCards).toHaveBeenCalledTimes(1);
+    expect(harness.recipeDto.listPublicCards).toHaveBeenCalledWith(USER.id, {
+      page: 1,
+      pageSize: 30,
+      excludeIds: [],
+      excludeOwnerId: USER.id,
+      excludeCopiedBy: USER.id,
+    });
+  });
+
+  it('WX-10 the personal space reads its own candidates, not the public list', async () => {
+    const harness = makeHarness('{"picks":[]}');
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
+
+    await harness.service.recommend(USER, {
+      timezone: 'Asia/Jerusalem',
+      scope: 'home',
+    });
+
+    expect(harness.recipeDto.listPublicCards).not.toHaveBeenCalled();
+    expect(harness.recipes.candidatesForRecommend).toHaveBeenCalledWith(USER.id);
+  });
+});
+
+describe('RecommendService.recommend with exactly one candidate (WX-10, PERF-003, COOK-8)', () => {
+  const HOME = { timezone: 'Asia/Jerusalem', scope: 'home' as const };
+
+  it('WX-10 exports the fixed reason "The only recipe left to suggest"', () => {
+    expect(ONLY_CANDIDATE_REASON).toBe('The only recipe left to suggest');
+  });
+
+  it('WX-10 a single personal candidate is the pick, with the fixed reason and no model call', async () => {
+    const harness = makeHarness('{"picks":[{"id":"a","reason":"model"}]}');
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a'));
+
+    const response = await harness.service.recommend(USER, HOME);
+
+    expect(harness.openRouter.chat).not.toHaveBeenCalled();
+    expect(response.picks).toHaveLength(1);
+    expect(response.picks[0].recipe).toEqual(card('a'));
+    expect(response.picks[0].reason).toBe('The only recipe left to suggest');
+  });
+
+  it('COOK-8 a single candidate counts no quota unit and returns the current quota', async () => {
+    const harness = makeHarness();
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a'));
+
+    const response = await harness.service.recommend(USER, HOME);
+
+    expect(harness.quota.consume).not.toHaveBeenCalled();
+    expect(harness.calls).toEqual(['current']);
+    expect(harness.quota.current).toHaveBeenCalledWith(USER.id);
+    expect(response.quota).toEqual(QUOTA);
+  });
+
+  it('COOK-8 a single candidate still answers when the daily quota is exhausted', async () => {
+    const harness = makeHarness();
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a'));
+    harness.quota.consume.mockRejectedValue(
+      new HttpException('Daily AI quota reached', HttpStatus.TOO_MANY_REQUESTS),
+    );
+    const exhausted = { used: 100, limit: 100, remaining: 0 };
+    harness.quota.current.mockResolvedValue(exhausted);
+
+    const response = await harness.service.recommend(USER, HOME);
+
+    expect(response.picks.map((pick) => pick.recipe.id)).toEqual(['a']);
+    expect(response.quota).toEqual(exhausted);
+  });
+
+  it('WX-10 a single candidate still returns the weather context', async () => {
+    const harness = makeHarness();
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a'));
+
+    const response = await harness.service.recommend(USER, HOME);
+
+    expect(harness.weather.weatherFor).toHaveBeenCalledWith('Asia/Jerusalem');
+    expect(response.weather?.line).toBe('9 °C and clear tonight in Tel Aviv');
+  });
+
+  it('WX-10 a single Discover candidate is the pick without a model call', async () => {
+    const harness = makeHarness('{"picks":[{"id":"z","reason":"model"}]}');
+    harness.recipeDto.listPublicCards.mockResolvedValue({
+      cards: [card('z')],
+      hasMore: false,
+    });
+
+    const response = await harness.service.recommend(USER, {
+      ...HOME,
+      scope: 'discover',
+    });
+
+    expect(harness.openRouter.chat).not.toHaveBeenCalled();
+    expect(harness.quota.consume).not.toHaveBeenCalled();
+    expect(response.picks.map((pick) => [pick.recipe.id, pick.reason])).toEqual([
+      ['z', 'The only recipe left to suggest'],
+    ]);
+  });
+
+  it('WX-5 WX-10 "Show another" that leaves one candidate picks it without a model call', async () => {
+    const harness = makeHarness('{"picks":[{"id":"b","reason":"model"}]}');
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
+
+    const response = await harness.service.recommend(USER, {
+      ...HOME,
+      excludeRecipeIds: ['a'],
+    });
+
+    expect(harness.openRouter.chat).not.toHaveBeenCalled();
+    expect(harness.quota.consume).not.toHaveBeenCalled();
+    expect(response.picks.map((pick) => [pick.recipe.id, pick.reason])).toEqual([
+      ['b', 'The only recipe left to suggest'],
+    ]);
+  });
+
+  it('WX-10 the single-candidate answer is neither read from nor written to the cache', async () => {
+    const get = jest.spyOn(RecommendCache.prototype, 'get');
+    const set = jest.spyOn(RecommendCache.prototype, 'set');
+    try {
+      const harness = makeHarness();
+      harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a'));
+
+      await harness.service.recommend(USER, HOME);
+      await harness.service.recommend(USER, HOME);
+
+      expect(get).not.toHaveBeenCalled();
+      expect(set).not.toHaveBeenCalled();
+      expect(harness.openRouter.chat).not.toHaveBeenCalled();
+    } finally {
+      get.mockRestore();
+      set.mockRestore();
+    }
+  });
+
+  it('WX-10 the single-candidate answer never replaces a cached model answer', async () => {
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask'] });
+    jest.setSystemTime(new Date('2026-09-30T07:10:00.000Z'));
+    try {
+      const harness = makeHarness('{"picks":[{"id":"a","reason":"warming"}]}');
+      harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
+      await harness.service.recommend(USER, HOME);
+
+      harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a'));
+      const single = await harness.service.recommend(USER, HOME);
+
+      harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
+      const again = await harness.service.recommend(USER, HOME);
+
+      expect(single.picks[0].reason).toBe('The only recipe left to suggest');
+      expect(harness.openRouter.chat).toHaveBeenCalledTimes(1);
+      expect(again.picks.map((pick) => [pick.recipe.id, pick.reason])).toEqual([
+        ['a', 'warming'],
+      ]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('WX-10 two candidates still go to the model', async () => {
+    const harness = makeHarness('{"picks":[{"id":"b","reason":"lighter"}]}');
+    harness.recipes.candidatesForRecommend.mockResolvedValue(entities('a', 'b'));
+
+    const response = await harness.service.recommend(USER, HOME);
+
+    expect(harness.openRouter.chat).toHaveBeenCalledTimes(1);
+    expect(harness.quota.consume).toHaveBeenCalledTimes(1);
+    expect(response.picks.map((pick) => [pick.recipe.id, pick.reason])).toEqual([
+      ['b', 'lighter'],
+    ]);
   });
 });
 
@@ -572,6 +779,9 @@ describe('RecommendService.recommend cache (WX-10)', () => {
 
   it('WX-10 "Show another" (excludeRecipeIds) always calls the model', async () => {
     const harness = homeHarness('{"picks":[{"id":"b","reason":"next"}]}');
+    harness.recipes.candidatesForRecommend.mockResolvedValue(
+      entities('a', 'b', 'c'),
+    );
     const another = { ...HOME, excludeRecipeIds: ['a'] };
 
     await harness.service.recommend(USER, another);
@@ -605,6 +815,9 @@ describe('RecommendService.recommend cache (WX-10)', () => {
 
   it('WX-10 after "Show another" excludes a candidate, a later plain visit in the same hour gets the plain answer from the cache', async () => {
     const harness = homeHarness();
+    harness.recipes.candidatesForRecommend.mockResolvedValue(
+      entities('a', 'b', 'c'),
+    );
     await harness.service.recommend(USER, HOME);
 
     harness.openRouter.chat.mockResolvedValueOnce(
@@ -624,6 +837,9 @@ describe('RecommendService.recommend cache (WX-10)', () => {
 
   it('WX-10 a "Show another" answer does not seed the plain slot when no plain answer was cached', async () => {
     const harness = homeHarness('{"picks":[{"id":"b","reason":"lighter"}]}');
+    harness.recipes.candidatesForRecommend.mockResolvedValue(
+      entities('a', 'b', 'c'),
+    );
 
     await harness.service.recommend(USER, { ...HOME, excludeRecipeIds: ['a'] });
     await harness.service.recommend(USER, HOME);
