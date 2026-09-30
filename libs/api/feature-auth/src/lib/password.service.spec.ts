@@ -1,5 +1,16 @@
 // AUTH-6: scrypt hashing and constant-time verification.
-import { PasswordService } from './password.service';
+import { scrypt } from 'node:crypto';
+import { DUMMY_PASSWORD_HASH, PasswordService } from './password.service';
+
+/**
+ * `scrypt` is wrapped in a pass-through spy (the real derivation still runs), so a test can
+ * see that verifying against the dummy hash derives a key like a real verification does.
+ */
+jest.mock('node:crypto', () => {
+  const actual = jest.requireActual<typeof import('node:crypto')>('node:crypto');
+  return { ...actual, scrypt: jest.fn(actual.scrypt) };
+});
+const scryptSpy = scrypt as unknown as jest.Mock;
 
 /** AUTH-6 uses N=2^17, so a single hash costs real CPU time. */
 jest.setTimeout(60_000);
@@ -83,4 +94,58 @@ describe('AUTH-6 PasswordService', () => {
     await expect(service.verify(PASSWORD, first)).resolves.toBe(true);
     await expect(service.verify(PASSWORD, second)).resolves.toBe(true);
   });
+
+  it('AUTH-6 DUMMY_PASSWORD_HASH has the stored format and the cost parameters of a real hash', async () => {
+    const real = (await service.hash(PASSWORD)).split('$');
+    const dummy = DUMMY_PASSWORD_HASH.split('$');
+
+    expect(dummy).toHaveLength(6);
+    expect(dummy.slice(0, 4)).toEqual(real.slice(0, 4));
+    expect(dummy.slice(0, 4)).toEqual(['scrypt', '131072', '8', '1']);
+    const salt = Buffer.from(dummy[4], 'base64');
+    const key = Buffer.from(dummy[5], 'base64');
+    expect(salt).toHaveLength(16);
+    expect(key).toHaveLength(64);
+    // Canonical base64, so the strict parser accepts it and verify() reaches scrypt.
+    expect(salt.toString('base64')).toBe(dummy[4]);
+    expect(key.toString('base64')).toBe(dummy[5]);
+  });
+
+  it('AUTH-6 verifying against DUMMY_PASSWORD_HASH runs one scrypt derivation with the same cost as a real verification', async () => {
+    const stored = await service.hash(PASSWORD);
+
+    scryptSpy.mockClear();
+    await service.verify('some other password', stored);
+    expect(scryptSpy).toHaveBeenCalledTimes(1);
+    const [, , realKeyLength, realOptions] = scryptSpy.mock.calls[0] as [
+      unknown,
+      unknown,
+      number,
+      Record<string, number>,
+    ];
+
+    scryptSpy.mockClear();
+    const result = await service.verify('some other password', DUMMY_PASSWORD_HASH);
+    expect(scryptSpy).toHaveBeenCalledTimes(1);
+    const [password, , dummyKeyLength, dummyOptions] = scryptSpy.mock.calls[0] as [
+      string,
+      unknown,
+      number,
+      Record<string, number>,
+    ];
+
+    expect(result).toBe(false);
+    expect(password).toBe('some other password');
+    expect(dummyKeyLength).toBe(realKeyLength);
+    expect(dummyKeyLength).toBe(64);
+    expect(dummyOptions).toEqual(realOptions);
+    expect(dummyOptions).toEqual(expect.objectContaining({ N: 131072, r: 8, p: 1 }));
+  });
+
+  it.each([['an empty password', ''], ['a common password', 'password'], ['the test password', PASSWORD]])(
+    'AUTH-6 %s does not verify against DUMMY_PASSWORD_HASH',
+    async (_name, password) => {
+      await expect(service.verify(password, DUMMY_PASSWORD_HASH)).resolves.toBe(false);
+    },
+  );
 });

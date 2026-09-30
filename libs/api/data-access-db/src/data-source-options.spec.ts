@@ -29,7 +29,11 @@ import {
 import { ENTITIES } from './entities';
 import { InitialSchema1759000000000 } from './migrations/1759000000000-InitialSchema';
 import { SaveOwnership1759100000000 } from './migrations/1759100000000-SaveOwnership';
-import { SaveOwnership1759100000000 as SaveOwnershipFromIndex } from './index';
+import { SharedWithNobodyPrivate1759200000000 } from './migrations/1759200000000-SharedWithNobodyPrivate';
+import {
+  SaveOwnership1759100000000 as SaveOwnershipFromIndex,
+  SharedWithNobodyPrivate1759200000000 as SharedWithNobodyPrivateFromIndex,
+} from './index';
 
 function validEnv(
   overrides: Record<string, string | undefined> = {},
@@ -135,15 +139,32 @@ describe('MIGRATIONS', () => {
     expect(MIGRATIONS[0]).toBe(InitialSchema1759000000000);
   });
 
-  it('DB-6, §12.1 appends SaveOwnership after the initial schema, in timestamp order', () => {
+  it('DB-6, §12.1, FR-4 appends SaveOwnership and then SharedWithNobodyPrivate after the initial schema, in timestamp order', () => {
     expect(MIGRATIONS).toEqual([
       InitialSchema1759000000000,
       SaveOwnership1759100000000,
+      SharedWithNobodyPrivate1759200000000,
     ]);
   });
 
   it('DB-6 re-exports SaveOwnership from the library entry point', () => {
     expect(SaveOwnershipFromIndex).toBe(SaveOwnership1759100000000);
+  });
+
+  it('DB-6, FR-4 re-exports SharedWithNobodyPrivate from the library entry point', () => {
+    expect(SharedWithNobodyPrivateFromIndex).toBe(
+      SharedWithNobodyPrivate1759200000000,
+    );
+  });
+
+  it('DB-3 still never synchronises the schema with the third migration listed', () => {
+    const options = buildDataSourceOptions(validEnv());
+
+    expect(options.synchronize).toBe(false);
+    expect(options.migrationsRun).toBe(false);
+    expect(
+      (options as unknown as { migrations: unknown[] }).migrations,
+    ).toContain(SharedWithNobodyPrivate1759200000000);
   });
 
   it('DB-6 keeps the SaveOwnership timestamp in the class name and in the `name` property', () => {

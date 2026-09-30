@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import type { Ingredient, Step } from '@rsn/shared/util-domain';
+import {
+  ingredientAmount,
+  type Ingredient,
+  type Step,
+} from '@rsn/shared/util-domain';
 import type { ChatMessage } from '@rsn/api/data-access-openrouter';
 
 /** COOK-10: the fixed system prompt — concise, under 120 words, plain text. */
@@ -49,19 +53,13 @@ export class CookPromptBuilder {
 }
 
 /**
- * §3.1.1: one line per ingredient, `200 g ramen noodles (fresh)`. A null quantity means
- * "to taste"; the `none` unit is left out so nothing is spent on an empty word.
+ * §3.1.1, UI-37: one line per ingredient, `200 g ramen noodles (fresh)`, worded like the
+ * screen through `ingredientAmount` ("Juice of 1/2 Lemon", "pinch Salt", "to taste Pepper");
+ * a missing or null note adds nothing.
  */
 function ingredientLine(ingredient: Ingredient): string {
-  const note =
-    ingredient.note !== undefined && ingredient.note.trim() !== ''
-      ? ` (${ingredient.note.trim()})`
-      : '';
-  if (ingredient.quantity === null) {
-    return `to taste ${ingredient.name}${note}`;
-  }
-  const unit = ingredient.unit === 'none' ? '' : `${ingredient.unit} `;
-  return `${ingredient.quantity} ${unit}${ingredient.name}${note}`;
+  const { amount, note } = ingredientAmount(ingredient);
+  return `${amount} ${ingredient.name}${note === null ? '' : ` (${note})`}`;
 }
 
 /** COOK-10: steps are numbered from 1 and the current one is prefixed `>> `. */

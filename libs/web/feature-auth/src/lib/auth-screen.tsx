@@ -25,6 +25,9 @@ const MODES: readonly { value: AuthMode; label: string }[] = [
   { value: 'sign-up', label: 'Sign up' },
 ];
 
+/** UI-44: shown above the form when the client ended the session after a 401. */
+export const SESSION_ENDED_MESSAGE = 'Your session ended. Sign in again.';
+
 /** AUTH-5 message for a username that is not 3–32 of `[a-z0-9_.-]`. */
 const USERNAME_MESSAGE =
   'Use 3 to 32 characters: letters, numbers, underscore, dot or hyphen.';
@@ -82,7 +85,7 @@ function validate(
  * under the form.
  */
 export function AuthScreen(): ReactElement {
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, sessionEnded } = useAuth();
   const ids = useId();
   const usernameId = `${ids}-username`;
   const passwordId = `${ids}-password`;
@@ -141,26 +144,21 @@ export function AuthScreen(): ReactElement {
 
   return (
     <main className="screen screen-narrow">
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '9px',
-          marginBottom: 'var(--space-1)',
-        }}
-      >
+      <div className="brand mb-1">
         <span className="nav-mark">
           <Icon.ChefHat size={18} />
         </span>
         {/* UI-2: the app is branded CookBook everywhere. */}
-        <h1 style={{ margin: 0 }}>CookBook</h1>
+        <h1 className="m-0">CookBook</h1>
       </div>
-      <p
-        className="text-muted"
-        style={{ fontSize: '14px', marginBottom: 'var(--space-6)' }}
-      >
+      <p className="text-muted page-lead">
         Recipes for family and friends.
       </p>
+
+      {/* UI-44: only after a session ended on a 401; a sign-out shows nothing. */}
+      {sessionEnded ? (
+        <InlineError className="mb-4">{SESSION_ENDED_MESSAGE}</InlineError>
+      ) : null}
 
       <Segmented
         label="Sign in or sign up"
@@ -174,18 +172,19 @@ export function AuthScreen(): ReactElement {
           void submit(event);
         }}
         noValidate
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 'var(--space-4)',
-          marginTop: 'var(--space-6)',
-        }}
+        className="stack gap-4 mt-6"
       >
         <Field
           label="Username"
           htmlFor={usernameId}
           error={errors.username}
-          hint={mode === 'sign-up' ? USERNAME_MESSAGE : undefined}
+          // UI-9: the grey hint hides while the field shows an error, so the rule
+          // is never printed twice.
+          hint={
+            mode === 'sign-up' && errors.username === undefined
+              ? USERNAME_MESSAGE
+              : undefined
+          }
         >
           <Input
             id={usernameId}
@@ -220,7 +219,12 @@ export function AuthScreen(): ReactElement {
             label="Email (optional)"
             htmlFor={emailId}
             error={errors.email}
-            hint="Lets friends find you by email."
+            // UI-9: the hint hides while the field shows an error.
+            hint={
+              errors.email === undefined
+                ? 'Lets friends find you by email.'
+                : undefined
+            }
           >
             <Input
               id={emailId}

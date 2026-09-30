@@ -6,6 +6,7 @@ import {
   HttpException,
   HttpStatus,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import type { RecipeEntity } from '@rsn/api/data-access-db';
 import type {
@@ -205,7 +206,7 @@ describe('CookService.ask (COOK-5, COOK-8, COOK-10)', () => {
     expect(harness.openRouter.chat).not.toHaveBeenCalled();
   });
 
-  it('COOK-10 sends one cook-feature request with max_tokens 300 and temperature 0.4', async () => {
+  it('COOK-10 sends one cook-feature request with max_tokens 1500 and temperature 0.4', async () => {
     const harness = makeHarness();
 
     await harness.service.ask(USER, {
@@ -217,7 +218,7 @@ describe('CookService.ask (COOK-5, COOK-8, COOK-10)', () => {
     const [input] = harness.openRouter.chat.mock.calls[0];
     expect(input.feature).toBe('cook');
     expect(input.userId).toBe(USER.id);
-    expect(input.maxTokens).toBe(300);
+    expect(input.maxTokens).toBe(1500);
     expect(input.temperature).toBe(0.4);
   });
 
@@ -254,6 +255,54 @@ describe('CookService.ask (COOK-5, COOK-8, COOK-10)', () => {
       completionTokens: 48,
       cost: 0.000123,
     });
+  });
+
+  it.each([
+    { label: 'empty', text: '' },
+    { label: 'whitespace-only', text: ' \n\t  ' },
+  ])(
+    'COOK-10 answers 503 "The assistant didn\'t answer. Ask again." for an $label answer',
+    async ({ text }) => {
+      const harness = makeHarness();
+      harness.openRouter.chat.mockResolvedValue({ ...CHAT_RESULT, text });
+
+      const error = await harness.service
+        .ask(USER, { recipeId: RECIPE_ID, stepIndex: 0 })
+        .catch((thrown: unknown) => thrown);
+
+      expect(error).toBeInstanceOf(ServiceUnavailableException);
+      expect((error as ServiceUnavailableException).getStatus()).toBe(503);
+      expect((error as ServiceUnavailableException).message).toBe(
+        "The assistant didn't answer. Ask again.",
+      );
+    },
+  );
+
+  it('COOK-8 an empty answer still spends the one quota unit counted before the call', async () => {
+    const harness = makeHarness();
+    harness.openRouter.chat.mockResolvedValue({ ...CHAT_RESULT, text: '' });
+
+    await expect(
+      harness.service.ask(USER, { recipeId: RECIPE_ID, stepIndex: 0 }),
+    ).rejects.toThrow(ServiceUnavailableException);
+    expect(harness.quota.consume).toHaveBeenCalledTimes(1);
+    expect(harness.openRouter.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it('§11.6 an OpenRouter failure reaches the client as the neutral 503', async () => {
+    const harness = makeHarness();
+    harness.openRouter.chat.mockRejectedValue(
+      new ServiceUnavailableException('The assistant is unavailable right now'),
+    );
+
+    const error = await harness.service
+      .ask(USER, { recipeId: RECIPE_ID, stepIndex: 0 })
+      .catch((thrown: unknown) => thrown);
+
+    expect((error as ServiceUnavailableException).getStatus()).toBe(503);
+    expect((error as ServiceUnavailableException).message).toBe(
+      'The assistant is unavailable right now',
+    );
   });
 });
 

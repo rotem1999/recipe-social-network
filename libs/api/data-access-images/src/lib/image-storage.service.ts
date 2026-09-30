@@ -9,8 +9,9 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { cert, getApp, getApps, initializeApp } from 'firebase-admin/app';
 import { getStorage } from 'firebase-admin/storage';
-import { IMAGE_MIME_TYPES, MAX_IMAGE_BYTES } from '@rsn/shared/util-domain';
+import { MAX_IMAGE_BYTES } from '@rsn/shared/util-domain';
 import type { ImageStorage, ImageUploadInput } from './image-storage';
+import { detectImageType } from './image-type';
 
 /** Bucket handle of the Admin SDK, typed without importing @google-cloud/storage. */
 type StorageBucket = ReturnType<ReturnType<typeof getStorage>['bucket']>;
@@ -19,12 +20,8 @@ type StorageBucket = ReturnType<ReturnType<typeof getStorage>['bucket']>;
 const DEFAULT_SIGNED_URL_TTL_SECONDS = 21600;
 const MAX_SIGNED_URL_TTL_SECONDS = 604800;
 
-/** IMG-6: object path extension per accepted MIME type. */
-const EXTENSION_BY_MIME_TYPE: Readonly<Record<string, string>> = {
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/webp': 'webp',
-};
+/** IMG-6: the answer to a bucket write that fails. */
+const STORAGE_UNAVAILABLE_MESSAGE = 'Image storage is unavailable right now';
 
 /** Name of the Firebase app this library initialises (IMG-2). */
 const FIREBASE_APP_NAME = 'rsn-images';
@@ -35,6 +32,38 @@ function isNotFound(error: unknown): boolean {
     error !== null &&
     (error as { code?: unknown }).code === 404
   );
+}
+
+/**
+ * IMG-6: the only part of a storage error that may reach the log - its status code and
+ * message. The error object itself carries the request, its URL and its headers,
+ * including a live `Authorization: Bearer` token, so it is never logged or rethrown.
+ */
+function describeStorageError(error: unknown): string {
+  if (typeof error !== 'object' || error === null) {
+    return `status unknown: ${redactBearer(String(error))}`;
+  }
+  const { code, status, message } = error as {
+    code?: unknown;
+    status?: unknown;
+    message?: unknown;
+  };
+  const statusCode =
+    typeof code === 'number' || typeof code === 'string'
+      ? code
+      : typeof status === 'number'
+        ? status
+        : 'unknown';
+  const text =
+    typeof message === 'string' && message.length > 0
+      ? message
+      : 'no message';
+  return `status ${statusCode}: ${redactBearer(text)}`;
+}
+
+/** IMG-6 defence in depth: a logged text never repeats a token, even if a library puts one there. */
+function redactBearer(text: string): string {
+  return text.replace(/Bearer\s+\S+/gi, 'Bearer [redacted]');
 }
 
 /**
@@ -93,12 +122,6 @@ export class ImageStorageService implements ImageStorage, OnModuleInit {
       throw new ServiceUnavailableException('Image storage is not configured');
     }
 
-    const extension = EXTENSION_BY_MIME_TYPE[input.mimeType];
-    if (extension === undefined) {
-      throw new BadRequestException(
-        `Image type must be one of ${IMAGE_MIME_TYPES.join(', ')}`,
-      );
-    }
     if (input.buffer.byteLength === 0) {
       throw new BadRequestException('Image is empty');
     }
@@ -107,15 +130,33 @@ export class ImageStorageService implements ImageStorage, OnModuleInit {
         `Image must not exceed ${MAX_IMAGE_BYTES} bytes`,
       );
     }
+    // IMG-6: the type comes from the first bytes; the declared MIME type is not trusted.
+    const detected = detectImageType(input.buffer);
+    if (detected === null) {
+      throw new BadRequestException('Image must be a JPEG, PNG or WebP file');
+    }
 
-    const objectPath = `recipes/${input.recipeId}/${randomUUID()}.${extension}`;
-    await bucket
-      .file(objectPath)
-      .save(input.buffer, { contentType: input.mimeType, resumable: false });
+    const objectPath = `recipes/${input.recipeId}/${randomUUID()}.${detected.extension}`;
+    try {
+      await bucket.file(objectPath).save(input.buffer, {
+        contentType: detected.mimeType,
+        resumable: false,
+      });
+    } catch (error: unknown) {
+      // IMG-6: 503, and the log gets the status code and message only.
+      this.logger.error(
+        `Could not write image ${objectPath}: ${describeStorageError(error)}`,
+      );
+      throw new ServiceUnavailableException(STORAGE_UNAVAILABLE_MESSAGE);
+    }
     return objectPath;
   }
 
-  /** Deletes one object; an already missing object is not an error. */
+  /**
+   * Deletes one object; an already missing object is not an error. Any other failure
+   * is rethrown as a plain Error that carries only the status code and message (IMG-6),
+   * so the caller can log it (IMG-7) without the request and its token.
+   */
   async remove(objectPath: string): Promise<void> {
     const bucket = this.bucket;
     if (bucket === null) {
@@ -127,7 +168,7 @@ export class ImageStorageService implements ImageStorage, OnModuleInit {
       if (isNotFound(error)) {
         return;
       }
-      throw error;
+      throw new Error(describeStorageError(error));
     }
   }
 
@@ -146,10 +187,9 @@ export class ImageStorageService implements ImageStorage, OnModuleInit {
             .getSignedUrl({ action: 'read', expires, version: 'v4' });
           return url;
         } catch (error: unknown) {
+          // IMG-6: status code and message only, never the error object.
           this.logger.warn(
-            `Could not sign a URL for ${objectPath}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            `Could not sign a URL for ${objectPath}: ${describeStorageError(error)}`,
           );
           return '';
         }

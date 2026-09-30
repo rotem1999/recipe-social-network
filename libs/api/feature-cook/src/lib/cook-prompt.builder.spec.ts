@@ -1,4 +1,4 @@
-// SPEC §7 COOK-4, COOK-9, COOK-10: the engineered cook-mode prompt. Pure, no I/O.
+// SPEC §7 COOK-4, COOK-9, COOK-10 (ingredient lines worded as UI-37): the engineered cook-mode prompt. Pure, no I/O.
 import type { Ingredient, Step } from '@rsn/shared/util-domain';
 
 import { CookPromptBuilder, type CookPromptInput } from './cook-prompt.builder';
@@ -28,6 +28,12 @@ function input(overrides: Partial<CookPromptInput> = {}): CookPromptInput {
 
 describe('CookPromptBuilder.build (COOK-4, COOK-9, COOK-10)', () => {
   const builder = new CookPromptBuilder();
+
+  /** The user-message lines between "Ingredients:" and "Steps:". */
+  function ingredientLines(ingredients: Ingredient[]): string[] {
+    const lines = builder.build(input({ ingredients }))[1].content.split('\n');
+    return lines.slice(lines.indexOf('Ingredients:') + 1, lines.indexOf('Steps:'));
+  }
 
   it('COOK-9 builds exactly two messages, a system one and a user one', () => {
     const messages = builder.build(input());
@@ -60,10 +66,54 @@ describe('CookPromptBuilder.build (COOK-4, COOK-9, COOK-10)', () => {
     expect(lines).toContain('200 g ramen noodles (fresh)');
   });
 
-  it('COOK-4 writes an empty quantity as `to taste chili oil`', () => {
+  it('COOK-10 writes an empty quantity with a unit as the unit alone, `ml chili oil` (UI-37)', () => {
     const lines = builder.build(input())[1].content.split('\n');
 
-    expect(lines).toContain('to taste chili oil');
+    expect(lines).toContain('ml chili oil');
+    expect(lines).not.toContain('to taste chili oil');
+  });
+
+  it('COOK-10 writes an empty quantity with the `none` unit as `to taste Pepper` (UI-37)', () => {
+    expect(ingredientLines([{ quantity: null, unit: 'none', name: 'Pepper' }])).toEqual([
+      'to taste Pepper',
+    ]);
+  });
+
+  it('COOK-10 writes an empty quantity with the unit `pinch` as `pinch Salt` (UI-37)', () => {
+    expect(ingredientLines([{ quantity: null, unit: 'pinch', name: 'Salt' }])).toEqual([
+      'pinch Salt',
+    ]);
+  });
+
+  it('COOK-10 moves an amount-like note into the amount: `Juice of 1/2 Lemon` (UI-37)', () => {
+    expect(
+      ingredientLines([
+        { quantity: null, unit: 'none', name: 'Lemon', note: 'Juice of 1/2' },
+      ]),
+    ).toEqual(['Juice of 1/2 Lemon']);
+  });
+
+  it('COOK-10 adds nothing for a null note', () => {
+    const withNullNote = {
+      quantity: 2,
+      unit: 'none',
+      name: 'eggs',
+      note: null,
+    } as unknown as Ingredient;
+
+    expect(ingredientLines([withNullNote])).toEqual(['2 eggs']);
+  });
+
+  it('COOK-10 adds nothing for a blank note', () => {
+    expect(
+      ingredientLines([{ quantity: 2, unit: 'none', name: 'eggs', note: '   ' }]),
+    ).toEqual(['2 eggs']);
+  });
+
+  it('COOK-10 writes a cup quantity near one half as the fraction `½ cup milk` (UI-37)', () => {
+    expect(ingredientLines([{ quantity: 0.5, unit: 'cup', name: 'milk' }])).toEqual([
+      '½ cup milk',
+    ]);
   });
 
   it('COOK-4 leaves the `none` unit out of the ingredient line', () => {

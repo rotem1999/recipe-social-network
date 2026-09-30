@@ -1,4 +1,4 @@
-// SPEC.md REC-6, REC-2/REC-3, SAVE-4, SAVE-7/SAVE-8 and UI-12: the owner row on
+// SPEC.md REC-6, REC-2/REC-3, SAVE-4, SAVE-7/SAVE-8, UI-12 and UI-28: the owner row on
 // the recipe detail screen — Edit, Visibility, Share…, Delete; a saved copy gets
 // only Edit and Remove from my recipes, since it stays private until its first
 // edit makes it a fork. Every mutation adopts the DTO the API returned (§11.6).
@@ -41,7 +41,10 @@ export function OwnerActions({
   const api = useApi();
   const [sharing, setSharing] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  /** UI-28: "Public" waits for "Publish to everyone?". */
+  const [publishing, setPublishing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [visibilityBusy, setVisibilityBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isSavedCopy = recipe.relation === 'saved';
@@ -51,19 +54,37 @@ export function OwnerActions({
       ? cause.message
       : 'Something went wrong.';
 
-  const changeVisibility = async (value: string): Promise<void> => {
+  /** Writes a visibility that needs no friend list (Private, Public). */
+  const writeVisibility = async (value: Visibility): Promise<void> => {
+    setError(null);
+    setVisibilityBusy(true);
+    try {
+      onChanged(await api.setVisibility(recipe.id, { visibility: value }));
+      setPublishing(false);
+    } catch (cause: unknown) {
+      setPublishing(false);
+      setError(message(cause));
+    } finally {
+      setVisibilityBusy(false);
+    }
+  };
+
+  /**
+   * UI-28: Shared opens the Share dialog without writing (its Save sends
+   * `shared` with the ticked friends, REC-2); Public asks first; Private writes
+   * at once. The select stays controlled by the recipe, so a Cancel leaves it as it was.
+   */
+  const changeVisibility = (value: string): void => {
     if (!isVisibility(value) || value === recipe.visibility) {
       return;
     }
     setError(null);
-    try {
-      onChanged(await api.setVisibility(recipe.id, { visibility: value }));
-      // REC-2: "shared" means nothing until friends are picked, so ask right away.
-      if (value === 'shared') {
-        setSharing(true);
-      }
-    } catch (cause: unknown) {
-      setError(message(cause));
+    if (value === 'shared') {
+      setSharing(true);
+    } else if (value === 'public') {
+      setPublishing(true);
+    } else {
+      void writeVisibility(value);
     }
   };
 
@@ -81,20 +102,8 @@ export function OwnerActions({
   };
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 'var(--space-2)',
-        flexWrap: 'wrap',
-      }}
-    >
-      <span
-        className="text-muted"
-        style={{ fontSize: '12px', marginRight: 'var(--space-1)' }}
-      >
-        Owner
-      </span>
+    <div className="row wrap">
+      <span className="text-muted text-small owner-label">Owner</span>
 
       {recipe.canEdit ? (
         <Button variant="secondary" onClick={() => onEdit(recipe.id)}>
@@ -109,8 +118,9 @@ export function OwnerActions({
           aria-label="Visibility"
           value={recipe.visibility}
           options={VISIBILITY_OPTIONS}
-          style={{ width: 'auto' }}
-          onChange={(event) => void changeVisibility(event.target.value)}
+          className="input-auto"
+          disabled={visibilityBusy}
+          onChange={(event) => changeVisibility(event.target.value)}
         />
       ) : null}
 
@@ -135,6 +145,18 @@ export function OwnerActions({
           onSaved={onChanged}
           onClose={() => setSharing(false)}
         />
+      ) : null}
+
+      {publishing ? (
+        <ConfirmDialog
+          title="Publish to everyone?"
+          confirmLabel="Publish"
+          loading={visibilityBusy}
+          onConfirm={() => void writeVisibility('public')}
+          onCancel={() => setPublishing(false)}
+        >
+          Every version of this recipe becomes visible to all users.
+        </ConfirmDialog>
       ) : null}
 
       {confirming ? (

@@ -2,7 +2,7 @@
 
 import type { UsdaFoodPortion } from '@rsn/api/data-access-usda';
 
-import { containsPhrase, toWords } from './words';
+import { containsPhrase, headWord, toWords } from './words';
 
 /** NUT-9: portions naming a volume, a weight or a serving are never a piece. */
 const NOT_A_PIECE: ReadonlySet<string> = new Set([
@@ -77,7 +77,8 @@ export function pickPieceGrams(
   }
 
   const nameWords = toWords(name);
-  const head = nameWords[nameWords.length - 1];
+  // NUT-8: a container word is never the head, so "Garlic cloves" keys on `clove`.
+  const head = headWord(nameWords);
   const keyWords = new Set(nameWords.filter((word) => word !== head));
   const noteFirstWord = toWords(note ?? '')[0];
   if (noteFirstWord !== undefined) keyWords.add(noteFirstWord);

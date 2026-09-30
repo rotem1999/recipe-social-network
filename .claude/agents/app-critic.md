@@ -153,7 +153,8 @@ with this?"
 
 Write the review to `docs/reviews/QA-REVIEW-<YYYY-MM-DD>.md` (today's date from your context;
 create the folder if needed; if a file for today exists, add `-2`, `-3`) and save screenshots in
-`docs/reviews/screenshots/`. Structure:
+`docs/reviews/screenshots/`. `docs/reviews/` is gitignored and stays on Rotem's machine (Rotem,
+2026-09-30): never stage or commit anything in it. Structure:
 
 1. **Verdict**: 3–5 blunt sentences. Overall impression, and whether this feels human-made.
 2. **Since last review** (only if an earlier review exists): which earlier finding IDs are

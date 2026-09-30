@@ -1,20 +1,23 @@
 // SPEC.md §5 (DISC-1..DISC-10), §3.2 SAVE-1/2/10, §3.3 CAT-2/CAT-7, §11.5
-// (guide §3, UI-14). The Discover tab: the category chip row, the split view of
-// GET /discover, the filtered view with Load more, the optimistic Save action, the
-// "In your recipes" + Cook state of items the caller already has a copy of, and
-// the TheMealDB attribution footer.
+// (guide §3, UI-14, UI-21, UI-26, UI-33, UI-36, UI-38). The Discover tab: the
+// category chip row, the split view of GET /discover, the filtered view with Load
+// more, the optimistic Save action of public recipes, the non-optimistic Save of
+// TheMealDB tiles, the "In your recipes" + Cook state of items the caller already
+// has a copy of, and the TheMealDB attribution footer.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { CSSProperties, ReactElement, ReactNode } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import type {
+  CatalogueItemDto,
   DiscoverCategoryDto,
   RecipeCardDto,
 } from '@rsn/shared/util-contracts';
 import type { Category } from '@rsn/shared/util-domain';
-import { MAX_FAVOURITE_CATEGORIES } from '@rsn/shared/util-domain';
+import { CATEGORIES, MAX_FAVOURITE_CATEGORIES } from '@rsn/shared/util-domain';
 import { useApi, useAuth, useRequest } from '@rsn/web/data-access-api';
 import { RecipeCard } from '@rsn/web/feature-recipes';
 import { Button, EmptyState, Icon, InlineError, Tag } from '@rsn/web/ui';
 import { CatalogueTile } from './catalogue-tile';
+import type { CatalogueSaveState } from './catalogue-tile';
 import { CategoryChips } from './category-chips';
 import { errorMessage } from './error-message';
 
@@ -32,20 +35,6 @@ type SaveState =
   | { status: 'saved'; savedId: string }
   | { status: 'error'; message: string };
 
-const GRID: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
-  gap: 'var(--space-4)',
-};
-
-const SECTION_HEADER: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 'var(--space-3)',
-  marginBottom: 'var(--space-3)',
-};
-
 /** Merges the pages loaded after the first one into a single category entry (DISC-9). */
 function mergePages(
   first: DiscoverCategoryDto,
@@ -59,6 +48,27 @@ function mergePages(
     page: last.page,
     hasMore: last.hasMore,
   };
+}
+
+/**
+ * UI-33 / DISC-9: the sections already on screen in the response's order — the
+ * favourites first, in the order they are stored, then the rest in DISC-7 order.
+ */
+function orderSections(
+  categories: DiscoverCategoryDto[],
+  favourites: Category[],
+): DiscoverCategoryDto[] {
+  const byCategory = new Map(categories.map((entry) => [entry.category, entry]));
+  const ordered: Category[] = [
+    ...favourites,
+    ...CATEGORIES.filter((entry) => !favourites.includes(entry)),
+  ];
+  return ordered.flatMap((entry) => {
+    const section = byCategory.get(entry);
+    return section === undefined
+      ? []
+      : [{ ...section, isFavourite: favourites.includes(entry) }];
+  });
 }
 
 export function DiscoverScreen({
@@ -85,12 +95,17 @@ export function DiscoverScreen({
   const [savingFavourites, setSavingFavourites] = useState(false);
 
   const [saves, setSaves] = useState<Record<string, SaveState>>({});
+  // UI-21: the Save of each TheMealDB tile, by meal id.
+  const [catalogueSaves, setCatalogueSaves] = useState<
+    Record<string, CatalogueSaveState>
+  >({});
 
   const feed = useRequest(
     () => api.discover(category ?? undefined),
     [category],
   );
   const reload = feed.reload;
+  const setFeed = feed.setData;
 
   useEffect(() => {
     setFavourites(user?.favouriteCategories ?? []);
@@ -121,9 +136,20 @@ export function DiscoverScreen({
       try {
         const updated = await api.setFavouriteCategories({ categories: next });
         setFavourites(updated.favouriteCategories);
-        // Keeps the signed-in user in step and re-orders the split view (DISC-9).
-        await refreshUser();
-        reload();
+        // UI-33: re-orders the sections already loaded; no refetch, no blank grid.
+        setFeed((current) =>
+          current === null
+            ? current
+            : {
+                ...current,
+                categories: orderSections(
+                  current.categories,
+                  updated.favouriteCategories,
+                ),
+              },
+        );
+        // Keeps the signed-in user in step (DISC-6).
+        void refreshUser();
       } catch (cause) {
         setFavourites(previous);
         setFavouriteMessage(
@@ -133,7 +159,7 @@ export function DiscoverScreen({
         setSavingFavourites(false);
       }
     },
-    [api, favourites, refreshUser, reload],
+    [api, favourites, refreshUser, setFeed],
   );
 
   // SAVE-1 + UI-14: optimistic; on failure the button returns to Save with a message.
@@ -153,6 +179,32 @@ export function DiscoverScreen({
         setSaves((current) => ({
           ...current,
           [recipe.id]: {
+            status: 'error',
+            message: errorMessage(cause, 'Could not save this recipe.'),
+          },
+        }));
+      }
+    },
+    [api],
+  );
+
+  // UI-21: not optimistic; the tile spins until the copy exists, then shows Cook.
+  const saveCatalogue = useCallback(
+    async (item: CatalogueItemDto): Promise<void> => {
+      setCatalogueSaves((current) => ({
+        ...current,
+        [item.mealId]: { status: 'saving' },
+      }));
+      try {
+        const copy = await api.saveCatalogue(item.mealId);
+        setCatalogueSaves((current) => ({
+          ...current,
+          [item.mealId]: { status: 'saved', savedId: copy.id },
+        }));
+      } catch (cause) {
+        setCatalogueSaves((current) => ({
+          ...current,
+          [item.mealId]: {
             status: 'error',
             message: errorMessage(cause, 'Could not save this recipe.'),
           },
@@ -202,15 +254,7 @@ export function DiscoverScreen({
     let action: ReactNode;
     if (copyId !== null && state?.status !== 'saving') {
       action = (
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 'var(--space-2)',
-            flexWrap: 'wrap',
-            justifyContent: 'flex-end',
-          }}
-        >
+        <span className="row-inline wrap justify-end">
           <Tag tone="neutral">In your recipes</Tag>
           {/* SAVE-10: the caller's copy is behind this recipe. */}
           {recipe.updateAvailable ? (
@@ -251,14 +295,7 @@ export function DiscoverScreen({
     // RecipeCard renders the "by <owner>" byline itself (UI-10); the slot carries
     // only the action and, on a failed save, the inline message of UI-14.
     return (
-      <span
-        style={{
-          display: 'inline-flex',
-          flexDirection: 'column',
-          alignItems: 'flex-end',
-          gap: '2px',
-        }}
-      >
+      <span className="card-action">
         {action}
         {state?.status === 'error' ? (
           <InlineError>{state.message}</InlineError>
@@ -267,28 +304,43 @@ export function DiscoverScreen({
     );
   };
 
+  // Every grid on Discover belongs to one category (a split-view section or the
+  // filtered view), so its cards carry no category tag (UI-38).
   const cards = (entry: DiscoverCategoryDto): ReactElement => (
-    <div style={GRID}>
-      {/* DISC-1/DISC-2: public user recipes first. */}
-      {entry.recipes.map((recipe) => (
-        <RecipeCard
-          key={recipe.id}
-          recipe={recipe}
-          onOpen={onOpenRecipe}
-          showStars
-          actionSlot={actionSlot(recipe)}
-        />
-      ))}
-      {/* DISC-4 / CAT-2: then the TheMealDB entries of the same category. */}
-      {entry.catalogue.map((item) => (
-        <CatalogueTile
-          key={item.mealId}
-          item={item}
-          onOpen={onOpenCatalogue}
-          onCook={onCook}
-        />
-      ))}
-    </div>
+    <>
+      {/* UI-38: a category without public recipes says so above its TheMealDB tiles. */}
+      {entry.recipes.length === 0 && entry.catalogue.length > 0 ? (
+        <p className="text-muted text-body">
+          No community recipes in this category yet
+        </p>
+      ) : null}
+      {/* UI-36: cards of different heights align to the top of their row. */}
+      <div className="card-grid">
+        {/* DISC-1/DISC-2: public user recipes first. */}
+        {entry.recipes.map((recipe) => (
+          <RecipeCard
+            key={recipe.id}
+            recipe={recipe}
+            onOpen={onOpenRecipe}
+            showStars
+            showCategory={false}
+            actionSlot={actionSlot(recipe)}
+          />
+        ))}
+        {/* DISC-4 / CAT-2: then the TheMealDB entries of the same category. */}
+        {entry.catalogue.map((item) => (
+          <CatalogueTile
+            key={item.mealId}
+            item={item}
+            onOpen={onOpenCatalogue}
+            onCook={onCook}
+            onSave={saveCatalogue}
+            saveState={catalogueSaves[item.mealId]}
+            showCategory={false}
+          />
+        ))}
+      </div>
+    </>
   );
 
   const sections = feed.data?.categories.filter(
@@ -297,11 +349,8 @@ export function DiscoverScreen({
 
   return (
     <main className="screen">
-      <h1 style={{ marginBottom: 'var(--space-1)' }}>Discover</h1>
-      <p
-        className="text-muted"
-        style={{ fontSize: '14px', marginBottom: 'var(--space-6)' }}
-      >
+      <h1 className="page-title">Discover</h1>
+      <p className="text-muted page-lead">
         Public recipes from the network and TheMealDB catalogue.
       </p>
 
@@ -318,10 +367,10 @@ export function DiscoverScreen({
 
       {/* DISC-3: the weather- and time-based advice sits above the grid. */}
       {recommendationSlot === undefined ? null : (
-        <div style={{ margin: 'var(--space-6) 0' }}>{recommendationSlot}</div>
+        <div className="mt-6 mb-6">{recommendationSlot}</div>
       )}
 
-      <div style={{ marginTop: 'var(--space-6)' }}>
+      <div className="mt-6">
         {feed.loading ? (
           <p className="text-muted">Loading…</p>
         ) : feed.error !== null ? (
@@ -329,11 +378,7 @@ export function DiscoverScreen({
             <InlineError>
               {errorMessage(feed.error, 'Could not load Discover.')}
             </InlineError>
-            <Button
-              variant="ghost"
-              onClick={reload}
-              style={{ marginTop: 'var(--space-2)' }}
-            >
+            <Button variant="ghost" onClick={reload} className="mt-2">
               Try again
             </Button>
           </div>
@@ -347,13 +392,7 @@ export function DiscoverScreen({
             )}
             {pageError === null ? null : <InlineError>{pageError}</InlineError>}
             {filtered.hasMore ? (
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'center',
-                  marginTop: 'var(--space-6)',
-                }}
-              >
+              <div className="load-more">
                 <Button
                   variant="secondary"
                   loading={loadingMore}
@@ -368,24 +407,11 @@ export function DiscoverScreen({
           <EmptyState text="Nothing has been published yet." />
         ) : (
           // DISC-5: the split view, favourites first (DISC-9 orders the response).
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 'var(--space-8)',
-            }}
-          >
+          <div className="stack gap-8">
             {sections.map((entry) => (
               <section key={entry.category}>
-                <div style={SECTION_HEADER}>
-                  <h3
-                    style={{
-                      margin: 0,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 'var(--space-2)',
-                    }}
-                  >
+                <div className="section-header">
+                  <h3 className="row m-0">
                     {entry.category}
                     {entry.isFavourite ? (
                       <Tag tone="accent">Favourite</Tag>
@@ -407,10 +433,7 @@ export function DiscoverScreen({
 
       {/* §3.3 / UI-7: the attribution string the API returns, shown with its URL. */}
       {feed.data === null ? null : (
-        <p
-          className="text-muted"
-          style={{ fontSize: '11px', marginTop: 'var(--space-8)' }}
-        >
+        <p className="text-muted text-caption mt-8">
           {feed.data.attribution}
         </p>
       )}

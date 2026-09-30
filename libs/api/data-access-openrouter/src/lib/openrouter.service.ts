@@ -1,4 +1,8 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PromptLogService } from './prompt-log.service';
 import type {
@@ -17,8 +21,14 @@ const APP_TITLE = 'CookBook';
 const APP_REFERER = 'https://cookbook.local';
 /** One request per question (COOK-9); a minute is far beyond any normal answer. */
 const REQUEST_TIMEOUT_MS = 60_000;
-/** Enough of an error body to diagnose, short enough for an API message. */
+/** Enough of an error body to diagnose, short enough for one log line. */
 const ERROR_BODY_EXCERPT = 200;
+/**
+ * §11.6: the only message a client sees when a call fails; the provider's status and
+ * body excerpt stay in the LOG-5 `error` entry and the API log (SEC-004).
+ */
+export const ASSISTANT_UNAVAILABLE_MESSAGE =
+  'The assistant is unavailable right now';
 
 /** Shape of the OpenAI-compatible response OpenRouter returns (§7, §16 O7/O8). */
 interface ChatCompletionResponse {
@@ -40,6 +50,8 @@ interface ChatCompletionResponse {
  */
 @Injectable()
 export class OpenRouterService {
+  private readonly logger = new Logger(OpenRouterService.name);
+
   constructor(
     private readonly config: ConfigService,
     private readonly promptLog: PromptLogService,
@@ -54,9 +66,9 @@ export class OpenRouterService {
     const startedAt = Date.now();
 
     if (key === undefined || key.trim() === '') {
-      const message = 'OpenRouter key is not configured';
-      await this.logFailure(input, model, startedAt, { message });
-      throw new ServiceUnavailableException(message);
+      throw await this.fail(input, model, startedAt, {
+        message: 'OpenRouter key is not configured',
+      });
     }
 
     const controller = new AbortController();
@@ -90,8 +102,7 @@ export class OpenRouterService {
           : `OpenRouter request failed: ${
               cause instanceof Error ? cause.message : String(cause)
             }`;
-      await this.logFailure(input, model, startedAt, { message });
-      throw new ServiceUnavailableException(message);
+      throw await this.fail(input, model, startedAt, { message });
     } finally {
       clearTimeout(timer);
     }
@@ -100,11 +111,10 @@ export class OpenRouterService {
       const message = `OpenRouter returned ${response.status}: ${excerpt(
         await readBody(response),
       )}`;
-      await this.logFailure(input, model, startedAt, {
+      throw await this.fail(input, model, startedAt, {
         message,
         status: response.status,
       });
-      throw new ServiceUnavailableException(message);
     }
 
     let payload: ChatCompletionResponse;
@@ -114,11 +124,10 @@ export class OpenRouterService {
       const message = `OpenRouter returned an unreadable body: ${
         cause instanceof Error ? cause.message : String(cause)
       }`;
-      await this.logFailure(input, model, startedAt, {
+      throw await this.fail(input, model, startedAt, {
         message,
         status: response.status,
       });
-      throw new ServiceUnavailableException(message);
     }
 
     // §7: the response carries the billed model, the generation id and `usage`.
@@ -152,13 +161,20 @@ export class OpenRouterService {
     return result;
   }
 
-  /** LOG-5: failures are logged too, with `error` instead of the response. */
-  private async logFailure(
+  /**
+   * LOG-5: failures are logged too, with `error` instead of the response, and go to the
+   * API log. §11.6 (SEC-004): the returned 503 carries only the neutral message, never
+   * the provider's status or body.
+   */
+  private async fail(
     input: ChatInput,
     modelRequested: string,
     startedAt: number,
     error: PromptLogError,
-  ): Promise<void> {
+  ): Promise<ServiceUnavailableException> {
+    this.logger.error(
+      `OpenRouter call for "${input.feature}" failed: ${error.message}`,
+    );
     const entry: PromptLogEntry = {
       timestamp: new Date().toISOString(),
       userId: input.userId,
@@ -169,6 +185,7 @@ export class OpenRouterService {
       error,
     };
     await this.promptLog.append(entry);
+    return new ServiceUnavailableException(ASSISTANT_UNAVAILABLE_MESSAGE);
   }
 }
 

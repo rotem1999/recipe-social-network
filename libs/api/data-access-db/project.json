@@ -27,6 +27,17 @@
           "TS_NODE_TRANSPILE_ONLY": "true"
         }
       }
+    },
+    "migrate:show": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm exec typeorm-ts-node-commonjs migration:show -d libs/api/data-access-db/src/data-source.ts",
+        "cwd": "{workspaceRoot}",
+        "env": {
+          "TS_NODE_PROJECT": "libs/api/data-access-db/tsconfig.lib.json",
+          "TS_NODE_TRANSPILE_ONLY": "true"
+        }
+      }
     }
   }
 }

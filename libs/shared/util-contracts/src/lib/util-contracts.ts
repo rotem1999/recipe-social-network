@@ -129,7 +129,14 @@ export interface RecipeDetailDto extends RecipeCardDto {
   description?: string;
   ingredients: Ingredient[];
   steps: Step[];
+  /** IMG-4: signed URLs of the uploaded images; index n is `DELETE /recipes/:id/images/:n`. */
   imageUrls: string[];
+  /**
+   * CAT-6, UI-20, IMG-7: the TheMealDB photo (`strMealThumb`) a TheMealDB copy carries, and
+   * copies of it inherit; hosted by TheMealDB, not an uploaded image, so never removable.
+   * Null when the recipe has none.
+   */
+  externalImageUrl: string | null;
   canCook: boolean;
   canEdit: boolean;
   canRate: boolean;
@@ -296,6 +303,19 @@ export interface IngredientNutritionDto {
   matchedDescription: string | null;
 }
 
+/**
+ * NUT-11: the headline range between the ingredients-mode and meal-mode per-portion
+ * values, each rounded to the nearest 10 kcal. `atLeast` is true only when the
+ * ingredients value alone is available and it is partial.
+ */
+export interface NutritionEstimateDto {
+  lowKcalPerPortion: number;
+  highKcalPerPortion: number;
+  atLeast: boolean;
+  /** NUT-11: names of the ingredients the ingredients-mode pass left unavailable; empty when none. */
+  notCounted: string[];
+}
+
 export interface NutritionResponse {
   mode: NutritionMode;
   servings: number;
@@ -305,6 +325,8 @@ export interface NutritionResponse {
   ingredients: IngredientNutritionDto[];
   matchedDescription: string | null;
   source: 'USDA FoodData Central';
+  /** NUT-11: present whichever `mode` was asked; null when neither value is available. */
+  estimate: NutritionEstimateDto | null;
 }
 
 // ---------- misc ----------

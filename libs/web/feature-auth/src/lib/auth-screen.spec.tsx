@@ -3,14 +3,15 @@
 // no token store is touched (libs/web/CLAUDE.md).
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { UserDto } from '@rsn/shared/util-contracts';
-import { ApiError } from '@rsn/web/data-access-api';
-import { AuthScreen } from './auth-screen';
+import { ApiError, NETWORK_ERROR_MESSAGE } from '@rsn/web/data-access-api';
+import { AuthScreen, SESSION_ENDED_MESSAGE } from './auth-screen';
 
 const mocks = vi.hoisted(() => ({
   signIn: vi.fn(),
   signUp: vi.fn(),
   signOut: vi.fn(),
   refreshUser: vi.fn(),
+  auth: { sessionEnded: false },
 }));
 
 vi.mock('@rsn/web/data-access-api', async (importOriginal) => {
@@ -26,6 +27,7 @@ vi.mock('@rsn/web/data-access-api', async (importOriginal) => {
       signUp: mocks.signUp,
       signOut: mocks.signOut,
       refreshUser: mocks.refreshUser,
+      sessionEnded: mocks.auth.sessionEnded,
     }),
     useTimezone: () => 'Asia/Jerusalem',
   };
@@ -47,6 +49,7 @@ describe('AuthScreen', () => {
   beforeEach(() => {
     mocks.signIn.mockReset().mockResolvedValue(USER);
     mocks.signUp.mockReset().mockResolvedValue(USER);
+    mocks.auth.sessionEnded = false;
   });
 
   it('UI-9/AUTH-5 sends the username lower-cased on sign-in', async () => {
@@ -85,6 +88,87 @@ describe('AuthScreen', () => {
     expect(screen.getByRole('button', { name: 'Create account' })).toBeTruthy();
   });
 
+  it('UI-9 shows the username and email hints on sign-up while their fields have no error', () => {
+    render(<AuthScreen />);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign up' }));
+
+    expect(
+      screen.getByText(
+        'Use 3 to 32 characters: letters, numbers, underscore, dot or hyphen.',
+      ).classList.contains('field-hint'),
+    ).toBe(true);
+    expect(
+      screen
+        .getByText('Lets friends find you by email.')
+        .classList.contains('field-hint'),
+    ).toBe(true);
+  });
+
+  it('UI-9 hides the username hint while the username shows an error, so the rule is printed once', async () => {
+    render(<AuthScreen />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign up' }));
+
+    type('Username', 'x');
+    type('Password', 'correct-horse');
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
+
+    const rule =
+      'Use 3 to 32 characters: letters, numbers, underscore, dot or hyphen.';
+    const shown = await screen.findAllByText(rule);
+    expect(shown).toHaveLength(1);
+    expect(shown[0].getAttribute('role')).toBe('alert');
+    expect(shown[0].classList.contains('field-hint')).toBe(false);
+    // The email field has no error, so its hint stays.
+    expect(screen.getByText('Lets friends find you by email.')).toBeTruthy();
+    expect(mocks.signUp).not.toHaveBeenCalled();
+  });
+
+  it('UI-9 hides the email hint while the email shows an error', async () => {
+    render(<AuthScreen />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign up' }));
+
+    type('Username', 'rotem');
+    type('Password', 'correct-horse');
+    type('Email (optional)', 'not-an-email');
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
+
+    expect(
+      await screen.findByText('Enter an email address like you@example.com.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('Lets friends find you by email.')).toBeNull();
+    // The username has no error, so its hint stays.
+    expect(
+      screen
+        .getByText(
+          'Use 3 to 32 characters: letters, numbers, underscore, dot or hyphen.',
+        )
+        .classList.contains('field-hint'),
+    ).toBe(true);
+    expect(mocks.signUp).not.toHaveBeenCalled();
+  });
+
+  it('UI-9 brings the hints back when the switch clears the errors', async () => {
+    render(<AuthScreen />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign up' }));
+    type('Username', 'x');
+    type('Password', 'correct-horse');
+    type('Email (optional)', 'not-an-email');
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
+    await screen.findByText('Enter an email address like you@example.com.');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign in' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign up' }));
+
+    expect(screen.getByText('Lets friends find you by email.')).toBeTruthy();
+    expect(
+      screen.getAllByText(
+        'Use 3 to 32 characters: letters, numbers, underscore, dot or hyphen.',
+      ),
+    ).toHaveLength(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it("UI-9 shows the API's ApiError message inline under the form", async () => {
     mocks.signIn.mockRejectedValue(new ApiError(401, 'Wrong username or password'));
     render(<AuthScreen />);
@@ -95,5 +179,82 @@ describe('AuthScreen', () => {
 
     const alert = await screen.findByText('Wrong username or password');
     expect(alert.getAttribute('role')).toBe('alert');
+  });
+
+  it("UI-26 shows the client's status-0 message inline when the server cannot be reached", async () => {
+    mocks.signIn.mockRejectedValue(new ApiError(0, NETWORK_ERROR_MESSAGE));
+    render(<AuthScreen />);
+
+    type('Username', 'rotem');
+    type('Password', 'correct-horse');
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    const alert = await screen.findByText("Can't reach CookBook's server.");
+    expect(alert.getAttribute('role')).toBe('alert');
+  });
+
+  it("UI-44 uses SPEC's exact wording for the session-ended message", () => {
+    expect(SESSION_ENDED_MESSAGE).toBe('Your session ended. Sign in again.');
+  });
+
+  it('UI-44 shows "Your session ended. Sign in again." above the form when the session ended', () => {
+    mocks.auth.sessionEnded = true;
+    const { container } = render(<AuthScreen />);
+
+    const message = screen.getByText('Your session ended. Sign in again.');
+    expect(message.getAttribute('role')).toBe('alert');
+    const form = container.querySelector('form');
+    if (form === null) {
+      throw new Error('the auth form was not rendered');
+    }
+    expect(form.contains(message)).toBe(false);
+    // DOCUMENT_POSITION_FOLLOWING: the form comes after the message.
+    expect(
+      message.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      message.compareDocumentPosition(
+        screen.getByRole('radio', { name: 'Sign in' }),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('UI-44 shows no session message when the session did not end (first visit or a sign-out)', () => {
+    render(<AuthScreen />);
+
+    expect(screen.queryByText('Your session ended. Sign in again.')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('UNSPECIFIED keeps the session message after the switch moves to sign-up', () => {
+    mocks.auth.sessionEnded = true;
+    render(<AuthScreen />);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign up' }));
+
+    expect(screen.getByText('Your session ended. Sign in again.')).toBeTruthy();
+  });
+
+  it('UI-44 drops the message once useAuth reports the session no longer ended (the next sign-in)', () => {
+    mocks.auth.sessionEnded = true;
+    const { rerender } = render(<AuthScreen />);
+    expect(screen.getByText('Your session ended. Sign in again.')).toBeTruthy();
+
+    mocks.auth.sessionEnded = false;
+    rerender(<AuthScreen />);
+
+    expect(screen.queryByText('Your session ended. Sign in again.')).toBeNull();
+  });
+
+  it('UI-44 shows a wrong-password error under the form without adding the session message', async () => {
+    mocks.signIn.mockRejectedValue(new ApiError(401, 'Wrong username or password'));
+    render(<AuthScreen />);
+
+    type('Username', 'rotem');
+    type('Password', 'correct-horse');
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(await screen.findByText('Wrong username or password')).toBeTruthy();
+    expect(screen.queryByText('Your session ended. Sign in again.')).toBeNull();
   });
 });

@@ -8,6 +8,7 @@ import type {
   CatalogueItemDto,
   CataloguePreviewDto,
   CookAskResponse,
+  NutritionEstimateDto,
   NutritionResponse,
   QuotaDto,
   RecipeAttributionDto,
@@ -51,6 +52,7 @@ describe('RecipeDetailDto', () => {
       { text: 'Add the tomatoes and simmer.' },
     ],
     imageUrls: ['https://example.invalid/signed/shakshuka.jpg'],
+    externalImageUrl: null,
     canCook: true,
     canEdit: true,
     canRate: false,
@@ -95,6 +97,21 @@ describe('RecipeDetailDto', () => {
   it('IMG-4 carries signed image URLs, not bucket object paths', () => {
     expect(detail.imageUrls).toEqual(['https://example.invalid/signed/shakshuka.jpg']);
     expect(detail.imageUrls.every((url) => url.startsWith('https://'))).toBe(true);
+  });
+
+  it('UI-20, CAT-6 carries a TheMealDB photo as externalImageUrl, apart from the uploaded imageUrls', () => {
+    const theMealDbCopy: RecipeDetailDto = {
+      ...detail,
+      source: 'themealdb',
+      imageUrls: [],
+      externalImageUrl: 'https://example.invalid/catalogue/thumb.jpg',
+    };
+
+    expect(detail.externalImageUrl).toBeNull();
+    expect(theMealDbCopy.externalImageUrl).toBe(
+      'https://example.invalid/catalogue/thumb.jpg',
+    );
+    expect(theMealDbCopy.imageUrls).toEqual([]);
   });
 
   it('REC-7 and SAVE-4..6 carry the version count and the fork/save attribution slots', () => {
@@ -228,6 +245,12 @@ describe('NutritionResponse', () => {
     ],
     matchedDescription: null,
     source: 'USDA FoodData Central',
+    estimate: {
+      lowKcalPerPortion: 210,
+      highKcalPerPortion: 320,
+      atLeast: false,
+      notCounted: ['salt'],
+    },
   };
 
   it('§9 ingredients mode carries a per-ingredient breakdown and the portion totals', () => {
@@ -258,6 +281,7 @@ describe('NutritionResponse', () => {
       ingredients: [],
       matchedDescription: 'Shakshuka, prepared',
       source: 'USDA FoodData Central',
+      estimate: null,
     };
     expect(wholeMeal).toMatchObject({
       mode: 'meal',
@@ -270,6 +294,17 @@ describe('NutritionResponse', () => {
 
   it('§9 always attributes the data to USDA FoodData Central', () => {
     expect(perIngredient.source).toBe('USDA FoodData Central');
+  });
+
+  it('NUT-11 carries the headline range with atLeast and the names not counted', () => {
+    const estimate: NutritionEstimateDto | null = perIngredient.estimate;
+
+    expect(estimate).toEqual({
+      lowKcalPerPortion: 210,
+      highKcalPerPortion: 320,
+      atLeast: false,
+      notCounted: ['salt'],
+    });
   });
 });
 

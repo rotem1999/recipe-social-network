@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
 import {
   FriendRequestEntity,
   RecipeEntity,
@@ -163,11 +163,23 @@ export class FriendsService {
     return this.getFriends(userId);
   }
 
-  /** FR-4: only the sender cancels; the pending row is removed entirely. */
+  /**
+   * FR-4: either side can cancel a pending request. The sender's cancel removes the row
+   * entirely; the receiver's has the same effect as declining (Rotem, chat 2026-09-30).
+   * Either way either user may send a new request at once (`sendRequest` reuses a declined
+   * row and creates a new one after a removed row).
+   */
   async cancel(userId: string, requestId: string): Promise<FriendsResponse> {
     const request = await this.pendingOrThrow(requestId);
+    if (request.toUserId === userId) {
+      request.status = 'declined';
+      await this.requests.save(request);
+      return this.getFriends(userId);
+    }
     if (request.fromUserId !== userId) {
-      throw new ForbiddenException('Only the sender can cancel this request');
+      throw new ForbiddenException(
+        'Only the sender or the receiver can cancel this request',
+      );
     }
     await this.requests.delete(request.id);
     return this.getFriends(userId);
@@ -175,7 +187,8 @@ export class FriendsService {
 
   /**
    * FR-4: removing a friend drops the accepted row(s) in both directions and every share
-   * between the two users, in either direction.
+   * between the two users, in either direction; a `shared` recipe of either user left with
+   * no recipients becomes `private` (BUG-032, UI-51). All of it is one transaction.
    */
   async remove(userId: string, otherUserId: string): Promise<FriendsResponse> {
     if (userId === otherUserId) {
@@ -189,8 +202,11 @@ export class FriendsService {
       throw new NotFoundException('You are not friends with this user');
     }
 
-    await this.removeSharesBetween(userId, otherUserId);
-    await this.requests.delete(acceptedIds);
+    await this.requests.manager.transaction(async (manager: EntityManager) => {
+      await this.removeSharesBetween(manager, userId, otherUserId);
+      await this.privatiseUnsharedRecipes(manager, [userId, otherUserId]);
+      await manager.withRepository(this.requests).delete(acceptedIds);
+    });
     return this.getFriends(userId);
   }
 
@@ -240,10 +256,12 @@ export class FriendsService {
 
   /** FR-4: the `recipe_shares` rows between two users, found by joining their recipes. */
   private async removeSharesBetween(
+    manager: EntityManager,
     userId: string,
     otherUserId: string,
   ): Promise<void> {
-    const raw = await this.shares
+    const shares = manager.withRepository(this.shares);
+    const raw = await shares
       .createQueryBuilder('share')
       .innerJoin(RecipeEntity, 'recipe', 'recipe.id = share.recipeId')
       .where(
@@ -255,8 +273,28 @@ export class FriendsService {
 
     const shareIds = raw.map((row) => row.shareId);
     if (shareIds.length > 0) {
-      await this.shares.delete(shareIds);
+      await shares.delete(shareIds);
     }
+  }
+
+  /**
+   * FR-4 (BUG-032): a `shared` recipe owned by one of `ownerIds` that has no `recipe_shares`
+   * row left is shared with nobody, so it becomes `private`. Same rule as the
+   * `SharedWithNobodyPrivate` migration.
+   */
+  private async privatiseUnsharedRecipes(
+    manager: EntityManager,
+    ownerIds: string[],
+  ): Promise<void> {
+    await manager.query(
+      `UPDATE "recipes" SET "visibility" = 'private', "updated_at" = now()
+       WHERE "owner_id" = ANY($1::uuid[])
+         AND "visibility" = 'shared'
+         AND NOT EXISTS (
+           SELECT 1 FROM "recipe_shares" s WHERE s."recipe_id" = "recipes"."id"
+         )`,
+      [ownerIds],
+    );
   }
 
   private async acceptedRowsOf(userId: string): Promise<FriendRequestEntity[]> {

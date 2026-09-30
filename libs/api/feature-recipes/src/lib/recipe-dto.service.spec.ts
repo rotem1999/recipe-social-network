@@ -460,6 +460,97 @@ describe('RecipeDtoService.toDetail', () => {
       );
     });
   });
+
+  describe('CAT-6, UI-20 externalImageUrl', () => {
+    it('UI-20 carries a TheMealDB copy’s strMealThumb as externalImageUrl', async () => {
+      const { service } = harness('own', true);
+
+      const detail = await service.toDetail(
+        recipeRow({
+          ownerId: ME,
+          source: 'themealdb',
+          externalImageUrl: 'https://www.themealdb.com/images/media/meals/x.jpg',
+        }),
+        versionRow(),
+        ME,
+      );
+
+      expect(detail.externalImageUrl).toBe(
+        'https://www.themealdb.com/images/media/meals/x.jpg',
+      );
+      expect(detail.imageUrls).toEqual([]);
+    });
+
+    it('IMG-7, UI-20 keeps externalImageUrl apart from the uploaded imageUrls', async () => {
+      const { service, images } = harness('own', true);
+      images.signedUrls.mockResolvedValue(['https://signed.example/one']);
+
+      const detail = await service.toDetail(
+        recipeRow({
+          ownerId: ME,
+          source: 'themealdb',
+          externalImageUrl: 'https://www.themealdb.com/images/media/meals/x.jpg',
+        }),
+        versionRow({ imagePaths: ['recipes/recipe-1/a.jpg'] }),
+        ME,
+      );
+
+      expect(detail.imageUrls).toEqual(['https://signed.example/one']);
+      expect(detail.imageUrls).not.toContain(
+        'https://www.themealdb.com/images/media/meals/x.jpg',
+      );
+      expect(detail.externalImageUrl).toBe(
+        'https://www.themealdb.com/images/media/meals/x.jpg',
+      );
+    });
+
+    it('UI-20 carries the inherited externalImageUrl on a copy of a TheMealDB copy', async () => {
+      const { service } = harness('saved');
+
+      const detail = await service.toDetail(
+        recipeRow({
+          id: 'copy-1',
+          ownerId: ME,
+          savedFromRecipeId: 'source-1',
+          source: 'user',
+          externalImageUrl: 'https://www.themealdb.com/images/media/meals/x.jpg',
+        }),
+        versionRow({ recipeId: 'copy-1' }),
+        ME,
+      );
+
+      expect(detail.externalImageUrl).toBe(
+        'https://www.themealdb.com/images/media/meals/x.jpg',
+      );
+    });
+
+    it('UI-20 sets externalImageUrl to null on a recipe without one', async () => {
+      const { service } = harness('own', true);
+
+      const detail = await service.toDetail(
+        recipeRow({ ownerId: ME }),
+        versionRow(),
+        ME,
+      );
+
+      expect(detail.externalImageUrl).toBeNull();
+    });
+
+    it('UI-20 sets externalImageUrl to null when the row leaves it undefined', async () => {
+      const { service } = harness('own', true);
+
+      const detail = await service.toDetail(
+        recipeRow({
+          ownerId: ME,
+          externalImageUrl: undefined as unknown as null,
+        }),
+        versionRow(),
+        ME,
+      );
+
+      expect(detail).toHaveProperty('externalImageUrl', null);
+    });
+  });
 });
 
 /** The source of the copies below: someone else's public recipe, now at version 3. */
@@ -956,6 +1047,74 @@ describe('RecipeDtoService.listPublicCards (DISC-1, DISC-10, SAVE-7)', () => {
       },
       select: { id: true, savedFromRecipeId: true, syncedVersionNumber: true },
     });
+  });
+
+  it('DISC-9 page 1 skips no rows and asks for one row past the page', async () => {
+    const h = harness('none');
+
+    await h.service.listPublicCards(ME, { page: 1, pageSize: 20 });
+
+    expect(h.recipes.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skip: 0,
+        take: 21,
+        order: { updatedAt: 'DESC' },
+      }),
+    );
+  });
+
+  it('DISC-9 page n skips (n − 1) × pageSize rows', async () => {
+    const h = harness('none');
+
+    await h.service.listPublicCards(ME, { page: 2, pageSize: 20 });
+    await h.service.listPublicCards(ME, { page: 3, pageSize: 8 });
+
+    expect(h.recipes.find).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ skip: 20, take: 21 }),
+    );
+    expect(h.recipes.find).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ skip: 16, take: 9 }),
+    );
+  });
+
+  it('DISC-9 treats a page below 1 as page 1', async () => {
+    const h = harness('none');
+
+    await h.service.listPublicCards(ME, { page: 0, pageSize: 20 });
+
+    expect(h.recipes.find).toHaveBeenCalledWith(
+      expect.objectContaining({ skip: 0 }),
+    );
+  });
+
+  it('DISC-9 returns pageSize cards and hasMore when the extra row exists', async () => {
+    const h = harness('none');
+    h.recipes.find
+      .mockResolvedValueOnce([
+        sourceRow({ id: 'p1' }),
+        sourceRow({ id: 'p2' }),
+        sourceRow({ id: 'p3' }),
+      ])
+      .mockResolvedValue([]);
+
+    const page = await h.service.listPublicCards(ME, { page: 1, pageSize: 2 });
+
+    expect(page.cards.map((card) => card.id)).toEqual(['p1', 'p2']);
+    expect(page.hasMore).toBe(true);
+  });
+
+  it('DISC-9 reports no more when the page is not full', async () => {
+    const h = harness('none');
+    h.recipes.find
+      .mockResolvedValueOnce([sourceRow({ id: 'p1' }), sourceRow({ id: 'p2' })])
+      .mockResolvedValue([]);
+
+    const page = await h.service.listPublicCards(ME, { page: 1, pageSize: 2 });
+
+    expect(page.cards).toHaveLength(2);
+    expect(page.hasMore).toBe(false);
   });
 });
 

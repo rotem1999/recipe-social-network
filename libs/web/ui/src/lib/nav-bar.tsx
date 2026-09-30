@@ -66,32 +66,15 @@ export function NavBar({
   const initial = username.slice(0, 1).toUpperCase();
 
   return (
-    <header
-      className={cx('nav', className)}
-      style={{ maxWidth: '1100px', margin: '0 auto', paddingTop: '22px' }}
-    >
-      <span
-        className="nav-brand"
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '9px',
-          fontSize: '20px',
-        }}
-      >
+    <header className={cx('nav', 'nav-app', className)}>
+      <span className="nav-brand">
         <span className="nav-mark">
           <Icon.ChefHat size={18} />
         </span>
         CookBook
       </span>
 
-      <nav
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 'var(--space-4)',
-        }}
-      >
+      <nav className="row-inline gap-4">
         {TABS.map(({ tab, label }) => (
           <button
             key={tab}

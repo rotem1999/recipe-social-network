@@ -126,7 +126,11 @@ describe('FriendsScreen', () => {
     const friends = screen.getByText('Your friends').parentElement;
     expect(friends).not.toBeNull();
     expect(within(friends as HTMLElement).getByText('noa')).toBeTruthy();
-    expect(within(friends as HTMLElement).getByText('Friends')).toBeTruthy();
+    // UI-38: rows under "Your friends" carry no "Friends" tag.
+    expect(within(friends as HTMLElement).queryByText('Friends')).toBeNull();
+    expect(
+      within(friends as HTMLElement).getByRole('button', { name: 'Remove' }),
+    ).toBeTruthy();
   });
 
   it('FR-4 does not search while the query is under two characters', async () => {
@@ -179,4 +183,317 @@ describe('FriendsScreen', () => {
     expect(await screen.findByText('Request sent')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Send request' })).toBeNull();
   });
+
+  it('UI-26 shows no empty state while GET /friends is still pending', async () => {
+    mocks.api.getFriends.mockReturnValue(new Promise<FriendsResponse>(() => undefined));
+    render(<FriendsScreen />);
+
+    expect(screen.getByText('Loading…')).toBeTruthy();
+    expect(screen.queryByText(EMPTY_FRIENDS_TEXT)).toBeNull();
+  });
+
+  it('UI-26 shows the error and Try again instead of the empty state when GET /friends fails', async () => {
+    mocks.api.getFriends.mockRejectedValueOnce(new Error(SERVER_DOWN));
+    render(<FriendsScreen />);
+
+    expect(await screen.findByText(SERVER_DOWN)).toBeTruthy();
+    expect(screen.queryByText(EMPTY_FRIENDS_TEXT)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText(EMPTY_FRIENDS_TEXT)).toBeTruthy();
+    expect(mocks.api.getFriends).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(SERVER_DOWN)).toBeNull();
+  });
+
+  it('UI-26 shows the empty state once GET /friends succeeded with no friends', async () => {
+    render(<FriendsScreen />);
+
+    expect(await screen.findByText(EMPTY_FRIENDS_TEXT)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  it('UI-34 offers Accept and Decline on the search row of a user who sent a request', async () => {
+    mocks.api.getFriends.mockResolvedValue(WITH_INCOMING);
+    mocks.api.searchUsers.mockResolvedValue(SEARCH_HIT);
+    render(<FriendsScreen />);
+    await screen.findByText('Friend requests');
+
+    await typeQuery('no');
+
+    const row = await searchRow('noa');
+    expect(within(row).getByText('Wants to be friends')).toBeTruthy();
+    expect(within(row).getByRole('button', { name: 'Accept' })).toBeTruthy();
+    expect(within(row).getByRole('button', { name: 'Decline' })).toBeTruthy();
+    expect(within(row).queryByRole('button', { name: 'Send request' })).toBeNull();
+  });
+
+  it('UI-34 accepts from the search row and re-runs the search', async () => {
+    mocks.api.getFriends.mockResolvedValue(WITH_INCOMING);
+    mocks.api.searchUsers.mockResolvedValue(SEARCH_HIT);
+    mocks.api.acceptRequest.mockResolvedValue(AFTER_ACCEPT);
+    render(<FriendsScreen />);
+    await screen.findByText('Friend requests');
+    await typeQuery('no');
+
+    fireEvent.click(
+      within(await searchRow('noa')).getByRole('button', { name: 'Accept' }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.api.acceptRequest).toHaveBeenCalledWith('req-1'),
+    );
+    await waitFor(() => expect(mocks.api.searchUsers).toHaveBeenCalledTimes(2));
+    expect(mocks.api.searchUsers).toHaveBeenLastCalledWith('no');
+    // The FriendsResponse Accept returned makes the row a friend at once.
+    expect(within(await searchRow('noa')).getByText('Friends')).toBeTruthy();
+  });
+
+  it('UI-34 re-runs the search after Send request', async () => {
+    mocks.api.searchUsers.mockResolvedValue(SEARCH_HIT);
+    render(<FriendsScreen />);
+    await typeQuery('no');
+
+    fireEvent.click(
+      within(await searchRow('noa')).getByRole('button', {
+        name: 'Send request',
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.api.sendFriendRequest).toHaveBeenCalledWith('u2'),
+    );
+    await waitFor(() => expect(mocks.api.searchUsers).toHaveBeenCalledTimes(2));
+    expect(mocks.api.searchUsers).toHaveBeenLastCalledWith('no');
+  });
+
+  it('UI-34 re-runs the search after Decline', async () => {
+    mocks.api.getFriends.mockResolvedValue(WITH_INCOMING);
+    mocks.api.searchUsers.mockResolvedValue(SEARCH_HIT);
+    render(<FriendsScreen />);
+    await screen.findByText('Friend requests');
+    await typeQuery('no');
+
+    fireEvent.click(
+      within(await searchRow('noa')).getByRole('button', { name: 'Decline' }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.api.declineRequest).toHaveBeenCalledWith('req-1'),
+    );
+    await waitFor(() => expect(mocks.api.searchUsers).toHaveBeenCalledTimes(2));
+    expect(mocks.api.searchUsers).toHaveBeenLastCalledWith('no');
+    // EMPTY came back: the row offers Send request again.
+    expect(
+      within(await searchRow('noa')).getByRole('button', {
+        name: 'Send request',
+      }),
+    ).toBeTruthy();
+  });
+
+  it('UI-34 re-runs the search after Cancel on a sent request', async () => {
+    mocks.api.getFriends.mockResolvedValue(WITH_OUTGOING);
+    mocks.api.searchUsers.mockResolvedValue(SEARCH_HIT);
+    render(<FriendsScreen />);
+    await screen.findByText('Sent requests');
+    await typeQuery('no');
+    expect(within(await searchRow('noa')).getByText('Request sent')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() =>
+      expect(mocks.api.cancelRequest).toHaveBeenCalledWith('req-2'),
+    );
+    await waitFor(() => expect(mocks.api.searchUsers).toHaveBeenCalledTimes(2));
+    expect(mocks.api.searchUsers).toHaveBeenLastCalledWith('no');
+  });
+
+  it('UI-34 re-runs the search after Remove is confirmed', async () => {
+    mocks.api.getFriends.mockResolvedValue(AFTER_ACCEPT);
+    mocks.api.searchUsers.mockResolvedValue(SEARCH_HIT);
+    render(<FriendsScreen />);
+    await typeQuery('no');
+    expect(within(await searchRow('noa')).getByText('Friends')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.api.removeFriend).toHaveBeenCalledWith('u2'),
+    );
+    await waitFor(() => expect(mocks.api.searchUsers).toHaveBeenCalledTimes(2));
+    expect(mocks.api.searchUsers).toHaveBeenLastCalledWith('no');
+  });
+
+  it('UI-49 says "Type at least 2 characters" for exactly 1 character and sends no request', async () => {
+    render(<FriendsScreen />);
+    await waitFor(() => expect(mocks.api.getFriends).toHaveBeenCalled());
+    const box = screen.getByLabelText('Find by username or email');
+
+    fireEvent.change(box, { target: { value: 'n' } });
+    await sleep(AFTER_DEBOUNCE_MS);
+
+    const hint = screen.getByText('Type at least 2 characters');
+    expect(mocks.api.searchUsers).not.toHaveBeenCalled();
+    // The hint is the input's description, so a screen reader reads it too.
+    expect(hint.id).not.toBe('');
+    expect(box.getAttribute('aria-describedby')).toBe(hint.id);
+  });
+
+  it('UI-49 counts characters after trimming: one letter between spaces still gets the hint', async () => {
+    render(<FriendsScreen />);
+    await waitFor(() => expect(mocks.api.getFriends).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText('Find by username or email'), {
+      target: { value: '  n  ' },
+    });
+    await sleep(AFTER_DEBOUNCE_MS);
+
+    expect(screen.getByText('Type at least 2 characters')).toBeTruthy();
+    expect(mocks.api.searchUsers).not.toHaveBeenCalled();
+  });
+
+  it('UI-49 shows no hint on an empty field', async () => {
+    render(<FriendsScreen />);
+    await waitFor(() => expect(mocks.api.getFriends).toHaveBeenCalled());
+    const box = screen.getByLabelText('Find by username or email');
+
+    expect(screen.queryByText('Type at least 2 characters')).toBeNull();
+    expect(box.getAttribute('aria-describedby')).toBeNull();
+
+    fireEvent.change(box, { target: { value: 'n' } });
+    expect(screen.getByText('Type at least 2 characters')).toBeTruthy();
+    fireEvent.change(box, { target: { value: '' } });
+
+    expect(screen.queryByText('Type at least 2 characters')).toBeNull();
+    expect(box.getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('UI-49 shows no hint for a field of spaces only (nothing left after trimming)', async () => {
+    render(<FriendsScreen />);
+    await waitFor(() => expect(mocks.api.getFriends).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText('Find by username or email'), {
+      target: { value: '   ' },
+    });
+    await sleep(AFTER_DEBOUNCE_MS);
+
+    expect(screen.queryByText('Type at least 2 characters')).toBeNull();
+    expect(mocks.api.searchUsers).not.toHaveBeenCalled();
+  });
+
+  it('UI-49 drops the hint and searches once a second character is typed', async () => {
+    render(<FriendsScreen />);
+    await waitFor(() => expect(mocks.api.getFriends).toHaveBeenCalled());
+    const box = screen.getByLabelText('Find by username or email');
+
+    fireEvent.change(box, { target: { value: 'n' } });
+    expect(screen.getByText('Type at least 2 characters')).toBeTruthy();
+
+    await typeQuery('no');
+
+    expect(screen.queryByText('Type at least 2 characters')).toBeNull();
+    expect(box.getAttribute('aria-describedby')).toBeNull();
+    expect(mocks.api.searchUsers).toHaveBeenCalledTimes(1);
+  });
+
+  it('UI-46 reads "Friends since 29 Sep 2026" under a friend', async () => {
+    mocks.api.getFriends.mockResolvedValue({
+      friends: [
+        { userId: 'u2', username: 'noa', since: '2026-09-29T12:00:00.000Z' },
+      ],
+      incoming: [],
+      outgoing: [],
+    });
+    render(<FriendsScreen />);
+
+    expect(await screen.findByText('Friends since 29 Sep 2026')).toBeTruthy();
+  });
+
+  it('UI-46 formats "Friends since" independently of the system locale', async () => {
+    const localeDate = vi
+      .spyOn(Date.prototype, 'toLocaleDateString')
+      .mockReturnValue('29/09/2026');
+    const localeString = vi
+      .spyOn(Date.prototype, 'toLocaleString')
+      .mockReturnValue('29/09/2026, 12:00:00');
+    try {
+      mocks.api.getFriends.mockResolvedValue({
+        friends: [
+          { userId: 'u2', username: 'noa', since: '2026-05-03T12:00:00.000Z' },
+        ],
+        incoming: [],
+        outgoing: [],
+      });
+      render(<FriendsScreen />);
+
+      expect(await screen.findByText('Friends since 3 May 2026')).toBeTruthy();
+      expect(screen.queryByText(/29\/09\/2026/)).toBeNull();
+    } finally {
+      localeDate.mockRestore();
+      localeString.mockRestore();
+    }
+  });
+
+  it('UI-46 drops the "Friends since" line for an unreadable date and keeps the friend', async () => {
+    mocks.api.getFriends.mockResolvedValue({
+      friends: [{ userId: 'u2', username: 'noa', since: 'not a date' }],
+      incoming: [],
+      outgoing: [],
+    });
+    render(<FriendsScreen />);
+
+    expect(await screen.findByText('noa')).toBeTruthy();
+    expect(screen.queryByText(/Friends since/)).toBeNull();
+    expect(screen.queryByText(/Invalid Date/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
+  });
 });
+
+/** UI-26 fixtures: the empty state text and a mapped client error. */
+const EMPTY_FRIENDS_TEXT =
+  'No friends yet — find someone by username or email above.';
+const SERVER_DOWN = "Can't reach CookBook's server.";
+
+/** FR-4: a request the caller sent to noa, still pending. */
+const WITH_OUTGOING: FriendsResponse = {
+  friends: [],
+  incoming: [],
+  outgoing: [
+    {
+      id: 'req-2',
+      fromUserId: 'u1',
+      fromUsername: 'rotem',
+      toUserId: 'u2',
+      toUsername: 'noa',
+      createdAt: '2026-09-28T10:00:00.000Z',
+    },
+  ],
+};
+
+/** Types into the search box and waits for the debounced search to run. */
+async function typeQuery(value: string): Promise<void> {
+  fireEvent.change(screen.getByLabelText('Find by username or email'), {
+    target: { value },
+  });
+  await waitFor(
+    () => expect(mocks.api.searchUsers).toHaveBeenCalledWith(value),
+    { timeout: 2000 },
+  );
+}
+
+/** The row of `username` under "Search results". */
+async function searchRow(username: string): Promise<HTMLElement> {
+  const section = (await screen.findByText('Search results')).parentElement;
+  if (section === null) {
+    throw new Error('the Search results section was not rendered');
+  }
+  const name = await within(section).findByText(username);
+  const row = name.closest('.person-row');
+  if (!(row instanceof HTMLElement)) {
+    throw new Error(`no search row for ${username}`);
+  }
+  return row;
+}

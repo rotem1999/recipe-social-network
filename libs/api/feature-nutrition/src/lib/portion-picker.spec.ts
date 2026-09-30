@@ -222,3 +222,15 @@ describe('pickPieceGrams (NUT-9)', () => {
     expect(pickPieceGrams([], 'Carrots', undefined)).toBe(null);
   });
 });
+
+describe('pickPieceGrams with container words (NUT-8, NUT-9)', () => {
+  it('NUT-8 "Garlic cloves" finds the "1 clove" portion by rule (1): the container word is a name word, not the head', () => {
+    const portions = [fndds('1 whole bulb', 40, 1), fndds('1 clove', 3, 2)];
+    expect(pickPieceGrams(portions, 'Garlic cloves', undefined)).toBe(3);
+  });
+
+  it('NUT-8 "Celery stalks" finds "1 stalk" over "1 medium" by rule (1)', () => {
+    const portions = [fndds('1 medium', 60, 1), fndds('1 stalk', 40, 2)];
+    expect(pickPieceGrams(portions, 'Celery stalks', undefined)).toBe(40);
+  });
+});

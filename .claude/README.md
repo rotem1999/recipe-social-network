@@ -12,7 +12,7 @@ All six are pinned to Claude Opus 5.5 (`model: claude-opus-5-5`; was Opus 4.8 un
 | `fact-verifier` | Verifies one group of third-party facts online today; returns §16 citation lines | no |
 | `arch-reviewer` | 14-point check: placement, tags, boundaries, aliases, secrets, TypeORM 1.x, Nest 11, AI logging, tests | no |
 | `test-runner` | Runs `pnpm nx` lint/typecheck/test/e2e targets; returns a short failure digest | no |
-| `app-critic` | Harsh QA pass on the running app (API + renderer in the browser) against every SPEC.md ID; writes `docs/reviews/QA-REVIEW-<date>.md` and screenshots for a separate fixer session; at most 15 AI calls per run (added 2026-09-29) | review and screenshots only |
+| `app-critic` | Harsh QA pass on the running app (API + renderer in the browser) against every SPEC.md ID; writes `docs/reviews/QA-REVIEW-<date>.md` and screenshots (gitignored, local only) for a separate fixer session; at most 15 AI calls per run (added 2026-09-29) | review and screenshots only |
 | `test-writer` | The only writer of `*.spec.ts(x)` files (Rotem, 2026-09-08); tests named by SPEC ID; runs them; reports production defects instead of fixing them | spec files only |
 
 ## Skills (`skills/`)

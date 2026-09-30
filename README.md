@@ -62,7 +62,17 @@ Imports use the alias `@rsn/<scope>/<type>-<name>` (for example `@rsn/shared/uti
    pnpm nx run api-data-access-db:migrate
    ```
 
+   `pnpm nx run api-data-access-db:migrate:show` lists the applied (`[X]`) and pending (`[ ]`) migrations.
+
 ## Run
+
+After every pull, bring the schema up to date before starting the API:
+
+```bash
+pnpm nx run api-data-access-db:migrate
+```
+
+If a migration is still pending, the API logs "Database schema is out of date: run pnpm nx run api-data-access-db:migrate" at start, and routes that touch the changed tables fail until you run it. `pnpm nx run api-data-access-db:migrate:show` lists what is applied and what is pending.
 
 Start the API (port 3000, prefix `/api/v1`, health check at `/api/v1/health`):
 

@@ -2,9 +2,12 @@
 // OpenRouter client. The network is mocked; no key, URL or payload here is real
 // — the field names come from SPEC §7 (id, model, choices, usage).
 
-import { ServiceUnavailableException } from '@nestjs/common';
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
-import { OpenRouterService } from './openrouter.service';
+import {
+  ASSISTANT_UNAVAILABLE_MESSAGE,
+  OpenRouterService,
+} from './openrouter.service';
 import type { PromptLogService } from './prompt-log.service';
 import type { ChatInput, PromptLogEntry } from './openrouter.types';
 
@@ -260,5 +263,154 @@ describe('OpenRouterService', () => {
       service({ OPENROUTER_KEY: '   ' }).chat(chatInput()),
     ).rejects.toBeInstanceOf(ServiceUnavailableException);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  describe('§11.6 failure message (SEC-004)', () => {
+    const NEUTRAL = 'The assistant is unavailable right now';
+
+    let loggerError: jest.SpyInstance;
+
+    beforeEach(() => {
+      loggerError = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+    });
+
+    /** Runs one failing call and returns the thrown 503. */
+    async function failure(
+      values: Record<string, string>,
+      input: ChatInput = chatInput(),
+    ): Promise<ServiceUnavailableException> {
+      const error = await service(values)
+        .chat(input)
+        .then(
+          () => {
+            throw new Error('expected the call to fail');
+          },
+          (cause: unknown) => cause,
+        );
+      expect(error).toBeInstanceOf(ServiceUnavailableException);
+      return error as ServiceUnavailableException;
+    }
+
+    function expectNeutral(error: ServiceUnavailableException): void {
+      expect(error.getStatus()).toBe(503);
+      expect(error.message).toBe(NEUTRAL);
+      expect(error.getResponse()).toEqual({
+        statusCode: 503,
+        message: NEUTRAL,
+        error: 'Service Unavailable',
+      });
+    }
+
+    it('§11.6 exports the client message verbatim', () => {
+      expect(ASSISTANT_UNAVAILABLE_MESSAGE).toBe(NEUTRAL);
+    });
+
+    it('§11.6 a missing key answers the neutral 503 and keeps the detail in the LOG-5 entry', async () => {
+      const error = await failure({});
+
+      expectNeutral(error);
+      expect(log.append.mock.calls[0][0].error?.message).toBe(
+        'OpenRouter key is not configured',
+      );
+    });
+
+    it('§11.6 a network failure answers the neutral 503; the cause stays in the log only', async () => {
+      fetchMock.mockRejectedValue(new Error('socket hang up'));
+
+      const error = await failure({ OPENROUTER_KEY: 'test-key' });
+
+      expectNeutral(error);
+      expect(JSON.stringify(error.getResponse())).not.toContain('socket');
+      expect(log.append.mock.calls[0][0].error?.message).toContain(
+        'socket hang up',
+      );
+    });
+
+    it('§11.6 a timeout (AbortError) answers the neutral 503 and logs the timeout', async () => {
+      const abort = new Error('This operation was aborted');
+      abort.name = 'AbortError';
+      fetchMock.mockRejectedValue(abort);
+
+      const error = await failure({ OPENROUTER_KEY: 'test-key' });
+
+      expectNeutral(error);
+      expect(log.append.mock.calls[0][0].error?.message).toBe(
+        'OpenRouter did not answer within 60 s',
+      );
+    });
+
+    it('§11.6 a non-2xx answer never puts the provider status or body in the client message', async () => {
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 402,
+        text: async () => 'insufficient credits for this account',
+        json: async () => ({}),
+      } as unknown as Response);
+
+      const error = await failure({ OPENROUTER_KEY: 'test-key' });
+
+      expectNeutral(error);
+      const clientBody = JSON.stringify(error.getResponse());
+      expect(clientBody).not.toContain('402');
+      expect(clientBody).not.toContain('insufficient credits');
+      const entry = log.append.mock.calls[0][0];
+      expect(entry.error?.status).toBe(402);
+      expect(entry.error?.message).toContain('insufficient credits');
+    });
+
+    it('§11.6 an unreadable 2xx body answers the neutral 503 and logs the parse failure', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError('Unexpected token < in JSON');
+        },
+        text: async () => '<html>',
+      } as unknown as Response);
+
+      const error = await failure({ OPENROUTER_KEY: 'test-key' });
+
+      expectNeutral(error);
+      const entry = log.append.mock.calls[0][0];
+      expect(entry.error?.status).toBe(200);
+      expect(entry.error?.message).toContain('unreadable body');
+      expect(entry.response).toBeUndefined();
+    });
+
+    it('§11.6 LOG-5 a failure also goes to the API log with the feature and the detail', async () => {
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: async () => 'provider exploded',
+        json: async () => ({}),
+      } as unknown as Response);
+
+      await failure(
+        { OPENROUTER_KEY: 'test-key' },
+        chatInput({ feature: 'recommend' }),
+      );
+
+      expect(loggerError).toHaveBeenCalledTimes(1);
+      const line = String(loggerError.mock.calls[0][0]);
+      expect(line).toContain('"recommend"');
+      expect(line).toContain('OpenRouter returned 500: provider exploded');
+      expect(line).not.toContain('test-key');
+    });
+
+    it('§11.6 a long provider body is cut to a 200-character excerpt in the log entry', async () => {
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: async () => 'x'.repeat(500),
+        json: async () => ({}),
+      } as unknown as Response);
+
+      await failure({ OPENROUTER_KEY: 'test-key' });
+
+      const message = log.append.mock.calls[0][0].error?.message ?? '';
+      expect(message).toBe(`OpenRouter returned 500: ${'x'.repeat(200)}…`);
+    });
   });
 });

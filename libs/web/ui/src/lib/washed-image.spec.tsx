@@ -96,4 +96,24 @@ describe('WashedImage (UI-3)', () => {
     fireEvent.click(box);
     expect(onClick).toHaveBeenCalledTimes(1);
   });
+
+  it('DISC-9 loads the photo lazily by default', () => {
+    const { container } = render(
+      <WashedImage src="/signed/beef-stew.jpg" alt="Beef stew" />,
+    );
+
+    expect(container.querySelector('img')?.getAttribute('loading')).toBe(
+      'lazy',
+    );
+  });
+
+  it('UNSPECIFIED loads the photo eagerly when a screen asks for it', () => {
+    const { container } = render(
+      <WashedImage src="/signed/beef-stew.jpg" alt="Beef stew" loading="eager" />,
+    );
+
+    expect(container.querySelector('img')?.getAttribute('loading')).toBe(
+      'eager',
+    );
+  });
 });

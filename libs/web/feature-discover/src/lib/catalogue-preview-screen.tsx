@@ -4,9 +4,8 @@
 // the caller already has a copy (`myCopyId`, DISC-10) it becomes "In your recipes"
 // and a Cook button on that copy.
 import { useCallback, useState } from 'react';
-import type { CSSProperties, ReactElement } from 'react';
-import type { Ingredient } from '@rsn/shared/util-domain';
-import { totalMinutes } from '@rsn/shared/util-domain';
+import type { ReactElement } from 'react';
+import { ingredientAmount, totalMinutes } from '@rsn/shared/util-domain';
 import { useApi, useRequest } from '@rsn/web/data-access-api';
 import { Button, Icon, InlineError, Tag, WashedImage } from '@rsn/web/ui';
 import { errorMessage } from './error-message';
@@ -18,31 +17,6 @@ export interface CataloguePreviewScreenProps {
   onSaved(recipeId: string): void;
   /** DISC-10: opens cook mode on the caller's existing copy of this meal. */
   onCook(recipeId: string): void;
-}
-
-const COLUMNS: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(220px, 5fr) minmax(0, 7fr)',
-  gap: 'var(--space-8)',
-  alignItems: 'start',
-};
-
-const ROW: CSSProperties = {
-  display: 'flex',
-  gap: 'var(--space-3)',
-  padding: 'var(--space-2) 0',
-  borderBottom: '1px solid var(--color-divider)',
-  fontSize: '14px',
-};
-
-/** §3.1.1: an empty quantity means "to taste"; `none` carries no unit word. */
-function measure(ingredient: Ingredient): string {
-  if (ingredient.quantity === null) {
-    return 'to taste';
-  }
-  return ingredient.unit === 'none'
-    ? String(ingredient.quantity)
-    : `${ingredient.quantity} ${ingredient.unit}`;
 }
 
 export function CataloguePreviewScreen({
@@ -76,11 +50,7 @@ export function CataloguePreviewScreen({
 
   return (
     <main className="screen">
-      <Button
-        variant="ghost"
-        onClick={onBack}
-        style={{ marginBottom: 'var(--space-4)' }}
-      >
+      <Button variant="ghost" onClick={onBack} className="mb-4">
         <Icon.ArrowLeft size={15} />
         Discover
       </Button>
@@ -92,43 +62,27 @@ export function CataloguePreviewScreen({
           <InlineError>
             {errorMessage(preview.error, 'Could not load this recipe.')}
           </InlineError>
-          <Button
-            variant="ghost"
-            onClick={preview.reload}
-            style={{ marginTop: 'var(--space-2)' }}
-          >
+          <Button variant="ghost" onClick={preview.reload} className="mt-2">
             Try again
           </Button>
         </div>
       ) : (
         <>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              justifyContent: 'space-between',
-              gap: 'var(--space-6)',
-              marginBottom: 'var(--space-6)',
-            }}
-          >
+          <div className="row align-start between gap-6 mb-6">
             <div>
-              <div
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: 'var(--space-2)',
-                  marginBottom: 'var(--space-2)',
-                }}
-              >
+              <div className="tag-row mb-2">
                 <Tag tone="neutral">{meal.category}</Tag>
                 {meal.area === null ? null : (
                   <Tag tone="accent-2">{meal.area}</Tag>
                 )}
                 <Tag tone="outline">TheMealDB</Tag>
               </div>
-              <h1 style={{ marginBottom: 'var(--space-2)' }}>{meal.title}</h1>
+              {/* UI-41: recipe text carries dir="auto". */}
+              <h1 dir="auto" className="mb-2">
+                {meal.title}
+              </h1>
               {meal.description === undefined ? null : (
-                <p className="text-muted" style={{ fontSize: '14px' }}>
+                <p dir="auto" className="text-muted text-body">
                   {meal.description}
                 </p>
               )}
@@ -138,14 +92,7 @@ export function CataloguePreviewScreen({
                 <span>serves {meal.servings}</span>
               </div>
             </div>
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'flex-end',
-                flex: 'none',
-              }}
-            >
+            <div className="stack align-end no-flex">
               {copyId === null ? (
                 // SAVE-1/CAT-3: the only action a catalogue preview offers.
                 <Button variant="primary" loading={saving} onClick={save}>
@@ -154,13 +101,7 @@ export function CataloguePreviewScreen({
                 </Button>
               ) : (
                 // DISC-10 / UI-14: already saved; cook the caller's copy.
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-2)',
-                  }}
-                >
+                <div className="row">
                   <Tag tone="neutral">In your recipes</Tag>
                   <Button variant="primary" onClick={() => onCook(copyId)}>
                     <Icon.Play size={15} />
@@ -174,16 +115,10 @@ export function CataloguePreviewScreen({
             </div>
           </div>
 
-          <div style={COLUMNS}>
+          <div className="split-columns align-start">
             <div>
               {/* CAT-6: the thumbnail is served by TheMealDB, washed like every photo (UI-3). */}
-              <div
-                style={{
-                  borderRadius: 'var(--radius-md)',
-                  overflow: 'hidden',
-                  boxShadow: 'var(--shadow-sm)',
-                }}
-              >
+              <div className="photo-frame">
                 <WashedImage
                   src={meal.thumbnailUrl}
                   alt={meal.title}
@@ -191,74 +126,51 @@ export function CataloguePreviewScreen({
                   height={220}
                 />
               </div>
-              <h4 style={{ marginTop: 'var(--space-6)' }}>Ingredients</h4>
+              <h4 className="mt-6">Ingredients</h4>
               <div>
-                {meal.ingredients.map((ingredient, index) => (
-                  <div key={`${ingredient.name}-${index}`} style={ROW}>
-                    <span
-                      style={{
-                        minWidth: '64px',
-                        fontWeight: 700,
-                        color: 'var(--color-accent-700)',
-                      }}
+                {meal.ingredients.map((ingredient, index) => {
+                  // UI-37 / UI-51 / BUG-030: the shared formatter, as the saved copy
+                  // reads; a note that is an amount ("1 Can") fills the amount column.
+                  const { amount, note } = ingredientAmount(ingredient);
+                  return (
+                    <div
+                      key={`${ingredient.name}-${index}`}
+                      className="measure-row"
                     >
-                      {measure(ingredient)}
-                    </span>
-                    <span style={{ flex: 1 }}>{ingredient.name}</span>
-                    {ingredient.note === undefined ? null : (
-                      <span className="text-muted" style={{ fontSize: '13px' }}>
-                        {ingredient.note}
+                      {/* UI-41: the amount can be a moved note (UI-37). */}
+                      <span className="ingredient-qty measure-qty" dir="auto">
+                        {amount}
                       </span>
-                    )}
-                  </div>
-                ))}
+                      <span dir="auto" className="grow">
+                        {ingredient.name}
+                      </span>
+                      {note === null ? null : (
+                        <span dir="auto" className="text-muted text-compact">
+                          {note}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
             <div>
               <h4>Steps</h4>
-              <ol
-                style={{
-                  listStyle: 'none',
-                  margin: 0,
-                  padding: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 'var(--space-3)',
-                }}
-              >
+              <ol className="list-reset stack gap-3">
                 {meal.steps.map((step, index) => (
                   <li
                     key={`${index}-${step.text.slice(0, 16)}`}
-                    style={{
-                      display: 'flex',
-                      gap: 'var(--space-3)',
-                      alignItems: 'flex-start',
-                    }}
+                    className="row align-start gap-3"
                   >
-                    <span
-                      aria-hidden="true"
-                      style={{
-                        flex: 'none',
-                        width: '26px',
-                        height: '26px',
-                        borderRadius: '50%',
-                        background: 'var(--color-accent-100)',
-                        color: 'var(--color-accent-800)',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '12px',
-                        fontWeight: 700,
-                      }}
-                    >
+                    <span aria-hidden="true" className="step-number">
                       {index + 1}
                     </span>
-                    <span style={{ fontSize: '14px', flex: 1 }}>
+                    <span dir="auto" className="text-body grow">
                       {step.text}
                     </span>
                     {step.durationMinutes === undefined ? null : (
-                      <Tag tone="accent-2" style={{ flex: 'none' }}>
+                      <Tag tone="accent-2" className="no-flex">
                         {step.durationMinutes} min
                       </Tag>
                     )}
@@ -269,10 +181,7 @@ export function CataloguePreviewScreen({
           </div>
 
           {/* §3.3: the attribution string is required on every catalogue surface. */}
-          <p
-            className="text-muted"
-            style={{ fontSize: '11px', marginTop: 'var(--space-8)' }}
-          >
+          <p className="text-muted text-caption mt-8">
             {meal.attribution}
           </p>
         </>
