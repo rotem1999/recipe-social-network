@@ -1,12 +1,18 @@
 import type { DataSourceOptions } from 'typeorm';
 import { ENTITIES } from './entities';
 import { InitialSchema1759000000000 } from './migrations/1759000000000-InitialSchema';
+import { SaveOwnership1759100000000 } from './migrations/1759100000000-SaveOwnership';
+import { SharedWithNobodyPrivate1759200000000 } from './migrations/1759200000000-SharedWithNobodyPrivate';
 
 /**
  * DB-6: migration classes are imported explicitly (no globs) so the DataSource still finds
  * them after webpack has bundled apps/api. New migrations are appended here in order.
  */
-export const MIGRATIONS = [InitialSchema1759000000000];
+export const MIGRATIONS = [
+  InitialSchema1759000000000,
+  SaveOwnership1759100000000,
+  SharedWithNobodyPrivate1759200000000,
+];
 
 /** DB-2, §14: the only connection settings, all of them environment variables. */
 export const REQUIRED_DB_ENV_KEYS = [

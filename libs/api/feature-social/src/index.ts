@@ -6,3 +6,7 @@ export { CommentsService } from './lib/comments.service';
 export { RatingRequestDto } from './lib/dto/rating.dto';
 export { CommentRequestDto } from './lib/dto/comment.dto';
 export { VoteRequestDto } from './lib/dto/vote.dto';
+export {
+  CommentResponseDto,
+  CommentsResponseDto,
+} from './lib/dto/social-response.dto';

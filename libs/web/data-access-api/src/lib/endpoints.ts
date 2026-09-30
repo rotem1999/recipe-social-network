@@ -31,7 +31,7 @@ import type {
   UserSearchResponse,
   VisibilityRequest,
 } from '@rsn/shared/util-contracts';
-import { ApiClient, apiClient } from './client';
+import { AI_REQUEST_TIMEOUT_MS, ApiClient, apiClient } from './client';
 
 /** Builds `?a=b` from the parameters that are set; returns '' when none are. */
 function query(params: Record<string, string | number | undefined>): string {
@@ -75,6 +75,7 @@ export interface Endpoints {
   deleteRecipe(id: string): Promise<void>;
   saveRecipe(id: string): Promise<RecipeDetailDto>;
   saveCatalogue(mealId: string): Promise<RecipeDetailDto>;
+  syncRecipe(id: string): Promise<RecipeDetailDto>;
   uploadImage(id: string, file: File): Promise<ImageUploadResponse>;
   deleteImage(id: string, index: number): Promise<ImageUploadResponse>;
   listVersions(id: string): Promise<RecipeVersionsResponse>;
@@ -160,11 +161,14 @@ export function createEndpoints(client: ApiClient = apiClient): Endpoints {
     // SAVE-1, SAVE-4
     saveRecipe: (id) =>
       client.post<RecipeDetailDto>(`/recipes/${encodeURIComponent(id)}/save`),
-    // CAT-3, CAT-4
+    // CAT-3, CAT-4, CAT-7
     saveCatalogue: (mealId) =>
       client.post<RecipeDetailDto>(
         `/recipes/catalogue/${encodeURIComponent(mealId)}/save`,
       ),
+    // SAVE-10
+    syncRecipe: (id) =>
+      client.post<RecipeDetailDto>(`/recipes/${encodeURIComponent(id)}/sync`),
     // IMG-3
     uploadImage: (id, file) =>
       client.upload<ImageUploadResponse>(
@@ -227,12 +231,18 @@ export function createEndpoints(client: ApiClient = apiClient): Endpoints {
         { value },
       ),
 
-    // COOK-1..10
-    cookAsk: (body) => client.post<CookAskResponse>('/cook/ask', body),
+    // COOK-1..10; UI-52: abandoned after 20 seconds
+    cookAsk: (body) =>
+      client.post<CookAskResponse>('/cook/ask', body, {
+        timeoutMs: AI_REQUEST_TIMEOUT_MS,
+      }),
     cookQuota: () => client.get<QuotaDto>('/cook/quota'),
 
-    // WX-1..10
-    recommend: (body) => client.post<RecommendResponse>('/recommend', body),
+    // WX-1..10; UI-52: abandoned after 20 seconds
+    recommend: (body) =>
+      client.post<RecommendResponse>('/recommend', body, {
+        timeoutMs: AI_REQUEST_TIMEOUT_MS,
+      }),
   };
 }
 

@@ -4,12 +4,18 @@ import { VISIBILITIES, type Visibility } from '@rsn/shared/util-domain';
 import type { VisibilityRequest } from '@rsn/shared/util-contracts';
 
 export class VisibilityDto implements VisibilityRequest {
-  @IsIn([...VISIBILITIES])
+  // UI-43: messages written for people.
+  @IsIn([...VISIBILITIES], {
+    message: 'Choose private, shared with friends or public',
+  })
   visibility!: Visibility;
 
-  /** REC-2: only friends may be listed here; RecipesService rejects anyone else. */
+  /**
+   * REC-2: only friends may be listed here; RecipesService rejects anyone
+   * else, and an empty list for `shared` (UI-51).
+   */
   @IsOptional()
-  @IsArray()
-  @IsUUID('all', { each: true })
+  @IsArray({ message: 'Pick the friends to share with' })
+  @IsUUID('all', { each: true, message: 'You can only share with friends' })
   sharedWithUserIds?: string[];
 }

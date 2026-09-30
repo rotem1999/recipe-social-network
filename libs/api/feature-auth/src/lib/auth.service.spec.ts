@@ -4,6 +4,7 @@ import type { ConfigService } from '@nestjs/config';
 import type { JwtService } from '@nestjs/jwt';
 import type { UserEntity } from '@rsn/api/data-access-db';
 import { AuthService } from './auth.service';
+import { DUMMY_PASSWORD_HASH } from './password.service';
 import type { PasswordService } from './password.service';
 import type { UsersService } from './users.service';
 
@@ -311,6 +312,69 @@ describe('AuthService', () => {
       // Nothing is signed for either failure.
       expect(wrongPassword.jwt.signAsync).not.toHaveBeenCalled();
       expect(unknownUser.jwt.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('AUTH-6 verifies the given password against DUMMY_PASSWORD_HASH for an unknown username before answering 401', async () => {
+      const { service, users, passwords, jwt } = harness();
+      users.findByUsername.mockResolvedValue(null);
+      passwords.verify.mockResolvedValue(false);
+
+      const error = await failureOf(
+        service.signIn({ username: 'ghost', password: 'nope-nope-nope' }),
+      );
+
+      expect(passwords.verify).toHaveBeenCalledTimes(1);
+      expect(passwords.verify).toHaveBeenCalledWith(
+        'nope-nope-nope',
+        DUMMY_PASSWORD_HASH,
+      );
+      expect(error).toBeInstanceOf(UnauthorizedException);
+      expect(error.getStatus()).toBe(401);
+      expect(error.message).toBe('Invalid username or password');
+      expect(jwt.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('AUTH-6 answers 401 for an unknown username even when the dummy verification succeeds', async () => {
+      const { service, users, passwords, jwt } = harness();
+      users.findByUsername.mockResolvedValue(null);
+      // The dummy result is ignored: an unknown username can never sign in.
+      passwords.verify.mockResolvedValue(true);
+
+      const error = await failureOf(
+        service.signIn({ username: 'ghost', password: 'anything-at-all' }),
+      );
+
+      expect(passwords.verify).toHaveBeenCalledWith(
+        'anything-at-all',
+        DUMMY_PASSWORD_HASH,
+      );
+      expect(error).toBeInstanceOf(UnauthorizedException);
+      expect(error.message).toBe('Invalid username or password');
+      expect(jwt.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('AUTH-6 runs exactly one password verification for an unknown user and for a wrong password alike', async () => {
+      const wrongPassword = harness();
+      wrongPassword.users.findByUsername.mockResolvedValue(userRow());
+      wrongPassword.passwords.verify.mockResolvedValue(false);
+      const unknownUser = harness();
+      unknownUser.users.findByUsername.mockResolvedValue(null);
+      unknownUser.passwords.verify.mockResolvedValue(false);
+
+      await failureOf(
+        wrongPassword.service.signIn({ username: 'rotem', password: 'nope-nope-nope' }),
+      );
+      await failureOf(
+        unknownUser.service.signIn({ username: 'ghost', password: 'nope-nope-nope' }),
+      );
+
+      expect(wrongPassword.passwords.verify).toHaveBeenCalledTimes(1);
+      expect(unknownUser.passwords.verify).toHaveBeenCalledTimes(1);
+      // A known user is verified against their own stored hash, never the dummy one.
+      expect(wrongPassword.passwords.verify).not.toHaveBeenCalledWith(
+        expect.anything(),
+        DUMMY_PASSWORD_HASH,
+      );
     });
   });
 

@@ -1,7 +1,8 @@
-// SPEC.md REC-4/REC-7, SAVE-1/2/6, RATE-1..4, COM-1..3, NUT-1..6, IMG-4 and
-// UI-12..UI-15, design guide §5: the recipe detail screen. All data goes through
-// `useApi()`; every mutation adopts the DTO the API returned (§11.6).
-import { useState } from 'react';
+// SPEC.md REC-4/REC-7, SAVE-1/2/6..10, DISC-10, RATE-1..4, COM-1..3, NUT-1..6,
+// IMG-4, UI-12..UI-15, UI-19/20, UI-24/25, UI-29, UI-38, UI-47 and UI-50, design
+// guide §5: the recipe detail screen. All data goes through `useApi()`; every
+// mutation adopts the DTO the API returned (§11.6).
+import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import type {
   RecipeAttributionDto,
@@ -11,6 +12,7 @@ import type { Visibility } from '@rsn/shared/util-domain';
 import { ApiError, useApi, useRequest } from '@rsn/web/data-access-api';
 import {
   Button,
+  ConfirmDialog,
   Icon,
   InlineError,
   StarAverage,
@@ -23,6 +25,7 @@ import { CommentsSection } from './comments-section';
 import { IngredientsPanel } from './ingredients-panel';
 import { NutritionPatch } from './nutrition-patch';
 import { OwnerActions } from './owner-actions';
+import { clearUploadNotice, peekUploadNotice } from './upload-notice';
 import { VersionsDialog } from './versions-dialog';
 
 export interface RecipeDetailScreenProps {
@@ -43,8 +46,14 @@ const VISIBILITY_TONE: Record<Visibility, TagTone> = {
   public: 'accent',
 };
 
-/** The guide's visibility tag: "Private" / "Shared with 3 friends" / "Public". */
+/**
+ * The guide's visibility tag: "Private" / "Shared with 3 friends" / "Public".
+ * UI-19: a recipe shared with the caller reads "Shared with you by <owner>".
+ */
 function visibilityLabel(recipe: RecipeDetailDto): string {
+  if (recipe.relation === 'shared') {
+    return `Shared with you by ${recipe.ownerUsername}`;
+  }
   if (recipe.visibility === 'private') {
     return 'Private';
   }
@@ -61,7 +70,71 @@ function errorMessage(cause: unknown): string {
     : 'Something went wrong.';
 }
 
-/** SAVE-6: "Forked from …" / "Saved from …", linked when the source still exists. */
+/**
+ * UI-50: the SAVE-9 source label — only the source's title is the directional
+ * element (dir="auto"); "by <owner>" and "on TheMealDB" follow on the line.
+ */
+function SourceLabel({
+  title,
+  suffix,
+}: {
+  title: string;
+  suffix: string;
+}): ReactElement {
+  return (
+    <>
+      <span dir="auto" className="bidi-text">
+        {title}
+      </span>
+      {suffix === '' ? null : (
+        <>
+          {' '}
+          <span>{suffix}</span>
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * UI-38 / UI-50: the SAVE-9 source link — an inline text link in the body font,
+ * underlined on hover, flowing in its line rather than centred. A `<button>`
+ * always lays out as an inline-block (so a long title would drop below
+ * "Saved from" as its own box), hence a focusable span with the button role
+ * that opens on click, Enter and Space.
+ */
+function SourceLink({
+  title,
+  suffix,
+  onOpen,
+}: {
+  title: string;
+  suffix: string;
+  onOpen: () => void;
+}): ReactElement {
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      className="link-button"
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <SourceLabel title={title} suffix={suffix} />
+    </span>
+  );
+}
+
+/**
+ * SAVE-9: the one line under a copy's title — "Saved from …" on a saved copy,
+ * "Forked from …" on a fork. A user source links while the caller can still view
+ * it (`recipeId` set); a TheMealDB source is plain text ("<meal> on TheMealDB").
+ */
 function AttributionLine({
   prefix,
   attribution,
@@ -71,30 +144,25 @@ function AttributionLine({
   attribution: RecipeAttributionDto;
   onOpenRecipe: (id: string) => void;
 }): ReactElement {
-  const label =
-    attribution.ownerUsername === null
-      ? attribution.title
-      : `${attribution.title} by ${attribution.ownerUsername}`;
-  const sourceId = attribution.recipeId;
+  const isCatalogue = attribution.source === 'themealdb';
+  const suffix = isCatalogue
+    ? 'on TheMealDB'
+    : attribution.ownerUsername === null
+      ? ''
+      : `by ${attribution.ownerUsername}`;
+  const sourceId = isCatalogue ? null : attribution.recipeId;
   return (
-    <p
-      style={{
-        fontSize: '12px',
-        color: 'var(--color-accent-2-700)',
-        margin: 0,
-      }}
-    >
+    // UI-19 / SAVE-9: the muted line under the title.
+    <p className="byline">
       {prefix}{' '}
       {sourceId === null ? (
-        label
+        <SourceLabel title={attribution.title} suffix={suffix} />
       ) : (
-        <Button
-          variant="ghost"
-          style={{ fontSize: '12px', padding: 0, color: 'inherit' }}
-          onClick={() => onOpenRecipe(sourceId)}
-        >
-          {label}
-        </Button>
+        <SourceLink
+          title={attribution.title}
+          suffix={suffix}
+          onOpen={() => onOpenRecipe(sourceId)}
+        />
       )}
     </p>
   );
@@ -121,24 +189,71 @@ export function RecipeDetailScreen({
   } | null>(null);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [savingCopy, setSavingCopy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  /** UI-29: a fork's Sync waits for "Replace your version with the original's latest?". */
+  const [confirmingSync, setConfirmingSync] = useState(false);
+  // UI-25: the editor's note about images that failed to upload after create.
+  const [uploadNotice] = useState<{ id: string; text: string } | null>(() => {
+    const text = peekUploadNotice(recipeId);
+    return text === null ? null : { id: recipeId, text };
+  });
+  useEffect(() => {
+    clearUploadNotice(recipeId);
+  }, [recipeId]);
 
   const shown = versionView?.recipe ?? data;
   const isVersionView = versionView !== null;
 
-  /** SAVE-1 + UI-14: the button flips before the request, and back on failure. */
+  /**
+   * SAVE-1 + UI-14 + DISC-10: the button flips to "In your recipes" before the request
+   * and back on failure. The screen keeps showing the original; Cook opens the new copy.
+   */
   const save = async (): Promise<void> => {
     if (data === null) {
       return;
     }
-    const previous = data;
     setActionError(null);
-    setData({ ...previous, canCook: true, relation: 'saved' });
+    setSavingCopy(true);
     try {
-      setData(await api.saveRecipe(previous.id));
+      const copy = await api.saveRecipe(data.id);
+      setData((current) =>
+        current === null
+          ? current
+          : { ...current, myCopyId: copy.id, updateAvailable: false },
+      );
     } catch (cause: unknown) {
-      setData(previous);
       setActionError(errorMessage(cause));
+    } finally {
+      setSavingCopy(false);
     }
+  };
+
+  /** SAVE-10: the copy takes the source's current version; the API returns the copy. */
+  const sync = async (): Promise<void> => {
+    if (data === null) {
+      return;
+    }
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      setData(await api.syncRecipe(data.id));
+    } catch (cause: unknown) {
+      setSyncError(errorMessage(cause));
+    } finally {
+      setSyncing(false);
+      setConfirmingSync(false);
+    }
+  };
+
+  /** UI-29: a fork asks first (its own edits are replaced); a saved copy syncs at once. */
+  const requestSync = (): void => {
+    if (data !== null && data.relation === 'own' && data.forkedFrom !== null) {
+      setConfirmingSync(true);
+      return;
+    }
+    void sync();
   };
 
   /** RATE-1/RATE-4: the summary the API returns replaces the local one. */
@@ -179,39 +294,50 @@ export function RecipeDetailScreen({
     );
   }
 
+  // DISC-10: someone else's recipe the caller already has a live copy of.
+  const myCopyId = shown.myCopyId;
   const needsSave =
-    !shown.canCook && shown.visibility === 'public' && shown.relation !== 'own';
+    myCopyId === null &&
+    !savingCopy &&
+    !shown.canCook &&
+    shown.visibility === 'public' &&
+    shown.relation !== 'own';
+  // UI-19: "by <owner>" on public recipes the caller does not own; a shared
+  // recipe has none, because its tag already names the owner.
+  const showOwner =
+    shown.relation !== 'own' &&
+    shown.relation !== 'saved' &&
+    shown.relation !== 'shared';
+  // UI-20: a TheMealDB copy with no uploaded image shows its catalogue photo.
+  const externalUrl = shown.externalImageUrl;
+  const photoUrls =
+    shown.imageUrls.length > 0
+      ? shown.imageUrls
+      : typeof externalUrl === 'string' && externalUrl !== ''
+        ? [externalUrl]
+        : [];
+  const photosAreUploaded = shown.imageUrls.length > 0;
+  // SAVE-9: the API sends at most one of the two (saved copy or fork).
+  const copySource = shown.savedFrom ?? shown.forkedFrom;
+  // SAVE-9/SAVE-10: set only while the caller can still view the source.
+  const originalId = copySource?.recipeId ?? null;
+  // SAVE-10: the banner is for the caller's own copy, never a version view.
+  const showUpdateBanner =
+    !isVersionView &&
+    shown.updateAvailable &&
+    (shown.relation === 'saved' || shown.relation === 'own') &&
+    copySource !== null;
 
   return (
-    <main className="screen" style={{ maxWidth: '880px' }} aria-label="Recipe">
-      <Button
-        variant="ghost"
-        style={{ marginBottom: 'var(--space-3)' }}
-        onClick={onBack}
-      >
+    <main className="screen screen-detail" aria-label="Recipe">
+      <Button variant="ghost" className="mb-3" onClick={onBack}>
         <Icon.ArrowLeft size={14} />
         {backLabel}
       </Button>
 
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          gap: 'var(--space-4)',
-          flexWrap: 'wrap',
-        }}
-      >
+      <div className="row between align-start gap-4 wrap">
         <div>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 'var(--space-2)',
-              flexWrap: 'wrap',
-              marginBottom: 'var(--space-2)',
-            }}
-          >
+          <div className="row wrap mb-2">
             <Tag tone="neutral">{shown.category}</Tag>
             <Tag tone={VISIBILITY_TONE[shown.visibility]}>
               {visibilityLabel(shown)}
@@ -219,7 +345,7 @@ export function RecipeDetailScreen({
             {/* UI-12: the version tag opens the list of versions (REC-7). */}
             <Button
               variant="ghost"
-              style={{ padding: 0 }}
+              className="btn-bare"
               title="Editing creates a new version. Every version of a public recipe stays viewable."
               onClick={() => setVersionsOpen(true)}
             >
@@ -229,45 +355,62 @@ export function RecipeDetailScreen({
               </Tag>
             </Button>
           </div>
-          <h1 style={{ marginBottom: 'var(--space-1)' }}>{shown.title}</h1>
+          {/* UI-41/UI-50: user-written text carries dir="auto" and stays left-aligned. */}
+          <h1 dir="auto" className="page-title bidi-text">
+            {shown.title}
+          </h1>
+          {showOwner ? (
+            <p className="byline mb-2">by {shown.ownerUsername}</p>
+          ) : null}
           {shown.description === undefined ||
           shown.description === '' ? null : (
             <p
-              className="text-muted"
-              style={{ fontSize: '15px', maxWidth: '520px' }}
+              dir="auto"
+              className="text-muted text-lead bidi-text text-pre-line"
+              style={{ maxWidth: '520px' }}
             >
               {shown.description}
             </p>
           )}
-          {shown.forkedFrom === null ? null : (
-            <AttributionLine
-              prefix="Forked from"
-              attribution={shown.forkedFrom}
-              onOpenRecipe={onOpenRecipe}
-            />
-          )}
-          {shown.savedFrom === null ? null : (
+          {shown.savedFrom !== null ? (
             <AttributionLine
               prefix="Saved from"
               attribution={shown.savedFrom}
               onOpenRecipe={onOpenRecipe}
             />
-          )}
+          ) : shown.forkedFrom !== null ? (
+            <AttributionLine
+              prefix="Forked from"
+              attribution={shown.forkedFrom}
+              onOpenRecipe={onOpenRecipe}
+            />
+          ) : null}
         </div>
 
         {isVersionView ? null : (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'flex-end',
-              gap: 'var(--space-2)',
-            }}
-          >
-            {shown.canCook ? (
+          <div className="stack align-end gap-2">
+            {myCopyId !== null || savingCopy ? (
+              // DISC-10 / UI-14: already in the caller's recipes; cook the copy.
+              <>
+                <Tag tone="neutral">In your recipes</Tag>
+                <Button
+                  variant="primary"
+                  className="btn-lg"
+                  disabled={myCopyId === null}
+                  onClick={() => {
+                    if (myCopyId !== null) {
+                      onCook(myCopyId);
+                    }
+                  }}
+                >
+                  <Icon.Play size={17} />
+                  Start cooking
+                </Button>
+              </>
+            ) : shown.canCook ? (
               <Button
                 variant="primary"
-                style={{ fontSize: '16px', padding: '11px var(--space-6)' }}
+                className="btn-lg"
                 onClick={() => onCook(shown.id)}
               >
                 <Icon.Play size={17} />
@@ -277,7 +420,7 @@ export function RecipeDetailScreen({
             {needsSave ? (
               <Button
                 variant="primary"
-                style={{ fontSize: '16px', padding: '11px var(--space-6)' }}
+                className="btn-lg"
                 onClick={() => void save()}
               >
                 <Icon.Download size={17} />
@@ -298,16 +441,44 @@ export function RecipeDetailScreen({
 
       {actionError === null ? null : <InlineError>{actionError}</InlineError>}
 
+      {uploadNotice === null || uploadNotice.id !== shown.id ? null : (
+        <div className="mt-3">
+          <InlineError>{uploadNotice.text}</InlineError>
+        </div>
+      )}
+
+      {/* SAVE-10: the source moved on; Sync appends its current content as a new version. */}
+      {showUpdateBanner ? (
+        <div role="status" className="update-banner">
+          {/* UI-47: a fork says "forked"; a saved copy keeps "saved". */}
+          <span className="text-body grow">
+            The original has changed since you{' '}
+            {shown.forkedFrom !== null ? 'forked' : 'saved'} it
+          </span>
+          {originalId === null ? null : (
+            <Button variant="ghost" onClick={() => onOpenRecipe(originalId)}>
+              View the original
+            </Button>
+          )}
+          <Button
+            variant="secondary"
+            loading={syncing}
+            onClick={requestSync}
+          >
+            <Icon.Download size={14} />
+            Sync
+          </Button>
+          {syncError === null ? null : (
+            <div style={{ flexBasis: '100%' }}>
+              <InlineError>{syncError}</InlineError>
+            </div>
+          )}
+        </div>
+      ) : null}
+
       {versionView === null ? null : (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--space-3)',
-            marginTop: 'var(--space-3)',
-          }}
-        >
-          <span className="text-muted" style={{ fontSize: '12px' }}>
+        <div className="row gap-3 mt-3">
+          <span className="text-muted text-small">
             Viewing version {versionView.versionNumber}, read-only.
           </span>
           <Button variant="secondary" onClick={() => setVersionView(null)}>
@@ -318,7 +489,7 @@ export function RecipeDetailScreen({
 
       {/* UI-12: the owner row, and Remove from my recipes on a saved copy (SAVE-4). */}
       {!isVersionView && (shown.canEdit || shown.relation === 'saved') ? (
-        <div style={{ marginTop: 'var(--space-3)' }}>
+        <div className="mt-3">
           <OwnerActions
             recipe={shown}
             onEdit={onEdit}
@@ -328,38 +499,26 @@ export function RecipeDetailScreen({
         </div>
       ) : null}
 
-      {/* IMG-4: signed URLs expire; a failed image refetches the recipe. */}
-      {shown.imageUrls.length === 0 ? null : (
-        <div
-          style={{
-            display: 'flex',
-            gap: 'var(--space-3)',
-            marginTop: 'var(--space-4)',
-          }}
-        >
-          {shown.imageUrls.map((url, index) => (
-            <div key={url} style={{ flex: 1, minWidth: 0 }}>
+      {/* IMG-4: signed URLs expire; a failed image refetches the recipe. UI-20:
+          the external catalogue photo is not signed, so its failure refetches nothing. */}
+      {photoUrls.length === 0 ? null : (
+        <div className="photo-row">
+          {photoUrls.map((url, index) => (
+            <div key={url} className="grow shrink">
               <WashedImage
                 src={url}
                 alt={`${shown.title}, image ${index + 1}`}
                 seed={shown.id}
                 height={180}
-                onError={reload}
+                onError={photosAreUploaded ? reload : undefined}
               />
             </div>
           ))}
         </div>
       )}
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(220px, 5fr) minmax(0, 7fr)',
-          // The guide's 44px column gap, built from the 4.4px spacing step.
-          gap: 'calc(var(--space-1) * 10)',
-          marginTop: 'var(--space-8)',
-        }}
-      >
+      {/* The guide's 44px column gap, built from the 4.4px spacing step. */}
+      <div className="split-columns split-columns-wide mt-8">
         <section aria-label="Ingredients">
           <IngredientsPanel
             ingredients={shown.ingredients}
@@ -369,57 +528,21 @@ export function RecipeDetailScreen({
         </section>
 
         <section aria-label="Steps">
-          <h4 style={{ marginBottom: 'var(--space-3)' }}>Steps</h4>
-          <ol
-            style={{
-              listStyle: 'none',
-              margin: 0,
-              padding: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 'var(--space-3)',
-            }}
-          >
+          <h4 className="mb-3">Steps</h4>
+          <ol className="list-reset stack gap-3">
             {shown.steps.map((step, index) => (
-              <li
-                key={`${index}-${step.text}`}
-                style={{
-                  display: 'flex',
-                  gap: 'var(--space-3)',
-                  alignItems: 'flex-start',
-                }}
-              >
-                <span
-                  style={{
-                    width: '26px',
-                    height: '26px',
-                    flex: 'none',
-                    borderRadius: '50%',
-                    background: 'var(--color-accent-100)',
-                    color: 'var(--color-accent-800)',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                  }}
-                >
-                  {index + 1}
-                </span>
-                <div
-                  style={{
-                    fontSize: '14px',
-                    lineHeight: 1.55,
-                    paddingTop: '2px',
-                  }}
-                >
-                  {step.text}
+              <li key={`${index}-${step.text}`} className="row align-start gap-3">
+                <span className="step-number">{index + 1}</span>
+                <div className="step-text">
+                  {/* UI-50: only the step's own text is directional; the minutes
+                      tag sits outside it, so it always follows on the left-to-right line. */}
+                  {/* UI-45: the step keeps its line breaks. */}
+                  <span dir="auto" className="bidi-text text-pre-line">
+                    {step.text}
+                  </span>
                   {/* UI-15: the minutes tag shows on the detail screen too. */}
                   {step.durationMinutes === undefined ? null : (
-                    <Tag
-                      tone="accent-2"
-                      style={{ marginLeft: 'var(--space-2)' }}
-                    >
+                    <Tag tone="accent-2" className="step-minutes">
                       <Icon.Timer size={11} />
                       &nbsp;{step.durationMinutes} min
                     </Tag>
@@ -432,59 +555,47 @@ export function RecipeDetailScreen({
           {/* RATE-1: whole stars, public recipes only (UI-13). */}
           {!isVersionView && shown.canRate ? (
             <>
-              <div
-                className="hr"
-                style={{ margin: 'var(--space-8) 0 var(--space-6)' }}
-              />
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-3)',
-                  marginBottom: 'var(--space-1)',
-                }}
-              >
-                <h4 style={{ margin: 0 }}>Your rating</h4>
+              <div className="hr hr-section" />
+              {/* UI-47: no footnote under or next to the rating input; the filled
+                  stars already show the caller's rating. */}
+              <div className="row gap-3 mb-6">
+                <h4 className="m-0">Your rating</h4>
                 <StarInput
                   value={shown.rating?.mine ?? null}
                   onRate={(stars) => void rate(stars)}
                 />
-                {shown.rating?.mine === undefined ||
-                shown.rating?.mine === null ? null : (
-                  <span
-                    style={{
-                      fontSize: '12px',
-                      color: 'var(--color-accent-2-700)',
-                    }}
-                  >
-                    Counted in the average
-                  </span>
-                )}
               </div>
-              <p
-                className="text-muted"
-                style={{ fontSize: '12px', marginBottom: 'var(--space-6)' }}
-              >
-                Whole stars only — the average shows in quarter steps.
-              </p>
             </>
           ) : null}
 
-          {/* COM-1: private recipes have no comment section (UI-15). */}
+          {/* COM-1: private recipes have no comment section (UI-15). UI-24: without
+              the rating block (shared recipes) the same divider opens the comments. */}
           {!isVersionView && shown.hasComments ? (
-            <CommentsSection recipeId={shown.id} hasVotes={shown.hasVotes} />
+            <>
+              {shown.canRate ? null : (
+                <div className="hr hr-section" />
+              )}
+              <CommentsSection recipeId={shown.id} hasVotes={shown.hasVotes} />
+            </>
           ) : null}
         </section>
       </div>
 
       {shown.attribution === null ? null : (
-        <p
-          className="text-muted"
-          style={{ fontSize: '11px', marginTop: 'var(--space-8)' }}
-        >
-          {shown.attribution}
-        </p>
+        <p className="text-muted text-caption mt-8">{shown.attribution}</p>
       )}
+
+      {confirmingSync ? (
+        <ConfirmDialog
+          title="Replace your version with the original's latest?"
+          confirmLabel="Sync"
+          loading={syncing}
+          onConfirm={() => void sync()}
+          onCancel={() => setConfirmingSync(false)}
+        >
+          Your changes stay in the version history.
+        </ConfirmDialog>
+      ) : null}
 
       {versionsOpen ? (
         <VersionsDialog

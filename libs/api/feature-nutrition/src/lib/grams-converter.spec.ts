@@ -63,7 +63,34 @@ describe('gramsFor (NUT-6)', () => {
     expect(gramsFor(ingredient(Number.POSITIVE_INFINITY, 'g'), null)).toBeNull();
   });
 
-  it('NUT-6 ignores the portion weight for every unit but `piece`', () => {
+  it('NUT-6 ignores the portion weight for every unit but `piece`, `cup`, `tbsp` and `tsp`', () => {
     expect(gramsFor(ingredient(2, 'g'), 500)).toBe(2);
+    expect(gramsFor(ingredient(2, 'kg'), 500)).toBe(2000);
+    expect(gramsFor(ingredient(2, 'ml'), 500)).toBe(2);
+    expect(gramsFor(ingredient(2, 'l'), 500)).toBe(2000);
+    expect(gramsFor(ingredient(2, 'pinch'), 500)).toBe(0.6);
+    expect(gramsFor(ingredient(2, 'none'), 500)).toBeNull();
+  });
+
+  it('NUT-6 weighs `cup` by the food own cup portion when given (3 cups × 185 g)', () => {
+    expect(gramsFor(ingredient(3, 'cup'), 185)).toBe(555);
+  });
+
+  it('NUT-6 weighs `tbsp` by the food own tablespoon portion when given', () => {
+    expect(gramsFor(ingredient(2, 'tbsp'), 8)).toBe(16);
+  });
+
+  it('NUT-6 weighs `tsp` by the food own teaspoon portion when given', () => {
+    expect(gramsFor(ingredient(1.5, 'tsp'), 4)).toBe(6);
+  });
+
+  it('NUT-6 falls back to water density for `cup`, `tbsp` and `tsp` when no portion weight is given', () => {
+    expect(gramsFor(ingredient(1, 'cup'), null)).toBe(240);
+    expect(gramsFor(ingredient(1, 'tbsp'), null)).toBe(15);
+    expect(gramsFor(ingredient(1, 'tsp'), null)).toBe(5);
+  });
+
+  it('NUT-6 leaves an empty `cup` quantity unmatched even with a portion weight', () => {
+    expect(gramsFor(ingredient(null, 'cup'), 185)).toBeNull();
   });
 });

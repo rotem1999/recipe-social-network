@@ -8,6 +8,9 @@ function createWindow(): void {
   const window = new BrowserWindow({
     width: 1200,
     height: 800,
+    // UI-30: the renderer's layouts are designed for widths from 760 px up.
+    minWidth: 760,
+    minHeight: 560,
     title: 'CookBook',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

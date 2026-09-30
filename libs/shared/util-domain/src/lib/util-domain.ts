@@ -62,6 +62,33 @@ export type RecipeSource = (typeof RECIPE_SOURCES)[number];
 export const RECIPE_RELATIONS = ['own', 'saved', 'shared', 'public', 'none'] as const;
 export type RecipeRelation = (typeof RECIPE_RELATIONS)[number];
 
+/** §3.1.1 title and description lengths (Rotem delegated, 2026-09-28). */
+export const RECIPE_TITLE_MAX_LENGTH = 200;
+export const RECIPE_DESCRIPTION_MAX_LENGTH = 500;
+
+/**
+ * §3.1.1 upper limits (Rotem, chat 2026-09-30), enforced by the API's create and update
+ * DTOs (400) and by `maxLength`/`max` in the editor. Rows saved before them keep their
+ * values until their next edit.
+ */
+export const MIN_SERVINGS = 1;
+export const MAX_SERVINGS = 6;
+/** `prepMinutes` and `cookMinutes`: 0–1440. */
+export const MIN_PREP_COOK_MINUTES = 0;
+export const MAX_PREP_COOK_MINUTES = 1440;
+/** ingredients[]: at most 50; `name` 1–120, `note` at most 120, `quantity` above 0 and at most 10000. */
+export const MAX_INGREDIENTS = 50;
+export const INGREDIENT_NAME_MAX_LENGTH = 120;
+export const INGREDIENT_NOTE_MAX_LENGTH = 120;
+export const MAX_INGREDIENT_QUANTITY = 10000;
+/** steps[]: at most 60; `text` 1–1000, `durationMinutes` 1–1440. */
+export const MAX_STEPS = 60;
+export const STEP_TEXT_MAX_LENGTH = 1000;
+export const MIN_STEP_DURATION_MINUTES = 1;
+export const MAX_STEP_DURATION_MINUTES = 1440;
+/** UI-15, §3.1.1: cook mode offers a step timer only up to 120 minutes (Rotem, chat 2026-09-30). */
+export const MAX_COOK_TIMER_MINUTES = 120;
+
 /** RATE-1: whole stars 1–5. RATE-2: average 1.00–5.00. */
 export const MIN_STARS = 1;
 export const MAX_STARS = 5;
@@ -112,40 +139,44 @@ export function toTwoDecimals(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-/** §3.1.1 invariants. Returns an empty list when the content is valid. */
+/**
+ * §3.1.1 invariants. Returns an empty list when the content is valid. The texts
+ * are written for people because the API sends them as its 400 message (UI-43).
+ */
 export function validateRecipeContent(content: RecipeContent): string[] {
   const errors: string[] = [];
-  if (!content.title || content.title.trim().length === 0) errors.push('title is required');
-  if (content.title && content.title.length > 200) errors.push('title is longer than 200 characters');
+  if (!content.title || content.title.trim().length === 0) errors.push('Give the recipe a title');
+  if (content.title && content.title.length > 200) errors.push('Title can be at most 200 characters');
   if (content.description !== undefined && content.description.length > 500) {
-    errors.push('description is longer than 500 characters');
+    errors.push('Description can be at most 500 characters');
   }
-  if (!isCategory(content.category)) errors.push('category must be one of the 14 categories');
-  if (!Number.isInteger(content.servings) || content.servings < 1) errors.push('servings must be an integer >= 1');
+  if (!isCategory(content.category)) errors.push('Choose a category');
+  if (!Number.isInteger(content.servings) || content.servings < 1) errors.push('Servings must be a whole number of at least 1');
   if (!Array.isArray(content.ingredients) || content.ingredients.length === 0) {
-    errors.push('at least one ingredient is required');
+    errors.push('Add at least one ingredient');
   } else {
     content.ingredients.forEach((ingredient, index) => {
-      if (!ingredient.name || ingredient.name.trim().length === 0) errors.push(`ingredient ${index + 1}: name is required`);
-      if (!isUnit(ingredient.unit)) errors.push(`ingredient ${index + 1}: unit is not in the fixed list`);
+      if (!ingredient.name || ingredient.name.trim().length === 0) errors.push(`Name ingredient ${index + 1}`);
+      if (!isUnit(ingredient.unit)) errors.push(`Choose a unit for ingredient ${index + 1}`);
       if (ingredient.quantity !== null && !(typeof ingredient.quantity === 'number' && ingredient.quantity >= 0)) {
-        errors.push(`ingredient ${index + 1}: quantity must be a non-negative number or empty`);
+        errors.push(`Ingredient ${index + 1}: the quantity can't be negative`);
       }
     });
   }
   if (!Array.isArray(content.steps) || content.steps.length === 0) {
-    errors.push('at least one step is required');
+    errors.push('Add at least one step');
   } else {
     content.steps.forEach((step, index) => {
-      if (!step.text || step.text.trim().length === 0) errors.push(`step ${index + 1}: text is required`);
+      if (!step.text || step.text.trim().length === 0) errors.push(`Write step ${index + 1}`);
       if (step.durationMinutes !== undefined && !(Number.isInteger(step.durationMinutes) && step.durationMinutes >= 1)) {
-        errors.push(`step ${index + 1}: durationMinutes must be an integer >= 1`);
+        errors.push(`Step ${index + 1}: minutes must be a whole number of at least 1`);
       }
     });
   }
+  const minuteLabels = { prepMinutes: 'Prep minutes', cookMinutes: 'Cook minutes' } as const;
   for (const key of ['prepMinutes', 'cookMinutes'] as const) {
     const value = content[key];
-    if (value !== undefined && !(Number.isInteger(value) && value >= 0)) errors.push(`${key} must be an integer >= 0`);
+    if (value !== undefined && !(Number.isInteger(value) && value >= 0)) errors.push(`${minuteLabels[key]} must be a whole number, 0 or more`);
   }
   return errors;
 }

@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AiDailyUsageEntity } from '@rsn/api/data-access-db';
 import type { QuotaDto } from '@rsn/shared/util-contracts';
+import type { QuotaExceededResponseDto } from './dto/cook-response.dto';
 
 /** COOK-8: the default when `OPENROUTER_SHARED_DAILY_QUOTA_PER_USER` is unset. */
 const DEFAULT_DAILY_LIMIT = 100;
@@ -86,14 +87,12 @@ function quotaOf(used: number, limit: number): QuotaDto {
   return { used, limit, remaining: Math.max(0, limit - used) };
 }
 
-/** COOK-10: 429 with the remaining count. */
+/** COOK-10: 429 with the remaining count; the body is the documented one (DOC-5). */
 function exhausted(quota: QuotaDto): HttpException {
-  return new HttpException(
-    {
-      statusCode: HttpStatus.TOO_MANY_REQUESTS,
-      message: QUOTA_EXHAUSTED_MESSAGE,
-      quota,
-    },
-    HttpStatus.TOO_MANY_REQUESTS,
-  );
+  const body: QuotaExceededResponseDto = {
+    statusCode: HttpStatus.TOO_MANY_REQUESTS,
+    message: QUOTA_EXHAUSTED_MESSAGE,
+    quota,
+  };
+  return new HttpException(body, HttpStatus.TOO_MANY_REQUESTS);
 }

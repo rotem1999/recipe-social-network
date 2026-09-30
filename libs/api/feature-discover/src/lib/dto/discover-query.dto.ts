@@ -6,13 +6,13 @@ import { CATEGORIES, type Category } from '@rsn/shared/util-domain';
 export class DiscoverQueryDto {
   /** DISC-7: one of the 14 TheMealDB categories; absent means the split view (DISC-5). */
   @IsOptional()
-  @IsIn(CATEGORIES)
+  @IsIn(CATEGORIES, { message: 'Choose one of the categories' })
   category?: Category;
 
-  /** DISC-9: 1-based page of the public recipes of one category. */
+  /** DISC-9: 1-based page of the public recipes and catalogue entries of one category. */
   @IsOptional()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
+  @IsInt({ message: 'Pages are whole numbers' })
+  @Min(1, { message: 'Pages start at 1' })
   page?: number;
 }

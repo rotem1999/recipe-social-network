@@ -12,6 +12,7 @@ allowBuilds:
   geckodriver: false
   '@firebase/util': false
   protobufjs: false
+  '@scarf/scarf': false
 minimumReleaseAgeExclude:
   - '@wdio/cli@9.31.7'
   - '@wdio/config@9.31.7'

@@ -92,10 +92,16 @@ export interface RatingSummaryDto {
   mine: number | null;
 }
 
+/**
+ * SAVE-9: the source of a copy. `recipeId` is set only while the caller can still view
+ * the source (the line is then a link); a TheMealDB source has `source: 'themealdb'`,
+ * the meal name as `title` and no owner.
+ */
 export interface RecipeAttributionDto {
   recipeId: string | null;
   title: string;
   ownerUsername: string | null;
+  source: RecipeSource;
 }
 
 export interface RecipeCardDto {
@@ -113,13 +119,24 @@ export interface RecipeCardDto {
   rating: RatingSummaryDto | null;
   versionNumber: number;
   updatedAt: string;
+  /** DISC-10: on someone else's recipe, the caller's live copy of it; otherwise null. */
+  myCopyId: string | null;
+  /** SAVE-10: the caller's copy (this recipe, or `myCopyId`) is behind its source. */
+  updateAvailable: boolean;
 }
 
 export interface RecipeDetailDto extends RecipeCardDto {
   description?: string;
   ingredients: Ingredient[];
   steps: Step[];
+  /** IMG-4: signed URLs of the uploaded images; index n is `DELETE /recipes/:id/images/:n`. */
   imageUrls: string[];
+  /**
+   * CAT-6, UI-20, IMG-7: the TheMealDB photo (`strMealThumb`) a TheMealDB copy carries, and
+   * copies of it inherit; hosted by TheMealDB, not an uploaded image, so never removable.
+   * Null when the recipe has none.
+   */
+  externalImageUrl: string | null;
   canCook: boolean;
   canEdit: boolean;
   canRate: boolean;
@@ -165,6 +182,8 @@ export interface CatalogueItemDto {
   name: string;
   thumbnailUrl: string;
   category: Category;
+  /** DISC-10: the caller's live copy of this meal, or null. */
+  myCopyId: string | null;
 }
 
 export interface DiscoverCategoryDto {
@@ -186,6 +205,8 @@ export interface CataloguePreviewDto extends RecipeContent {
   thumbnailUrl: string;
   area: string | null;
   attribution: string;
+  /** DISC-10: the caller's live copy of this meal, or null. */
+  myCopyId: string | null;
 }
 
 // ---------- social (§6) ----------
@@ -282,6 +303,19 @@ export interface IngredientNutritionDto {
   matchedDescription: string | null;
 }
 
+/**
+ * NUT-11: the headline range between the ingredients-mode and meal-mode per-portion
+ * values, each rounded to the nearest 10 kcal. `atLeast` is true only when the
+ * ingredients value alone is available and it is partial.
+ */
+export interface NutritionEstimateDto {
+  lowKcalPerPortion: number;
+  highKcalPerPortion: number;
+  atLeast: boolean;
+  /** NUT-11: names of the ingredients the ingredients-mode pass left unavailable; empty when none. */
+  notCounted: string[];
+}
+
 export interface NutritionResponse {
   mode: NutritionMode;
   servings: number;
@@ -291,6 +325,8 @@ export interface NutritionResponse {
   ingredients: IngredientNutritionDto[];
   matchedDescription: string | null;
   source: 'USDA FoodData Central';
+  /** NUT-11: present whichever `mode` was asked; null when neither value is available. */
+  estimate: NutritionEstimateDto | null;
 }
 
 // ---------- misc ----------

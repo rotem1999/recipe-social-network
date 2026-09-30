@@ -1,0 +1,173 @@
+# CookBook
+
+CookBook is a cooking social network for family and friends, built as an Electron desktop app with a NestJS backend. Users write recipes, keep them private, share them with chosen friends or publish them to everyone, and follow them step by step in **cook mode**, where an AI assistant answers questions about the current step.
+
+[SPEC.md](SPEC.md) is the single source of truth for what the app does and how it is built. This file is a summary; when the two disagree, SPEC.md wins.
+
+## Features
+
+- **Accounts**: username + password sign-up (scrypt hashes), JWT access and refresh tokens (SPEC §2).
+- **Recipes**: private by default, shareable with friends, or public; every edit creates a new version and the owner sees the full history; images through Firebase Cloud Storage, optional (§3).
+- **Catalogue**: recipes from TheMealDB v2 appear next to user recipes and can be saved as a private copy (§3.3).
+- **Friends**: search by username or email, mutual requests (§4).
+- **Discover**: public recipes and the catalogue, split into TheMealDB's 14 categories, with up to 3 pinned favourites (§5).
+- **Social**: 1–5 star ratings on public recipes, comments on public and shared recipes, Reddit-style votes on public ones (§6).
+- **Cook mode**: live step tracker with one "ask the AI" button per step, via OpenRouter (`minimax/minimax-m3`), limited to 100 AI requests per user per day (§7).
+- **Recommendations**: the AI ranks recipes for the current weather and time of day; location comes from the OS timezone only, weather from Open-Meteo (§8).
+- **Nutrition**: calories per portion from USDA FoodData Central, by ingredients or by meal name (§9).
+- **Prompt log**: every AI call is appended to `log/YYYY-MM-DD.json` (JSON Lines) with tokens and cost (§10).
+
+## Architecture
+
+An Nx 23 monorepo with pnpm and TypeScript (SPEC §11).
+
+| Project | What it is |
+|---|---|
+| `apps/api` | NestJS 11 API (CommonJS, Jest), the only process that talks to PostgreSQL and to third-party services; API docs with `@nestjs/swagger` 11.4.7 |
+| `apps/web` | React 19 renderer (Vite 7, Vitest), loaded by the Electron window |
+| `apps/desktop` | Electron 44 main and preload, built with electron-vite |
+| `apps/*-e2e` | End-to-end tests: API (Jest), renderer (Playwright), desktop (WebdriverIO) |
+| `libs/api/*` | API features (`feature-*`), clients for PostgreSQL, OpenRouter, TheMealDB, USDA, Open-Meteo and Firebase (`data-access-*`), and the API docs with their access rules (`util-openapi`) |
+| `libs/web/*` | Renderer features, the typed API client and the UI kit with the design tokens |
+| `libs/shared/*` | Domain types and request/response contracts used by both sides |
+
+Imports use the alias `@rsn/<scope>/<type>-<name>` (for example `@rsn/shared/util-domain`), and module boundaries are enforced by lint. API keys live only in the API; the renderer and the desktop app never hold a secret.
+
+## Prerequisites
+
+- Node.js 24 LTS or 26
+- pnpm 12.3.4 (`corepack enable` picks up the version from `package.json`)
+- PostgreSQL 18 on `localhost:5432` (or Docker, see `docker/docker-compose.yml`)
+- Keys for TheMealDB v2 (paid), USDA FoodData Central and OpenRouter; Firebase is optional
+
+## Setup
+
+1. Install dependencies:
+
+   ```bash
+   pnpm install
+   ```
+
+2. Create the database role and database once, as the `postgres` superuser. Open [docker/setup-database.sql](docker/setup-database.sql) in pgAdmin's Query Tool (steps are in the file header), replace `CHANGE_ME` with a password, and run it. From a terminal instead:
+
+   ```bash
+   "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U postgres -h localhost -d postgres -f docker/setup-database.sql
+   ```
+
+3. Copy `.env.example` to `.env.local` and fill every empty value: the database password from step 2, two different long random JWT secrets, and the provider keys. Leave the three `FIREBASE_*` values empty to run without image uploads. `DOCS_USERNAME` and `DOCS_PASSWORD` (at least 16 characters) are needed only in production, to open the API docs (see [API documentation](#api-documentation)). `.env.local` is gitignored; never commit it.
+
+4. Create the schema:
+
+   ```bash
+   pnpm nx run api-data-access-db:migrate
+   ```
+
+   `pnpm nx run api-data-access-db:migrate:show` lists the applied (`[X]`) and pending (`[ ]`) migrations.
+
+## Run
+
+After every pull, bring the schema up to date before starting the API:
+
+```bash
+pnpm nx run api-data-access-db:migrate
+```
+
+If a migration is still pending, the API logs "Database schema is out of date: run pnpm nx run api-data-access-db:migrate" at start, and routes that touch the changed tables fail until you run it. `pnpm nx run api-data-access-db:migrate:show` lists what is applied and what is pending.
+
+Start the API (port 3000, prefix `/api/v1`, health check at `/api/v1/health`, API docs at `/api/v1/docs`):
+
+```bash
+pnpm nx serve api
+```
+
+Then start one client.
+
+- **Desktop app** (Electron, with its own renderer dev server):
+
+  ```bash
+  pnpm nx dev desktop
+  ```
+
+- **Renderer in a browser** at http://localhost:4200:
+
+  ```bash
+  pnpm nx serve web
+  ```
+
+On Windows, if a dev server exits with `write EPIPE`, the Nx daemon restarted underneath it. Run the command with the daemon off, in PowerShell:
+
+```powershell
+$env:NX_DAEMON='false'; pnpm nx serve web
+```
+
+### Open the renderer from another machine
+
+The web dev server forwards every request under `/api/v1` to the API on `localhost:3000`; it follows `API_PORT` and `API_GLOBAL_PREFIX` from the environment, `.env.local` or `.env`. Point the renderer at that path and serve on every network interface, in PowerShell:
+
+```powershell
+$env:VITE_API_BASE_URL='/api/v1'; pnpm nx serve web --host 0.0.0.0
+```
+
+Then open `http://<this PC's IP>:4200`, or `http://csn.dvirlabs.com:4200`, the one host name the dev server accepts besides localhost (and `*.localhost`) and IP addresses. The dev server serves files only from `apps/web`, `libs` and `node_modules`, so nothing else in the repository (a service-account JSON, `log/`) is reachable through it. Only port 4200 has to be reachable: allow it in Windows Firewall, and forward it on the router for devices outside the local network. The API's port and `CORS_ORIGINS` stay as they are. If the API is not running, API calls through the dev server fail with a 500, and the renderer shows its server-error message.
+
+In development React StrictMode mounts effects twice, so the Home screen sends each recommendation request twice. Production builds do not.
+
+## API documentation
+
+The API serves Swagger UI and the OpenAPI 3 document in both builds (SPEC §11.7):
+
+- Swagger UI: http://localhost:<API_PORT>/api/v1/docs
+- OpenAPI document (JSON): http://localhost:<API_PORT>/api/v1/docs-json
+
+Both follow `API_GLOBAL_PREFIX`. Every route except sign-up, sign-in, refresh and health shows a lock: it needs a Bearer access token.
+
+- **Development** (`NODE_ENV` is not `production`): the docs are open. "Try it out" works on every operation; click **Authorize** and paste an access token (from sign-in). The token is not kept after a page reload.
+- **Production** (`NODE_ENV=production`): the docs need HTTP Basic auth with `DOCS_USERNAME` and `DOCS_PASSWORD` from `.env.local`; the password must be at least 16 characters. If either key is empty or the password is shorter, the docs are not served (both paths answer 404) and the API logs a warning at startup naming the key. "Try it out" is off, so the production docs send no requests to the API.
+
+The API runs over plain HTTP, so when the docs are opened from another machine the Basic auth credentials cross the network in clear text.
+
+## Test
+
+Lint, type-check and unit-test everything:
+
+```bash
+pnpm nx run-many -t lint typecheck test
+```
+
+End-to-end suites:
+
+```bash
+pnpm nx e2e api-e2e
+```
+
+```bash
+pnpm exec playwright install
+```
+
+```bash
+pnpm nx e2e web-e2e
+```
+
+```bash
+pnpm nx e2e desktop-e2e
+```
+
+`api-e2e` starts the API itself and needs the database; `desktop-e2e` builds the desktop app first.
+
+## Build
+
+```bash
+pnpm nx build api
+```
+
+```bash
+pnpm nx package desktop
+```
+
+`package` builds the Electron app and writes the installers to `dist/apps/desktop` with electron-builder.
+
+## More documentation
+
+- [SPEC.md](SPEC.md): requirements, architecture, schema, environment keys and the sources behind every third-party fact
+- [MEM.md](MEM.md): current state of the work and next steps
+- [design_handoff_cookbook_ui/](design_handoff_cookbook_ui/): the UI design guide the renderer is based on

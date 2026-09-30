@@ -15,7 +15,7 @@ import type {
 } from '@rsn/shared/util-contracts';
 import { CATEGORIES, type Category, isCategory } from '@rsn/shared/util-domain';
 
-/** DISC-9: 20 public recipes per page when one category is asked for. */
+/** DISC-9: 20 public recipes and 20 catalogue entries per page when one category is asked for. */
 const CATEGORY_PAGE_SIZE = 20;
 
 /** DISC-9: the split view (DISC-5) shows the first 8 items of every category. */
@@ -32,7 +32,7 @@ export class DiscoverService {
   ) {}
 
   /**
-   * DISC-1, DISC-4, DISC-5, DISC-9: with a category, one section of public
+   * DISC-1, DISC-4, DISC-5, DISC-9, DISC-10: with a category, one section of public
    * recipes (20 per page) followed by that category's catalogue entries;
    * without one, all 14 categories (DISC-7) with favourites first (DISC-6)
    * and the first 8 items of each.
@@ -51,13 +51,17 @@ export class DiscoverService {
     return { categories, attribution: THEMEALDB_ATTRIBUTION };
   }
 
-  /** CAT-2, CAT-6: the live preview of one catalogue meal (`lookup.php?i=`). */
-  async cataloguePreview(mealId: string): Promise<CataloguePreviewDto> {
+  /** CAT-2, CAT-6, DISC-10: the live preview of one catalogue meal (`lookup.php?i=`). */
+  async cataloguePreview(
+    userId: string,
+    mealId: string,
+  ): Promise<CataloguePreviewDto> {
     const meal = await this.mealDb.lookup(mealId);
     if (meal === null) {
       throw new NotFoundException(`Unknown catalogue recipe ${mealId}`);
     }
-    return toCataloguePreview(meal);
+    const copies = await this.recipeDtos.catalogueCopyIds(userId, [mealId]);
+    return { ...toCataloguePreview(meal), myCopyId: copies.get(mealId) ?? null };
   }
 
   /** DISC-6, DISC-9: `PUT /me/favourite-categories` (at most 3). */
@@ -68,7 +72,11 @@ export class DiscoverService {
     return this.users.setFavouriteCategories(userId, categories);
   }
 
-  /** DISC-9: one category, `page` of public recipes plus the catalogue on page 1. */
+  /**
+   * DISC-9: one category, `page` of public recipes plus `page` of its catalogue entries,
+   * 20 of each; page n carries entries (n − 1) × 20 + 1 to n × 20 of either list, and
+   * `hasMore` is true when either list goes past this page.
+   */
   private async oneCategory(
     userId: string,
     favourites: Category[],
@@ -81,16 +89,17 @@ export class DiscoverService {
         page,
         pageSize: CATEGORY_PAGE_SIZE,
       }),
-      // The catalogue is not paged, so it is served with the first page only.
-      page === 1 ? this.catalogueFor(category) : Promise.resolve([]),
+      this.catalogueFor(category),
     ]);
+    const start = (Math.max(page, 1) - 1) * CATEGORY_PAGE_SIZE;
+    const end = start + CATEGORY_PAGE_SIZE;
     return {
       category,
       isFavourite: favourites.includes(category),
       recipes: recipes.cards,
-      catalogue,
+      catalogue: await this.withCopyIds(userId, catalogue.slice(start, end)),
       page,
-      hasMore: recipes.hasMore,
+      hasMore: recipes.hasMore || catalogue.length > end,
     };
   }
 
@@ -119,6 +128,11 @@ export class DiscoverService {
       // One catch per call: a category whose catalogue fails still shows its recipes.
       Promise.all(ordered.map((entry) => this.catalogueFor(entry))),
     ]);
+    const shown = await this.withCopyIds(
+      userId,
+      catalogues.flatMap((catalogue) => catalogue.slice(0, OVERVIEW_PAGE_SIZE)),
+    );
+    const shownByMealId = new Map(shown.map((item) => [item.mealId, item]));
     return ordered.map((entry, index) => {
       const recipes = recipeLists[index];
       const catalogue = catalogues[index];
@@ -126,7 +140,9 @@ export class DiscoverService {
         category: entry,
         isFavourite: favourites.includes(entry),
         recipes: recipes.cards,
-        catalogue: catalogue.slice(0, OVERVIEW_PAGE_SIZE),
+        catalogue: catalogue
+          .slice(0, OVERVIEW_PAGE_SIZE)
+          .map((item) => shownByMealId.get(item.mealId) ?? item),
         page: 1,
         hasMore: recipes.hasMore || catalogue.length > OVERVIEW_PAGE_SIZE,
       };
@@ -148,6 +164,22 @@ export class DiscoverService {
       );
       return [];
     }
+  }
+
+  /** DISC-10, CAT-7: marks the catalogue entries the caller already has a copy of. */
+  private async withCopyIds(
+    userId: string,
+    items: CatalogueItemDto[],
+  ): Promise<CatalogueItemDto[]> {
+    if (items.length === 0) return items;
+    const copies = await this.recipeDtos.catalogueCopyIds(
+      userId,
+      items.map((item) => item.mealId),
+    );
+    return items.map((item) => ({
+      ...item,
+      myCopyId: copies.get(item.mealId) ?? null,
+    }));
   }
 
   /** DISC-6: the caller's stored favourites, in their stored order, deduplicated. */

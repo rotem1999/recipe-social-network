@@ -59,6 +59,8 @@ function card(id: string, category: Category): RecipeCardDto {
     rating: null,
     versionNumber: 1,
     updatedAt: '2026-09-20T08:00:00.000Z',
+    myCopyId: null,
+    updateAvailable: false,
   };
 }
 
@@ -69,13 +71,21 @@ function catalogueItem(mealId: string, category: Category): CatalogueItemDto {
     name: `Meal ${mealId}`,
     thumbnailUrl: `https://www.themealdb.com/images/media/meals/${mealId}.jpg`,
     category,
+    myCopyId: null,
   };
+}
+
+/** DISC-9: `count` Seafood catalogue entries with distinct meal ids, in list order. */
+function seafoodCatalogue(count: number): CatalogueItemDto[] {
+  return Array.from({ length: count }, (_, index) =>
+    catalogueItem(String(53000 + index), 'Seafood'),
+  );
 }
 
 interface Harness {
   service: DiscoverService;
   users: { findById: jest.Mock; setFavouriteCategories: jest.Mock };
-  recipeDtos: { listPublicCards: jest.Mock };
+  recipeDtos: { listPublicCards: jest.Mock; catalogueCopyIds: jest.Mock };
   mealDb: { listByCategory: jest.Mock; lookup: jest.Mock };
 }
 
@@ -86,6 +96,7 @@ function makeHarness(favouriteCategories: string[] = []): Harness {
   };
   const recipeDtos = {
     listPublicCards: jest.fn().mockResolvedValue({ cards: [], hasMore: false }),
+    catalogueCopyIds: jest.fn().mockResolvedValue(new Map<string, string>()),
   };
   const mealDb = {
     listByCategory: jest.fn().mockResolvedValue([]),
@@ -255,17 +266,111 @@ describe('DiscoverService.discover with a category (DISC-1, DISC-4, DISC-9)', ()
     ]);
   });
 
-  it('DISC-9 leaves the catalogue out past page 1, since it is not paged', async () => {
+  it('DISC-9 pages the catalogue 20 per page: page 1 carries entries 1 to 20', async () => {
     const harness = makeHarness([]);
-    harness.mealDb.listByCategory.mockResolvedValue([
-      catalogueItem('52959', 'Seafood'),
-    ]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(45));
+
+    const response = await harness.service.discover(USER, 'Seafood', 1);
+
+    expect(response.categories[0].catalogue.map((item) => item.mealId)).toEqual(
+      seafoodCatalogue(45)
+        .slice(0, 20)
+        .map((item) => item.mealId),
+    );
+    expect(response.categories[0].hasMore).toBe(true);
+  });
+
+  it('DISC-9 page 2 carries catalogue entries 21 to 40', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(45));
 
     const response = await harness.service.discover(USER, 'Seafood', 2);
 
-    expect(harness.mealDb.listByCategory).not.toHaveBeenCalled();
-    expect(response.categories[0].catalogue).toEqual([]);
+    expect(harness.mealDb.listByCategory).toHaveBeenCalledWith('Seafood');
+    expect(response.categories[0].catalogue.map((item) => item.mealId)).toEqual(
+      seafoodCatalogue(45)
+        .slice(20, 40)
+        .map((item) => item.mealId),
+    );
     expect(response.categories[0].page).toBe(2);
+    expect(response.categories[0].hasMore).toBe(true);
+  });
+
+  it('DISC-9 the last catalogue page carries the rest and reports no more when the recipes have none', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(45));
+
+    const response = await harness.service.discover(USER, 'Seafood', 3);
+
+    expect(response.categories[0].catalogue.map((item) => item.mealId)).toEqual(
+      seafoodCatalogue(45)
+        .slice(40)
+        .map((item) => item.mealId),
+    );
+    expect(response.categories[0].catalogue).toHaveLength(5);
+    expect(response.categories[0].hasMore).toBe(false);
+  });
+
+  it('DISC-9 reports no more when the catalogue ends exactly on the page and the recipes have none', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(40));
+
+    const response = await harness.service.discover(USER, 'Seafood', 2);
+
+    expect(response.categories[0].catalogue).toHaveLength(20);
+    expect(response.categories[0].hasMore).toBe(false);
+  });
+
+  it('DISC-9 reports more when the recipes have more even though the catalogue has ended', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(5));
+    harness.recipeDtos.listPublicCards.mockResolvedValue({
+      cards: [card('r21', 'Seafood')],
+      hasMore: true,
+    });
+
+    const response = await harness.service.discover(USER, 'Seafood', 2);
+
+    expect(response.categories[0].catalogue).toEqual([]);
+    expect(response.categories[0].hasMore).toBe(true);
+  });
+
+  it('DISC-9 serves an empty catalogue past its last page and asks for no copies', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(45));
+
+    const response = await harness.service.discover(USER, 'Seafood', 4);
+
+    expect(response.categories[0].catalogue).toEqual([]);
+    expect(response.categories[0].hasMore).toBe(false);
+    expect(harness.recipeDtos.catalogueCopyIds).not.toHaveBeenCalled();
+  });
+
+  it('DISC-9, DISC-10 asks for copy ids of the entries on the page only', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(45));
+
+    await harness.service.discover(USER, 'Seafood', 2);
+
+    expect(harness.recipeDtos.catalogueCopyIds).toHaveBeenCalledTimes(1);
+    expect(harness.recipeDtos.catalogueCopyIds).toHaveBeenCalledWith(
+      USER.id,
+      seafoodCatalogue(45)
+        .slice(20, 40)
+        .map((item) => item.mealId),
+    );
+  });
+
+  it('DISC-9 passes the asked page on to the public recipe list', async () => {
+    const harness = makeHarness([]);
+
+    await harness.service.discover(USER, 'Seafood', 3);
+
+    expect(harness.recipeDtos.listPublicCards).toHaveBeenCalledWith(USER.id, {
+      category: 'Seafood',
+      page: 3,
+      pageSize: 20,
+    });
   });
 
   it('DISC-9 passes hasMore through from the recipe page', async () => {
@@ -305,10 +410,10 @@ describe('DiscoverService.cataloguePreview (CAT-2)', () => {
     const harness = makeHarness([]);
     harness.mealDb.lookup.mockResolvedValue(null);
 
-    await expect(harness.service.cataloguePreview('99999')).rejects.toThrow(
+    await expect(harness.service.cataloguePreview(USER.id, '99999')).rejects.toThrow(
       NotFoundException,
     );
-    await expect(harness.service.cataloguePreview('99999')).rejects.toThrow(
+    await expect(harness.service.cataloguePreview(USER.id, '99999')).rejects.toThrow(
       'Unknown catalogue recipe 99999',
     );
   });
@@ -328,7 +433,7 @@ describe('DiscoverService.cataloguePreview (CAT-2)', () => {
       strMeasure1: '3/4 cup',
     });
 
-    const preview = await harness.service.cataloguePreview('52772');
+    const preview = await harness.service.cataloguePreview(USER.id, '52772');
 
     expect(harness.mealDb.lookup).toHaveBeenCalledWith('52772');
     expect(preview.mealId).toBe('52772');
@@ -339,6 +444,156 @@ describe('DiscoverService.cataloguePreview (CAT-2)', () => {
       'https://www.themealdb.com/images/media/meals/wvpsxx1468256321.jpg',
     );
     expect(preview.attribution).toBe(THEMEALDB_ATTRIBUTION);
+  });
+});
+
+describe('DiscoverService DISC-10 myCopyId on catalogue items', () => {
+  /** §3.3 field names of one TheMealDB `lookup.php?i=` record. */
+  const MEAL = {
+    idMeal: '52772',
+    strMeal: 'Teriyaki Chicken Casserole',
+    strCategory: 'Chicken',
+    strArea: 'Japanese',
+    strInstructions: 'Preheat oven to 175C.\r\nMix the sauce.',
+    strMealThumb:
+      'https://www.themealdb.com/images/media/meals/wvpsxx1468256321.jpg',
+    strIngredient1: 'soy sauce',
+    strMeasure1: '3/4 cup',
+  };
+
+  it('DISC-10 gives the TheMealDB preview the id of the caller’s live copy', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.lookup.mockResolvedValue(MEAL);
+    harness.recipeDtos.catalogueCopyIds.mockResolvedValue(
+      new Map([['52772', 'copy-1']]),
+    );
+
+    const preview = await harness.service.cataloguePreview(USER.id, '52772');
+
+    expect(harness.recipeDtos.catalogueCopyIds).toHaveBeenCalledWith(USER.id, [
+      '52772',
+    ]);
+    expect(preview.myCopyId).toBe('copy-1');
+  });
+
+  it('DISC-10 leaves the preview’s myCopyId null when the caller has no copy', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.lookup.mockResolvedValue(MEAL);
+
+    const preview = await harness.service.cataloguePreview(USER.id, '52772');
+
+    expect(preview.myCopyId).toBeNull();
+  });
+
+  it('DISC-10 does not look for copies of a meal TheMealDB does not know', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.lookup.mockResolvedValue(null);
+
+    await expect(
+      harness.service.cataloguePreview(USER.id, '99999'),
+    ).rejects.toThrow(NotFoundException);
+    expect(harness.recipeDtos.catalogueCopyIds).not.toHaveBeenCalled();
+  });
+
+  it('DISC-9, DISC-10 marks the catalogue entries of one category the caller has a copy of', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockResolvedValue([
+      catalogueItem('52959', 'Seafood'),
+      catalogueItem('52960', 'Seafood'),
+    ]);
+    harness.recipeDtos.catalogueCopyIds.mockResolvedValue(
+      new Map([['52960', 'copy-9']]),
+    );
+
+    const response = await harness.service.discover(USER, 'Seafood', 1);
+
+    expect(harness.recipeDtos.catalogueCopyIds).toHaveBeenCalledWith(USER.id, [
+      '52959',
+      '52960',
+    ]);
+    expect(
+      response.categories[0].catalogue.map((item) => [item.mealId, item.myCopyId]),
+    ).toEqual([
+      ['52959', null],
+      ['52960', 'copy-9'],
+    ]);
+  });
+
+  it('DISC-10 asks for no copies when the category has no catalogue entries (page 2)', async () => {
+    const harness = makeHarness([]);
+
+    await harness.service.discover(USER, 'Seafood', 2);
+
+    expect(harness.recipeDtos.catalogueCopyIds).not.toHaveBeenCalled();
+  });
+
+  it('DISC-5, DISC-10 marks the split view’s catalogue with one lookup for the 8 shown items of every category', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockImplementation(
+      async (category: Category) =>
+        category === 'Beef'
+          ? Array.from({ length: 10 }, (_, index) =>
+              catalogueItem(`5200${index}`, 'Beef'),
+            )
+          : category === 'Seafood'
+            ? [catalogueItem('52959', 'Seafood')]
+            : [],
+    );
+    harness.recipeDtos.catalogueCopyIds.mockResolvedValue(
+      new Map([
+        ['52003', 'copy-beef'],
+        ['52959', 'copy-fish'],
+      ]),
+    );
+
+    const response = await harness.service.discover(USER);
+
+    expect(harness.recipeDtos.catalogueCopyIds).toHaveBeenCalledTimes(1);
+    expect(harness.recipeDtos.catalogueCopyIds).toHaveBeenCalledWith(USER.id, [
+      ...Array.from({ length: 8 }, (_, index) => `5200${index}`),
+      '52959',
+    ]);
+    const beef = response.categories.find((entry) => entry.category === 'Beef');
+    const seafood = response.categories.find(
+      (entry) => entry.category === 'Seafood',
+    );
+    expect(beef?.catalogue).toHaveLength(8);
+    expect(beef?.catalogue.find((item) => item.mealId === '52003')?.myCopyId).toBe(
+      'copy-beef',
+    );
+    expect(
+      beef?.catalogue
+        .filter((item) => item.mealId !== '52003')
+        .every((item) => item.myCopyId === null),
+    ).toBe(true);
+    expect(seafood?.catalogue).toEqual([
+      { ...catalogueItem('52959', 'Seafood'), myCopyId: 'copy-fish' },
+    ]);
+  });
+
+  it('DISC-10 asks for no copies when every catalogue is empty', async () => {
+    const harness = makeHarness([]);
+
+    await harness.service.discover(USER);
+
+    expect(harness.recipeDtos.catalogueCopyIds).not.toHaveBeenCalled();
+  });
+
+  it('DISC-10 passes the public cards’ myCopyId and updateAvailable through from the recipe page', async () => {
+    const harness = makeHarness([]);
+    const saved = {
+      ...card('r1', 'Seafood'),
+      myCopyId: 'copy-1',
+      updateAvailable: true,
+    };
+    harness.recipeDtos.listPublicCards.mockResolvedValue({
+      cards: [saved],
+      hasMore: false,
+    });
+
+    const response = await harness.service.discover(USER, 'Seafood', 1);
+
+    expect(response.categories[0].recipes).toEqual([saved]);
   });
 });
 

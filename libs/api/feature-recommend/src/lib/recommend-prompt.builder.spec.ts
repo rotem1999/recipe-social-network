@@ -62,15 +62,31 @@ describe('RecommendPromptBuilder.build (WX-4, WX-10)', () => {
     );
   });
 
-  it('WX-4 asks for at most 3 picks, best first, in the personal space', () => {
+  it('WX-4 asks for 3 picks, best first, or every recipe when the list has fewer than 3', () => {
     const [system] = builder.build({
       scope: 'home',
       weather: SNAPSHOT,
       candidates: CANDIDATES,
     });
 
-    expect(system.content).toContain('at most 3 picks, best first');
+    expect(system.content).toContain(
+      'Answer with strict JSON only: {"picks":[{"id":"…","reason":"…"}]} with 3 picks, best first, or every recipe in the list when it has fewer than 3.',
+    );
+    expect(system.content).not.toContain('at most');
     expect(MAX_PICKS.home).toBe(3);
+  });
+
+  it('WX-10 Discover keeps asking for exactly 1 pick, without the "every recipe" clause', () => {
+    const [system] = builder.build({
+      scope: 'discover',
+      weather: SNAPSHOT,
+      candidates: CANDIDATES,
+    });
+
+    expect(system.content).toContain(
+      'Answer with strict JSON only: {"picks":[{"id":"…","reason":"…"}]} with exactly 1 pick.',
+    );
+    expect(system.content).not.toContain('every recipe in the list');
   });
 
   it('WX-10 asks for exactly 1 pick in Discover', () => {

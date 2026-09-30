@@ -6,7 +6,7 @@ import {
 
 import type { RecipeVersionEntity } from '@rsn/api/data-access-db';
 import { UsdaService } from '@rsn/api/data-access-usda';
-import type { UsdaDataType } from '@rsn/api/data-access-usda';
+import type { UsdaDataType, UsdaFoodHit } from '@rsn/api/data-access-usda';
 import type { AuthUser } from '@rsn/api/feature-auth';
 import { RecipeAccessService } from '@rsn/api/feature-recipes';
 import type {
@@ -17,7 +17,19 @@ import type {
 import type { Ingredient } from '@rsn/shared/util-domain';
 import { toTwoDecimals } from '@rsn/shared/util-domain';
 
+import { rankFoods, strictQuery } from './food-matcher';
 import { gramsFor } from './grams-converter';
+import {
+  isHouseholdMeasure,
+  pickMeasureGrams,
+  pickPieceGrams,
+} from './portion-picker';
+import { SEASONING_DESCRIPTION, isSeasoning } from './seasonings';
+import { gramsFromWeightNote } from './weight-note';
+import { estimateFrom } from './nutrition-estimate';
+
+/** One mode's response before NUT-11 adds the `estimate` from both modes. */
+type ModeResponse = Omit<NutritionResponse, 'estimate'>;
 
 /** NUT-6: ingredient search order, best analytical data first. */
 const INGREDIENT_DATA_TYPES: UsdaDataType[] = [
@@ -28,6 +40,9 @@ const INGREDIENT_DATA_TYPES: UsdaDataType[] = [
 
 /** NUT-6: meal-name lookup uses the FNDDS composite dishes only. */
 const MEAL_DATA_TYPES: UsdaDataType[] = ['Survey (FNDDS)'];
+
+/** NUT-6, NUT-9: how many of the next ranked hits may lend a measure (cup, tbsp, tsp) or piece weight to the chosen food. */
+const PIECE_FALLBACK_HITS = 3;
 
 /** §9 (U1): the USDA limit is 1,000 requests/hour, so ingredients go 4 at a time. */
 const USDA_CONCURRENCY = 4;
@@ -63,7 +78,7 @@ async function mapWithConcurrency<TItem, TResult>(
 }
 
 /**
- * SPEC §9 NUT-1..NUT-6: calories for a recipe, from its ingredients (default)
+ * SPEC §9 NUT-1..NUT-11: calories for a recipe, from its ingredients (default)
  * or from its title as a composite dish, through FoodData Central.
  */
 @Injectable()
@@ -90,18 +105,45 @@ export class NutritionService {
       throw new NotFoundException('Recipe has no current version');
     }
 
-    return mode === 'meal'
-      ? this.computeMeal(version)
-      : this.computeIngredients(version);
+    // NUT-11: both modes are computed whichever was asked (the USDA cache keeps the
+    // repeat cheap); the asked mode's errors propagate as before, while a USDA outage
+    // (503) in the other mode only leaves that value out of the estimate.
+    if (mode === 'meal') {
+      const [meal, ingredients] = await Promise.all([
+        this.computeMeal(version),
+        this.otherMode(() => this.computeIngredients(version)),
+      ]);
+      return { ...meal, estimate: estimateFrom(ingredients, meal) };
+    }
+    const [ingredients, meal] = await Promise.all([
+      this.computeIngredients(version),
+      this.otherMode(() => this.computeMeal(version)),
+    ]);
+    return { ...ingredients, estimate: estimateFrom(ingredients, meal) };
+  }
+
+  /** NUT-11: the mode that was not asked; a USDA outage (503) yields null instead of failing. */
+  private async otherMode(
+    run: () => Promise<ModeResponse>,
+  ): Promise<ModeResponse | null> {
+    try {
+      return await run();
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   /**
-   * NUT-6 ingredients mode: one USDA search per ingredient, kcal/100 g scaled
+   * NUT-6 ingredients mode: per ingredient a seasoning (no search) or a food
+   * chosen by NUT-8 (one or two searches), kcal/100 g scaled
    * by the ingredient's grams, summed over the ingredients that matched.
    */
   private async computeIngredients(
     version: RecipeVersionEntity,
-  ): Promise<NutritionResponse> {
+  ): Promise<ModeResponse> {
     const ingredients = version.ingredients ?? [];
     const rows = await mapWithConcurrency(
       ingredients,
@@ -137,9 +179,10 @@ export class NutritionService {
   }
 
   /**
-   * NUT-5, NUT-6: one ingredient. An empty quantity or the `none` unit is
-   * unmatched without a lookup; a USDA outage for this ingredient (503) leaves
-   * it unmatched too, while a 429 propagates and fails the request.
+   * NUT-5..NUT-10: one ingredient. A seasoning is 0 kcal without a lookup; an
+   * empty quantity, or the `none` unit without a weight note, is unmatched
+   * without a lookup; a USDA outage for this ingredient (503) leaves it
+   * unmatched too, while a 429 propagates and fails the request.
    */
   private async nutritionForIngredient(
     ingredient: Ingredient,
@@ -150,30 +193,46 @@ export class NutritionService {
       kcal: null,
       matchedDescription: null,
     };
+    if (ingredient.name.trim() === '') {
+      return unavailable;
+    }
+    if (isSeasoning(ingredient.name)) {
+      return {
+        ...unavailable,
+        kcal: 0,
+        matchedDescription: SEASONING_DESCRIPTION,
+      };
+    }
+
+    // NUT-10: "1 lb" / "4 oz" kept as a `none` note by CAT-6 is a weight.
+    const weightGrams =
+      ingredient.unit === 'none' ? gramsFromWeightNote(ingredient.note) : null;
     if (
-      ingredient.quantity === null ||
-      ingredient.unit === 'none' ||
-      ingredient.name.trim() === ''
+      (ingredient.unit === 'none' && weightGrams === null) ||
+      (ingredient.unit !== 'none' && ingredient.quantity === null)
     ) {
       return unavailable;
     }
 
     try {
-      const hit = (
-        await this.usda.searchFoods(ingredient.name, INGREDIENT_DATA_TYPES)
-      )[0];
+      const ranked = await this.findFoods(ingredient.name);
+      const hit = ranked[0];
       if (hit === undefined) {
         return unavailable;
       }
 
-      // NUT-6: `piece` needs the food's own first portion weight.
+      // NUT-9: `piece` needs the weight of one piece of the chosen food, or of
+      // a next-ranked hit of the same search. NUT-6: `cup`, `tbsp` and `tsp`
+      // use the chosen food's own portion for that measure when it has one.
       let portionGramWeight: number | null = null;
-      if (ingredient.unit === 'piece') {
-        const detail = await this.usda.getFood(hit.fdcId);
-        portionGramWeight = detail?.portions[0]?.gramWeight ?? null;
+      const unit = ingredient.unit;
+      if (unit === 'piece') {
+        portionGramWeight = await this.pieceGrams(ranked, ingredient);
+      } else if (isHouseholdMeasure(unit)) {
+        portionGramWeight = await this.measureGrams(ranked, unit);
       }
 
-      const grams = gramsFor(ingredient, portionGramWeight);
+      const grams = weightGrams ?? gramsFor(ingredient, portionGramWeight);
       const kcal =
         grams === null || hit.kcalPer100g === null
           ? null
@@ -193,6 +252,68 @@ export class NutritionService {
   }
 
   /**
+   * NUT-9: the weight of one piece from the chosen food (`ranked[0]`); when it
+   * has no piece portion, from the next hits of the same search in score order,
+   * at most 3 of them. The kcal per 100 g stay the chosen food's. Null when
+   * none of them has a piece portion (NUT-5).
+   */
+  private async pieceGrams(
+    ranked: readonly UsdaFoodHit[],
+    ingredient: Ingredient,
+  ): Promise<number | null> {
+    for (const candidate of ranked.slice(0, 1 + PIECE_FALLBACK_HITS)) {
+      const detail = await this.usda.getFood(candidate.fdcId);
+      const grams =
+        detail === null
+          ? null
+          : pickPieceGrams(detail.portions, ingredient.name, ingredient.note);
+      if (grams !== null) {
+        return grams;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * NUT-6: the weight of one cup, tablespoon or teaspoon from the chosen food's
+   * own portions; when it has none, from the next hits of the same search in
+   * score order, at most 3, like the NUT-9 piece fallback. Null means the water
+   * density applies.
+   */
+  private async measureGrams(
+    ranked: readonly UsdaFoodHit[],
+    unit: Parameters<typeof pickMeasureGrams>[1],
+  ): Promise<number | null> {
+    for (const candidate of ranked.slice(0, 1 + PIECE_FALLBACK_HITS)) {
+      const detail = await this.usda.getFood(candidate.fdcId);
+      const grams =
+        detail === null ? null : pickMeasureGrams(detail.portions, unit);
+      if (grams !== null) {
+        return grams;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * NUT-8: search with every name word required and `raw` ranked higher,
+   * then rank the hits; when none survives, search once more with the name.
+   * Returns the surviving hits of the search that chose the food, best first
+   * (empty when neither search leaves one).
+   */
+  private async findFoods(name: string): Promise<UsdaFoodHit[]> {
+    const strict = rankFoods(
+      name,
+      await this.usda.searchFoods(strictQuery(name), INGREDIENT_DATA_TYPES),
+    );
+    if (strict.length > 0) {
+      return strict;
+    }
+    const loose = await this.usda.searchFoods(name, INGREDIENT_DATA_TYPES);
+    return rankFoods(name, loose);
+  }
+
+  /**
    * NUT-3, NUT-6 meal mode: the title is searched in FNDDS; the first hit's
    * kcal/100 g and a portion weight (`foodMeasures[0].gramWeight`, else the
    * first `foodPortions[].gramWeight`) give kcal per portion. With no portion
@@ -200,7 +321,7 @@ export class NutritionService {
    */
   private async computeMeal(
     version: RecipeVersionEntity,
-  ): Promise<NutritionResponse> {
+  ): Promise<ModeResponse> {
     const hit = (
       await this.usda.searchFoods(version.title, MEAL_DATA_TYPES)
     )[0];

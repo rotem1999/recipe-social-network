@@ -4,7 +4,12 @@ export { RecipesModule } from './lib/recipes.module';
 export { RecipesController } from './lib/recipes.controller';
 export { RecipesService } from './lib/recipes.service';
 export type { RecipeImageUpload } from './lib/recipes.service';
-export { RecipeAccessService, relationOf } from './lib/recipe-access.service';
+export {
+  RecipeAccessService,
+  isCopy,
+  isSavedCopy,
+  relationOf,
+} from './lib/recipe-access.service';
 export { RecipeDtoService } from './lib/recipe-dto.service';
 export type {
   PublicCardsOptions,
@@ -16,3 +21,13 @@ export {
   StepDto,
 } from './lib/dto/recipe-write.dto';
 export { VisibilityDto } from './lib/dto/visibility.dto';
+export {
+  ImageUploadResponseDto,
+  RatingSummaryResponseDto,
+  RecipeAttributionResponseDto,
+  RecipeCardResponseDto,
+  RecipeDetailResponseDto,
+  RecipeListResponseDto,
+  RecipeVersionSummaryResponseDto,
+  RecipeVersionsResponseDto,
+} from './lib/dto/recipe-response.dto';

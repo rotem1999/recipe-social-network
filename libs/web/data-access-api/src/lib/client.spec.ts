@@ -1,6 +1,19 @@
 import { afterEach, beforeEach, vi } from 'vitest';
 import type { Mock } from 'vitest';
-import { ApiClient, ApiError, DEFAULT_API_BASE_URL } from './client';
+import {
+  AI_REQUEST_TIMEOUT_MS,
+  AI_TIMEOUT_MESSAGE,
+  ApiClient,
+  ApiError,
+  DEFAULT_API_BASE_URL,
+  NETWORK_ERROR_MESSAGE,
+  SERVER_ERROR_MESSAGE,
+  SERVER_OWN_MESSAGES,
+  TIMEOUT_STATUS,
+  isConnectivityError,
+  isTimeoutError,
+  timeoutError,
+} from './client';
 import { TokenStore } from './tokens';
 
 /** A fetch mock queue: each call shifts the next prepared response. */
@@ -229,12 +242,12 @@ describe('ApiClient (UI-17)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('§11.6 joins a ValidationPipe message array into one ApiError message', async () => {
+  it('UI-43 shows only the first entry of a ValidationPipe message array', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(
         {
           statusCode: 400,
-          message: ['servings must be at least 1', 'steps should not be empty'],
+          message: ['Servings can be at most 6', 'Write a comment'],
           error: 'Bad Request',
         },
         400,
@@ -250,9 +263,47 @@ describe('ApiClient (UI-17)', () => {
     expect(error.name).toBe('ApiError');
     expect(error.status).toBe(400);
     expect(error.error).toBe('Bad Request');
-    expect(error.message).toBe(
-      'servings must be at least 1, steps should not be empty',
+    expect(error.message).toBe('Servings can be at most 6');
+    expect(error.message).not.toContain('Write a comment');
+  });
+
+  it('UNSPECIFIED falls back to the status text when a 4xx message array is empty', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        status: 400,
+        statusText: 'Bad Request',
+        body: JSON.stringify({ statusCode: 400, message: [], error: 'Bad Request' }),
+      }),
     );
+
+    const client = new ApiClient(store, 'http://localhost:3000/api/v1');
+    const error = (await client
+      .post('/recipes', {})
+      .catch((cause: unknown) => cause)) as ApiError;
+
+    expect(error.status).toBe(400);
+    expect(error.message).toBe('Bad Request');
+  });
+
+  it('UNSPECIFIED falls back to the status text when the first array entry is an empty string', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        status: 400,
+        statusText: 'Bad Request',
+        body: JSON.stringify({
+          statusCode: 400,
+          message: ['', 'Write a comment'],
+          error: 'Bad Request',
+        }),
+      }),
+    );
+
+    const client = new ApiClient(store, 'http://localhost:3000/api/v1');
+    const error = (await client
+      .post('/recipes', {})
+      .catch((cause: unknown) => cause)) as ApiError;
+
+    expect(error.message).toBe('Bad Request');
   });
 
   it('§11.6 keeps a single-string error message', async () => {
@@ -272,7 +323,21 @@ describe('ApiClient (UI-17)', () => {
     expect(error.message).toBe('Forbidden resource');
   });
 
-  it('§11.6 falls back to the status text when the error body is not JSON', async () => {
+  it('§11.6 falls back to the status text when a 4xx error body is not JSON', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ status: 404, statusText: 'Not Found', body: '<html>' }),
+    );
+
+    const client = new ApiClient(store, 'http://localhost:3000/api/v1');
+    const error = (await client
+      .get('/health')
+      .catch((cause: unknown) => cause)) as ApiError;
+
+    expect(error.status).toBe(404);
+    expect(error.message).toBe('Not Found');
+  });
+
+  it("UI-26 turns a 502 with a non-JSON body into CookBook's server message", async () => {
     fetchMock.mockResolvedValueOnce(
       makeResponse({ status: 502, statusText: 'Bad Gateway', body: '<html>' }),
     );
@@ -282,8 +347,11 @@ describe('ApiClient (UI-17)', () => {
       .get('/health')
       .catch((cause: unknown) => cause)) as ApiError;
 
+    expect(error).toBeInstanceOf(ApiError);
     expect(error.status).toBe(502);
-    expect(error.message).toBe('Bad Gateway');
+    expect(error.message).toBe(
+      "Something went wrong on CookBook's server. Try again.",
+    );
   });
 
   it('§11.6 resolves to undefined for a 204 answer', async () => {
@@ -306,5 +374,753 @@ describe('ApiClient (UI-17)', () => {
     expect(init.method).toBe('POST');
     expect(init.body).toBeInstanceOf(FormData);
     expect(headersOf(0)['Content-Type']).toBeUndefined();
+  });
+});
+
+describe('ApiClient errors and connectivity (UI-26)', () => {
+  const BASE = 'http://localhost:3000/api/v1';
+
+  /** Resolves the rejection of `promise`, failing the test if it resolved. */
+  async function rejectionOf(promise: Promise<unknown>): Promise<ApiError> {
+    const outcome = await promise.then(
+      () => 'resolved' as const,
+      (cause: unknown) => cause,
+    );
+    expect(outcome).toBeInstanceOf(ApiError);
+    return outcome as ApiError;
+  }
+
+  it("UI-26 uses SPEC's exact wording for the network and server messages", () => {
+    expect(NETWORK_ERROR_MESSAGE).toBe("Can't reach CookBook's server.");
+    expect(SERVER_ERROR_MESSAGE).toBe(
+      "Something went wrong on CookBook's server. Try again.",
+    );
+  });
+
+  it('UI-26 turns a request that never got an HTTP answer into status 0 with the network message', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.get('/recipes'));
+
+    expect(error.status).toBe(0);
+    expect(error.message).toBe("Can't reach CookBook's server.");
+    expect(error.message).not.toContain('Failed to fetch');
+  });
+
+  it('UI-26 never clears the tokens on a network failure', async () => {
+    store.set('access-1', 'refresh-1');
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    const client = new ApiClient(store, BASE);
+    await rejectionOf(client.get('/me'));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store.get()).toEqual({
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+    });
+  });
+
+  it("UI-26 replaces a 500's own text with CookBook's server message", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          statusCode: 500,
+          message: 'Internal server error',
+          error: 'Internal Server Error',
+        },
+        500,
+      ),
+    );
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.get('/recipes'));
+
+    expect(error.status).toBe(500);
+    expect(error.message).toBe(
+      "Something went wrong on CookBook's server. Try again.",
+    );
+    expect(error.message).not.toContain('Internal server error');
+  });
+
+  it('UI-26 keeps the tokens when a request answers 503', async () => {
+    store.set('access-1', 'refresh-1');
+    fetchMock.mockResolvedValueOnce(makeResponse({ status: 503 }));
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.get('/me'));
+
+    expect(error.status).toBe(503);
+    expect(error.message).toBe(SERVER_ERROR_MESSAGE);
+    expect(store.get()).toEqual({
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+    });
+  });
+
+  it('UI-26 clears the tokens when POST /auth/refresh answers 403', async () => {
+    store.set('stale-access', 'stale-refresh');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ statusCode: 403, message: 'Forbidden', error: 'Forbidden' }, 403),
+      );
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.get('/me'));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(error.status).toBe(401);
+    expect(store.get()).toEqual({ accessToken: null, refreshToken: null });
+  });
+
+  it('UI-26 keeps the tokens and rejects with status 0 when the refresh cannot reach the server', async () => {
+    store.set('stale-access', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.get('/me'));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(error.status).toBe(0);
+    expect(error.message).toBe(NETWORK_ERROR_MESSAGE);
+    expect(store.get()).toEqual({
+      accessToken: 'stale-access',
+      refreshToken: 'refresh-1',
+    });
+  });
+
+  it('UI-26 keeps the tokens and rejects with the server message when the refresh answers 5xx', async () => {
+    store.set('stale-access', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { statusCode: 500, message: 'Internal server error', error: 'Internal Server Error' },
+          500,
+        ),
+      );
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.get('/me'));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(error.status).toBe(500);
+    expect(error.message).toBe(SERVER_ERROR_MESSAGE);
+    expect(store.get()).toEqual({
+      accessToken: 'stale-access',
+      refreshToken: 'refresh-1',
+    });
+  });
+
+  it('UI-26 keeps the tokens when the refresh answers a 4xx other than 401 or 403', async () => {
+    store.set('stale-access', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { statusCode: 400, message: 'refreshToken must be a string', error: 'Bad Request' },
+          400,
+        ),
+      );
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.get('/me'));
+
+    expect(error.status).toBe(400);
+    expect(store.get()).toEqual({
+      accessToken: 'stale-access',
+      refreshToken: 'refresh-1',
+    });
+  });
+
+  it('UI-26 rejects with status 500 and keeps the tokens when a 2xx refresh body is unreadable', async () => {
+    store.set('stale-access', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(makeResponse({ status: 200, body: '<html>' }));
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.get('/me'));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(error.status).toBe(500);
+    expect(error.message).toBe(SERVER_ERROR_MESSAGE);
+    expect(store.get()).toEqual({
+      accessToken: 'stale-access',
+      refreshToken: 'refresh-1',
+    });
+  });
+
+  it('UI-26 keeps the new pair when the retried request cannot reach the server', async () => {
+    store.set('stale-access', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(authResponse('access-2', 'refresh-2'))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.get('/me'));
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(error.status).toBe(0);
+    expect(store.get()).toEqual({
+      accessToken: 'access-2',
+      refreshToken: 'refresh-2',
+    });
+  });
+
+  it('UI-26 notifies token subscribers once the refresh is rejected, so the app can return to sign-in', async () => {
+    store.set('stale-access', 'stale-refresh');
+    const listener = vi.fn();
+    store.subscribe(listener);
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(makeResponse({ status: 401 }));
+
+    const client = new ApiClient(store, BASE);
+    await rejectionOf(client.get('/me'));
+
+    expect(listener).toHaveBeenCalledWith({
+      accessToken: null,
+      refreshToken: null,
+    });
+  });
+
+  it('UI-26 notifies no token subscriber on a network failure or a 5xx', async () => {
+    store.set('access-1', 'refresh-1');
+    const listener = vi.fn();
+    store.subscribe(listener);
+    fetchMock
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(makeResponse({ status: 502 }));
+
+    const client = new ApiClient(store, BASE);
+    await rejectionOf(client.get('/me'));
+    await rejectionOf(client.get('/me'));
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe('ApiClient own 5xx texts (UI-43)', () => {
+  const BASE = 'http://localhost:3000/api/v1';
+
+  async function rejectionOf(promise: Promise<unknown>): Promise<ApiError> {
+    const outcome = await promise.then(
+      () => 'resolved' as const,
+      (cause: unknown) => cause,
+    );
+    expect(outcome).toBeInstanceOf(ApiError);
+    return outcome as ApiError;
+  }
+
+  it('UI-43 lists exactly the three API texts SPEC names', () => {
+    expect([...SERVER_OWN_MESSAGES]).toEqual([
+      'The assistant is unavailable right now',
+      "The assistant didn't answer. Ask again.",
+      'Image storage is unavailable right now',
+    ]);
+  });
+
+  it.each([
+    ['COOK-10', '/cook/ask', 'The assistant is unavailable right now'],
+    ['COOK-10', '/cook/ask', "The assistant didn't answer. Ask again."],
+    ['IMG-6', '/recipes/r1/images', 'Image storage is unavailable right now'],
+  ])(
+    'UI-43 keeps the API own %s text on a 503 from %s: "%s"',
+    async (_id, path, text) => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(
+          { statusCode: 503, message: text, error: 'Service Unavailable' },
+          503,
+        ),
+      );
+
+      const client = new ApiClient(store, BASE);
+      const error = await rejectionOf(client.post(path, {}));
+
+      expect(error.status).toBe(503);
+      expect(error.message).toBe(text);
+      expect(error.error).toBe('Service Unavailable');
+    },
+  );
+
+  it('UI-43 keeps an own text on any 5xx status, not only 503', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          statusCode: 500,
+          message: 'Image storage is unavailable right now',
+          error: 'Internal Server Error',
+        },
+        500,
+      ),
+    );
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.get('/recipes/r1'));
+
+    expect(error.status).toBe(500);
+    expect(error.message).toBe('Image storage is unavailable right now');
+  });
+
+  it("UI-43 replaces any other 5xx text with CookBook's server message", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          statusCode: 503,
+          message: 'Service Unavailable',
+          error: 'Service Unavailable',
+        },
+        503,
+      ),
+    );
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.post('/cook/ask', {}));
+
+    expect(error.status).toBe(503);
+    expect(error.message).toBe(SERVER_ERROR_MESSAGE);
+    expect(error.error).toBeUndefined();
+  });
+
+  it('UI-43 does not keep an own text that differs by case, spacing or a suffix', async () => {
+    const client = new ApiClient(store, BASE);
+    for (const text of [
+      'the assistant is unavailable right now',
+      'The assistant is unavailable right now ',
+      'The assistant is unavailable right now: provider 502',
+    ]) {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ statusCode: 503, message: text, error: 'Service Unavailable' }, 503),
+      );
+      const error = await rejectionOf(client.post('/cook/ask', {}));
+      expect(error.message).toBe(SERVER_ERROR_MESSAGE);
+    }
+  });
+
+  it('UI-43 does not keep an own text sent as a message array on a 5xx', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          statusCode: 503,
+          message: ['The assistant is unavailable right now'],
+          error: 'Service Unavailable',
+        },
+        503,
+      ),
+    );
+
+    const client = new ApiClient(store, BASE);
+    const error = await rejectionOf(client.post('/cook/ask', {}));
+
+    expect(error.message).toBe(SERVER_ERROR_MESSAGE);
+  });
+
+  it('UI-43 keeps the tokens when a 5xx carries an own text', async () => {
+    store.set('access-1', 'refresh-1');
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          statusCode: 503,
+          message: "The assistant didn't answer. Ask again.",
+          error: 'Service Unavailable',
+        },
+        503,
+      ),
+    );
+
+    const client = new ApiClient(store, BASE);
+    await rejectionOf(client.post('/cook/ask', {}));
+
+    expect(store.get()).toEqual({
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+    });
+    expect(store.sessionEnded).toBe(false);
+  });
+});
+
+describe('ApiClient session end (UI-44)', () => {
+  const BASE = 'http://localhost:3000/api/v1';
+
+  it('UI-44 marks the session ended when the refresh token is rejected with 401', async () => {
+    store.set('stale-access', 'stale-refresh');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(makeResponse({ status: 401 }));
+
+    const client = new ApiClient(store, BASE);
+    await client.get('/me').catch(() => undefined);
+
+    expect(store.get()).toEqual({ accessToken: null, refreshToken: null });
+    expect(store.sessionEnded).toBe(true);
+  });
+
+  it('UI-44 marks the session ended when POST /auth/refresh answers 403', async () => {
+    store.set('stale-access', 'stale-refresh');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(makeResponse({ status: 403 }));
+
+    const client = new ApiClient(store, BASE);
+    await client.get('/me').catch(() => undefined);
+
+    expect(store.sessionEnded).toBe(true);
+  });
+
+  it('UI-44 marks the session ended when the retried request still answers 401', async () => {
+    store.set('stale-access', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(authResponse('access-2', 'refresh-2'))
+      .mockResolvedValueOnce(makeResponse({ status: 401 }));
+
+    const client = new ApiClient(store, BASE);
+    await client.get('/me').catch(() => undefined);
+
+    expect(store.get()).toEqual({ accessToken: null, refreshToken: null });
+    expect(store.sessionEnded).toBe(true);
+  });
+
+  it('UI-44 marks the session ended on a 401 when only an access token was stored', async () => {
+    localStorage.setItem('cookbook.accessToken', 'stale-access');
+    fetchMock.mockResolvedValueOnce(makeResponse({ status: 401 }));
+
+    const client = new ApiClient(store, BASE);
+    await client.get('/me').catch(() => undefined);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store.sessionEnded).toBe(true);
+  });
+
+  it('UI-44 never marks a session ended for a wrong password with no tokens stored', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ statusCode: 401, message: 'Unauthorized', error: 'Unauthorized' }, 401),
+    );
+
+    const client = new ApiClient(store, BASE);
+    const error = (await client
+      .post('/auth/sign-in', { username: 'rotem', password: 'wrong' })
+      .catch((cause: unknown) => cause)) as ApiError;
+
+    expect(error.status).toBe(401);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store.sessionEnded).toBe(false);
+  });
+
+  it('UI-44 leaves sessionEnded false on a network failure or a 5xx', async () => {
+    store.set('access-1', 'refresh-1');
+    fetchMock
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(makeResponse({ status: 502 }));
+
+    const client = new ApiClient(store, BASE);
+    await client.get('/me').catch(() => undefined);
+    await client.get('/me').catch(() => undefined);
+
+    expect(store.sessionEnded).toBe(false);
+  });
+});
+
+describe('isConnectivityError (UI-26)', () => {
+  it('UI-26 is true for status 0 and for every 5xx', () => {
+    expect(isConnectivityError(new ApiError(0, NETWORK_ERROR_MESSAGE))).toBe(true);
+    expect(isConnectivityError(new ApiError(500, SERVER_ERROR_MESSAGE))).toBe(true);
+    expect(isConnectivityError(new ApiError(503, SERVER_ERROR_MESSAGE))).toBe(true);
+  });
+
+  it('UI-26 is false for 4xx answers, which say something about the session or the request', () => {
+    expect(isConnectivityError(new ApiError(401, 'Unauthorized'))).toBe(false);
+    expect(isConnectivityError(new ApiError(403, 'Forbidden'))).toBe(false);
+    expect(isConnectivityError(new ApiError(404, 'Not Found'))).toBe(false);
+  });
+
+  it('UI-26 is false for anything that is not an ApiError', () => {
+    expect(isConnectivityError(new Error('Failed to fetch'))).toBe(false);
+    expect(isConnectivityError({ status: 0 })).toBe(false);
+    expect(isConnectivityError(null)).toBe(false);
+    expect(isConnectivityError(undefined)).toBe(false);
+  });
+});
+
+describe('ApiClient AI request timeout (UI-52)', () => {
+  const BASE = 'http://localhost:3000/api/v1';
+
+  /** A fetch that never answers and rejects only when its signal aborts. */
+  function hangingFetch(_url: string, init?: RequestInit): Promise<Response> {
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        reject(new DOMException('The operation was aborted.', 'AbortError'));
+      });
+    });
+  }
+
+  /** A fetch answering `response` after `ms` of (fake) time, ignoring any signal. */
+  function lateFetch(response: Response, ms: number): () => Promise<Response> {
+    return () =>
+      new Promise<Response>((resolve) => {
+        setTimeout(() => resolve(response), ms);
+      });
+  }
+
+  interface Tracked {
+    settled: boolean;
+    value: unknown;
+    error: unknown;
+  }
+
+  /** Observes how `promise` settles without awaiting it. */
+  function track(promise: Promise<unknown>): Tracked {
+    const box: Tracked = { settled: false, value: undefined, error: undefined };
+    promise.then(
+      (value) => {
+        box.settled = true;
+        box.value = value;
+      },
+      (cause: unknown) => {
+        box.settled = true;
+        box.error = cause;
+      },
+    );
+    return box;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("UI-52 uses SPEC's 20 seconds, status 408 and exact wording", () => {
+    expect(AI_REQUEST_TIMEOUT_MS).toBe(20_000);
+    expect(TIMEOUT_STATUS).toBe(408);
+    expect(AI_TIMEOUT_MESSAGE).toBe(
+      'The assistant is taking too long. Try again.',
+    );
+    const error = timeoutError();
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.status).toBe(408);
+    expect(error.message).toBe(AI_TIMEOUT_MESSAGE);
+  });
+
+  it('UI-52 is still waiting just before 20 seconds and rejects with 408 at 20 seconds', async () => {
+    store.set('access-1', 'refresh-1');
+    fetchMock.mockImplementation(hangingFetch);
+
+    const client = new ApiClient(store, BASE);
+    const box = track(
+      client.post(
+        '/cook/ask',
+        { question: 'q' },
+        { timeoutMs: AI_REQUEST_TIMEOUT_MS },
+      ),
+    );
+
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(box.settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(box.settled).toBe(true);
+    expect(box.error).toBeInstanceOf(ApiError);
+    expect((box.error as ApiError).status).toBe(408);
+    expect((box.error as ApiError).message).toBe(AI_TIMEOUT_MESSAGE);
+    expect(isTimeoutError(box.error)).toBe(true);
+  });
+
+  it('UI-52 aborts the fetch in flight when the time is up', async () => {
+    fetchMock.mockImplementation(hangingFetch);
+
+    const client = new ApiClient(store, BASE);
+    const box = track(client.post('/recommend', {}, { timeoutMs: 20_000 }));
+    const signal = lastCall(0)[1].signal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(signal?.aborted).toBe(true);
+    expect(isTimeoutError(box.error)).toBe(true);
+  });
+
+  it('UI-52 reports the timeout even when the fetch ignores the abort', async () => {
+    fetchMock.mockImplementation(() => new Promise<Response>(() => undefined));
+
+    const client = new ApiClient(store, BASE);
+    const box = track(client.post('/cook/ask', {}, { timeoutMs: 20_000 }));
+
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(isTimeoutError(box.error)).toBe(true);
+  });
+
+  it('UI-52 keeps the tokens, ends no session and notifies no subscriber on a timeout', async () => {
+    store.set('access-1', 'refresh-1');
+    const listener = vi.fn();
+    store.subscribe(listener);
+    fetchMock.mockImplementation(hangingFetch);
+
+    const client = new ApiClient(store, BASE);
+    const box = track(client.post('/cook/ask', {}, { timeoutMs: 20_000 }));
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(isTimeoutError(box.error)).toBe(true);
+    expect(store.get()).toEqual({
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+    });
+    expect(store.sessionEnded).toBe(false);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('UI-52 a timeout is not a connectivity error (UI-26)', () => {
+    expect(isConnectivityError(timeoutError())).toBe(false);
+  });
+
+  it('UNSPECIFIED UI-52 isTimeoutError is true only for the client timeout error', () => {
+    expect(isTimeoutError(timeoutError())).toBe(true);
+    expect(isTimeoutError(new ApiError(408, 'Request Timeout'))).toBe(false);
+    expect(isTimeoutError(new ApiError(0, NETWORK_ERROR_MESSAGE))).toBe(false);
+    expect(isTimeoutError(new ApiError(503, AI_TIMEOUT_MESSAGE))).toBe(false);
+    expect(isTimeoutError(new Error(AI_TIMEOUT_MESSAGE))).toBe(false);
+    expect(
+      isTimeoutError({ status: 408, message: AI_TIMEOUT_MESSAGE }),
+    ).toBe(false);
+    expect(isTimeoutError(null)).toBe(false);
+  });
+
+  it('UI-52 resolves normally and leaves no timer behind when the answer comes in time', async () => {
+    fetchMock.mockImplementation(
+      lateFetch(jsonResponse({ answer: 'Yes' }), 19_000),
+    );
+
+    const client = new ApiClient(store, BASE);
+    const box = track(client.post('/cook/ask', {}, { timeoutMs: 20_000 }));
+    await vi.advanceTimersByTimeAsync(19_000);
+
+    expect(box.settled).toBe(true);
+    expect(box.error).toBeUndefined();
+    expect(box.value).toEqual({ answer: 'Yes' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('UI-52 still reports a network failure within the time as status 0, not a timeout', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    const client = new ApiClient(store, BASE);
+    const box = track(client.post('/cook/ask', {}, { timeoutMs: 20_000 }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect((box.error as ApiError).status).toBe(0);
+    expect((box.error as ApiError).message).toBe(NETWORK_ERROR_MESSAGE);
+    expect(isTimeoutError(box.error)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('UI-52 still reports a 5xx within the time as the server error, not a timeout', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ status: 502 }));
+
+    const client = new ApiClient(store, BASE);
+    const box = track(client.post('/recommend', {}, { timeoutMs: 20_000 }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect((box.error as ApiError).status).toBe(502);
+    expect((box.error as ApiError).message).toBe(SERVER_ERROR_MESSAGE);
+    expect(isTimeoutError(box.error)).toBe(false);
+  });
+
+  it('UI-52 sends no abort signal on a request without a timeout', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
+
+    const client = new ApiClient(store, BASE);
+    await client.post('/auth/sign-in', { username: 'rotem', password: 'pw' });
+    await client.get('/me');
+
+    expect(lastCall(0)[1].signal).toBeUndefined();
+    expect(lastCall(1)[1].signal).toBeUndefined();
+  });
+
+  it('UI-52 answers after a refresh-and-retry that fits in the 20 seconds', async () => {
+    store.set('stale-access', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(authResponse('access-2', 'refresh-2'))
+      .mockResolvedValueOnce(jsonResponse({ answer: 'Yes' }));
+
+    const client = new ApiClient(store, BASE);
+    const box = track(client.post('/cook/ask', {}, { timeoutMs: 20_000 }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(box.value).toEqual({ answer: 'Yes' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(headersOf(2)['Authorization']).toBe('Bearer access-2');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('UI-52 counts the refresh-and-retry inside the same 20 seconds', async () => {
+    store.set('stale-access', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockImplementationOnce(
+        lateFetch(authResponse('access-2', 'refresh-2'), 15_000),
+      )
+      .mockImplementationOnce(hangingFetch);
+
+    const client = new ApiClient(store, BASE);
+    const box = track(client.post('/cook/ask', {}, { timeoutMs: 20_000 }));
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(headersOf(2)['Authorization']).toBe('Bearer access-2');
+    expect(box.settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(box.settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(isTimeoutError(box.error)).toBe(true);
+    // The retry carried the same signal and was aborted with it.
+    expect(lastCall(2)[1].signal?.aborted).toBe(true);
+    // The refreshed pair stays: a timeout says nothing about the session.
+    expect(store.get()).toEqual({
+      accessToken: 'access-2',
+      refreshToken: 'refresh-2',
+    });
+    expect(store.sessionEnded).toBe(false);
+  });
+
+  it('UI-52 does not retry after a refresh that finishes past the 20 seconds, and keeps its tokens', async () => {
+    store.set('stale-access', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockImplementationOnce(
+        lateFetch(authResponse('access-2', 'refresh-2'), 25_000),
+      );
+
+    const client = new ApiClient(store, BASE);
+    const box = track(client.post('/cook/ask', {}, { timeoutMs: 20_000 }));
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(isTimeoutError(box.error)).toBe(true);
+    // Nothing touched the tokens while the refresh is still under way.
+    expect(store.get()).toEqual({
+      accessToken: 'stale-access',
+      refreshToken: 'refresh-1',
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    // The shared refresh settles on its own; the abandoned request is not retried.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(store.get()).toEqual({
+      accessToken: 'access-2',
+      refreshToken: 'refresh-2',
+    });
+    expect(store.sessionEnded).toBe(false);
   });
 });

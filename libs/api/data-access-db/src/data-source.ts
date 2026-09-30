@@ -9,7 +9,7 @@ export {
 
 /**
  * DB-6: the DataSource the TypeORM CLI loads (`-d libs/api/data-access-db/src/data-source.ts`)
- * for `migration:run` and `migration:revert`.
+ * for `migration:run`, `migration:revert` and `migration:show`.
  *
  * This file is the CLI entry point only; nothing else in the workspace imports it, because
  * building the options reads `process.env` eagerly and throws when a `DB_*` key is missing.

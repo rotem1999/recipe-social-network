@@ -1,4 +1,4 @@
-// SPEC §9 NUT-1..NUT-6. The USDA client is a hand-written fake at its module
+// SPEC §9 NUT-1..NUT-11. The USDA client is a hand-written fake at its module
 // boundary: no network, no key, no database.
 import {
   ForbiddenException,
@@ -144,6 +144,55 @@ describe('NutritionService.compute access and mode (NUT-1, NUT-3, NUT-4)', () =>
   });
 });
 
+/** NUT-6 ingredient search: SR Legacy, Foundation, Survey (FNDDS). */
+const INGREDIENT_DATA_TYPES = ['SR Legacy', 'Foundation', 'Survey (FNDDS)'];
+
+/** NUT-6 meal-name search: Survey (FNDDS) only. */
+const MEAL_DATA_TYPES = ['Survey (FNDDS)'];
+
+/**
+ * NUT-11: both modes run on every request, so USDA calls are counted per mode:
+ * the ingredients-mode searches are the ones sent with the ingredient data types.
+ */
+function ingredientSearches(harness: Harness): unknown[][] {
+  return harness.usda.searchFoods.mock.calls.filter(
+    ([, dataTypes]) =>
+      JSON.stringify(dataTypes) === JSON.stringify(INGREDIENT_DATA_TYPES),
+  );
+}
+
+/** NUT-11: the meal-mode searches (the title, FNDDS only). */
+function mealSearches(harness: Harness): unknown[][] {
+  return harness.usda.searchFoods.mock.calls.filter(
+    ([, dataTypes]) =>
+      JSON.stringify(dataTypes) === JSON.stringify(MEAL_DATA_TYPES),
+  );
+}
+
+/**
+ * Answers `searchFoods` by exact query text, since ingredients are looked up
+ * concurrently: a missing query yields no hits, an Error value is thrown.
+ */
+function searchReturns(
+  harness: Harness,
+  table: Record<string, UsdaFoodHit[] | Error>,
+): void {
+  harness.usda.searchFoods.mockImplementation(async (query: string) => {
+    const entry = table[query];
+    if (entry === undefined) return [];
+    if (entry instanceof Error) throw entry;
+    return entry;
+  });
+}
+
+function detail(
+  fdcId: number,
+  description: string,
+  portions: UsdaFoodDetail['portions'],
+): UsdaFoodDetail {
+  return { fdcId, description, kcalPer100g: null, portions };
+}
+
 describe('NutritionService.compute ingredients mode (NUT-4, NUT-5, NUT-6)', () => {
   it('NUT-6 searches SR Legacy, Foundation and Survey (FNDDS) per ingredient', async () => {
     const harness = makeHarness(
@@ -153,11 +202,10 @@ describe('NutritionService.compute ingredients mode (NUT-4, NUT-5, NUT-6)', () =
 
     await harness.service.compute(USER, RECIPE_ID, 'ingredients');
 
-    expect(harness.usda.searchFoods).toHaveBeenCalledWith('egg noodles', [
-      'SR Legacy',
-      'Foundation',
-      'Survey (FNDDS)',
-    ]);
+    expect(harness.usda.searchFoods).toHaveBeenCalledWith(
+      '+egg +noodles raw',
+      INGREDIENT_DATA_TYPES,
+    );
   });
 
   it('NUT-6 computes kcal as kcal/100 g times grams divided by 100', async () => {
@@ -197,11 +245,12 @@ describe('NutritionService.compute ingredients mode (NUT-4, NUT-5, NUT-6)', () =
         4,
       ),
     );
-    harness.usda.searchFoods
-      .mockResolvedValueOnce([hit({ kcalPer100g: 384 })])
-      .mockResolvedValueOnce([
+    searchReturns(harness, {
+      '+egg +noodles raw': [hit({ kcalPer100g: 384 })],
+      '+pork +belly raw': [
         hit({ kcalPer100g: 518, description: 'Pork, fresh, belly, raw' }),
-      ]);
+      ],
+    });
 
     const response = await harness.service.compute(
       USER,
@@ -225,9 +274,9 @@ describe('NutritionService.compute ingredients mode (NUT-4, NUT-5, NUT-6)', () =
         2,
       ),
     );
-    harness.usda.searchFoods
-      .mockResolvedValueOnce([hit({ kcalPer100g: 384 })])
-      .mockResolvedValueOnce([]);
+    searchReturns(harness, {
+      '+egg +noodles raw': [hit({ kcalPer100g: 384 })],
+    });
 
     const response = await harness.service.compute(
       USER,
@@ -257,25 +306,64 @@ describe('NutritionService.compute ingredients mode (NUT-4, NUT-5, NUT-6)', () =
       'ingredients',
     );
 
-    expect(harness.usda.searchFoods).not.toHaveBeenCalled();
+    expect(ingredientSearches(harness)).toEqual([]);
     expect(response.partial).toBe(true);
     expect(response.kcalTotal).toBeNull();
     expect(response.kcalPerPortion).toBeNull();
   });
 
-  it('NUT-6 reads the first foodPortions gramWeight for a `piece` quantity', async () => {
+  it('NUT-6 leaves the `none` unit with a note that is not a weight unmatched without asking USDA', async () => {
+    const harness = makeHarness(
+      version(
+        [{ quantity: null, unit: 'none', name: 'Chicken Stock', note: 'a splash' }],
+        2,
+      ),
+    );
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(ingredientSearches(harness)).toEqual([]);
+    expect(response.ingredients[0]).toEqual({
+      name: 'Chicken Stock',
+      grams: null,
+      kcal: null,
+      matchedDescription: null,
+    });
+    expect(response.partial).toBe(true);
+  });
+
+  it('UNSPECIFIED leaves an ingredient with a blank name unmatched without asking USDA', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 100, unit: 'g', name: '   ' }], 2),
+    );
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(ingredientSearches(harness)).toEqual([]);
+    expect(response.ingredients[0].kcal).toBeNull();
+    expect(response.partial).toBe(true);
+  });
+
+  it('NUT-9 multiplies the chosen piece weight by the quantity for a `piece` ingredient', async () => {
     const harness = makeHarness(
       version([{ quantity: 2, unit: 'piece', name: 'egg' }], 2),
     );
     harness.usda.searchFoods.mockResolvedValue([
       hit({ fdcId: 748967, description: 'Egg, whole, raw', kcalPer100g: 143 }),
     ]);
-    harness.usda.getFood.mockResolvedValue({
-      fdcId: 748967,
-      description: 'Egg, whole, raw',
-      kcalPer100g: 143,
-      portions: [{ gramWeight: 50, description: '1 large' }],
-    } as UsdaFoodDetail);
+    harness.usda.getFood.mockResolvedValue(
+      detail(748967, 'Egg, whole, raw', [
+        { gramWeight: 50, description: '1 large', amount: null, sequenceNumber: 1 },
+      ]),
+    );
 
     const response = await harness.service.compute(
       USER,
@@ -299,11 +387,12 @@ describe('NutritionService.compute ingredients mode (NUT-4, NUT-5, NUT-6)', () =
         2,
       ),
     );
-    harness.usda.searchFoods
-      .mockResolvedValueOnce([hit({ kcalPer100g: 384 })])
-      .mockRejectedValueOnce(
-        new ServiceUnavailableException('FoodData Central is unreachable'),
-      );
+    searchReturns(harness, {
+      '+egg +noodles raw': [hit({ kcalPer100g: 384 })],
+      '+pork +belly raw': new ServiceUnavailableException(
+        'FoodData Central is unreachable',
+      ),
+    });
 
     const response = await harness.service.compute(
       USER,
@@ -339,7 +428,7 @@ describe('NutritionService.compute ingredients mode (NUT-4, NUT-5, NUT-6)', () =
     );
   });
 
-  it('NUT-5 reports an ingredient whose match carries no energy value as unavailable', async () => {
+  it('NUT-8 skips a hit with no energy value, so the ingredient is unavailable (NUT-5)', async () => {
     const harness = makeHarness(
       version([{ quantity: 200, unit: 'g', name: 'egg noodles' }], 2),
     );
@@ -351,8 +440,389 @@ describe('NutritionService.compute ingredients mode (NUT-4, NUT-5, NUT-6)', () =
       'ingredients',
     );
 
+    expect(response.ingredients[0]).toEqual({
+      name: 'egg noodles',
+      grams: null,
+      kcal: null,
+      matchedDescription: null,
+    });
+    expect(response.partial).toBe(true);
+  });
+});
+
+describe('NutritionService.compute seasonings (NUT-7)', () => {
+  it('NUT-7 counts seasonings as 0 kcal without a lookup, whatever the quantity or unit', async () => {
+    const harness = makeHarness(
+      version(
+        [
+          { quantity: 200, unit: 'g', name: 'egg noodles' },
+          { quantity: null, unit: 'none', name: 'Sea Salt', note: 'to taste' },
+          { quantity: 1, unit: 'tsp', name: 'Freshly Ground Black Pepper' },
+          { quantity: 2, unit: 'piece', name: 'Bay Leaves' },
+          { quantity: null, unit: 'none', name: 'salt & pepper' },
+        ],
+        4,
+      ),
+    );
+    searchReturns(harness, {
+      '+egg +noodles raw': [hit({ kcalPer100g: 384 })],
+    });
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(ingredientSearches(harness)).toHaveLength(1);
+    expect(harness.usda.getFood).not.toHaveBeenCalled();
+    for (const row of response.ingredients.slice(1)) {
+      expect(row.kcal).toBe(0);
+      expect(row.matchedDescription).toBe('Seasoning, counted as 0 kcal');
+    }
+    expect(response.ingredients.map((row) => row.name)).toEqual([
+      'egg noodles',
+      'Sea Salt',
+      'Freshly Ground Black Pepper',
+      'Bay Leaves',
+      'salt & pepper',
+    ]);
+    expect(response.kcalTotal).toBe(768);
+    expect(response.kcalPerPortion).toBe(192);
+    expect(response.partial).toBe(false);
+  });
+
+  it('UNSPECIFIED gives a seasoning row `grams: null`', async () => {
+    // SPEC NUT-7 names only `0 kcal` and the matchedDescription for the row.
+    const harness = makeHarness(
+      version([{ quantity: 1, unit: 'tsp', name: 'Ground Cumin' }], 2),
+    );
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(response.ingredients).toEqual([
+      {
+        name: 'Ground Cumin',
+        grams: null,
+        kcal: 0,
+        matchedDescription: 'Seasoning, counted as 0 kcal',
+      },
+    ]);
+  });
+
+  it('NUT-7 gives a recipe of seasonings only a 0 kcal total that is not partial', async () => {
+    const harness = makeHarness(
+      version([{ quantity: null, unit: 'none', name: 'Salt' }], 2),
+    );
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(response.kcalTotal).toBe(0);
+    expect(response.kcalPerPortion).toBe(0);
+    expect(response.partial).toBe(false);
+  });
+
+  it('NUT-7 still looks up an ingredient that is not a seasoning ("Ground Beef")', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 500, unit: 'g', name: 'Ground Beef' }], 4),
+    );
+    harness.usda.searchFoods.mockResolvedValue([
+      hit({ fdcId: 174036, description: 'Beef, ground, raw', kcalPer100g: 254 }),
+    ]);
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(harness.usda.searchFoods).toHaveBeenCalledWith(
+      '+ground +beef raw',
+      INGREDIENT_DATA_TYPES,
+    );
+    expect(response.ingredients[0].kcal).toBe(1270);
+  });
+});
+
+describe('NutritionService.compute food choice (NUT-8)', () => {
+  it('NUT-8 takes the best-scoring hit of the strict search, not USDA\'s first ("Garlic")', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 10, unit: 'g', name: 'Garlic' }], 2),
+    );
+    searchReturns(harness, {
+      '+garlic raw': [
+        hit({ fdcId: 1, description: 'Garlic sauce', kcalPer100g: 200 }),
+        hit({ fdcId: 2, description: 'Garlic, cooked', kcalPer100g: 140 }),
+        hit({ fdcId: 3, description: 'Garlic, raw', kcalPer100g: 149 }),
+      ],
+    });
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(ingredientSearches(harness)).toHaveLength(1);
+    expect(response.ingredients[0]).toEqual({
+      name: 'Garlic',
+      grams: 10,
+      kcal: 14.9,
+      matchedDescription: 'Garlic, raw',
+    });
+  });
+
+  it('NUT-8 repeats the search once with the plain name when no strict hit survives', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 100, unit: 'g', name: 'Plum Tomatoes' }], 2),
+    );
+    searchReturns(harness, {
+      '+plum +tomatoes raw': [hit({ description: 'Plum, raw', kcalPer100g: 46 })],
+      'Plum Tomatoes': [
+        hit({ description: 'Plum, raw', kcalPer100g: 46 }),
+        hit({ description: 'Tomatoes, raw', kcalPer100g: 18 }),
+      ],
+    });
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(ingredientSearches(harness)).toEqual([
+      ['+plum +tomatoes raw', INGREDIENT_DATA_TYPES],
+      ['Plum Tomatoes', INGREDIENT_DATA_TYPES],
+    ]);
+    expect(response.ingredients[0].matchedDescription).toBe('Tomatoes, raw');
+    expect(response.ingredients[0].kcal).toBe(18);
+  });
+
+  it('NUT-5 leaves the ingredient unmatched when neither search leaves a hit', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 100, unit: 'g', name: 'Plain Flour' }], 2),
+    );
+    harness.usda.searchFoods.mockResolvedValue([
+      hit({ description: 'Snacks, pretzels, hard, plain, made with enriched flour' }),
+    ]);
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(ingredientSearches(harness)).toHaveLength(2);
+    expect(response.ingredients[0]).toEqual({
+      name: 'Plain Flour',
+      grams: null,
+      kcal: null,
+      matchedDescription: null,
+    });
+    expect(response.partial).toBe(true);
+  });
+});
+
+describe('NutritionService.compute piece portions (NUT-9)', () => {
+  it('NUT-9 weighs "4 Cloves Crushed" garlic with the FNDDS "1 clove" portion (3 g)', async () => {
+    const harness = makeHarness(
+      version(
+        [{ quantity: 4, unit: 'piece', name: 'Garlic', note: 'Cloves Crushed' }],
+        2,
+      ),
+    );
+    harness.usda.searchFoods.mockResolvedValue([
+      hit({
+        fdcId: 2709786,
+        description: 'Garlic, raw',
+        dataType: 'Survey (FNDDS)',
+        kcalPer100g: 143,
+      }),
+    ]);
+    harness.usda.getFood.mockResolvedValue(
+      detail(2709786, 'Garlic, raw', [
+        { gramWeight: 136, description: '1 cup', amount: null, sequenceNumber: 1 },
+        { gramWeight: 3, description: '1 clove', amount: null, sequenceNumber: 2 },
+      ]),
+    );
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(harness.usda.getFood).toHaveBeenCalledWith(2709786);
+    // 4 × 3 g = 12 g; 143 × 12 / 100 = 17.16 → 17.2
+    expect(response.ingredients[0].grams).toBe(12);
+    expect(response.ingredients[0].kcal).toBe(17.2);
+  });
+
+  it('NUT-9 divides an SR Legacy `modifier` portion by its amount ("cloves", 3, 9 g)', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 2, unit: 'piece', name: 'Garlic', note: 'cloves' }], 2),
+    );
+    harness.usda.searchFoods.mockResolvedValue([
+      hit({ fdcId: 169230, description: 'Garlic, raw', kcalPer100g: 149 }),
+    ]);
+    harness.usda.getFood.mockResolvedValue(
+      detail(169230, 'Garlic, raw', [
+        { gramWeight: 136, description: 'cup', amount: 1, sequenceNumber: 1 },
+        { gramWeight: 9, description: 'cloves', amount: 3, sequenceNumber: 2 },
+      ]),
+    );
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    // 2 × (9 g ÷ 3) = 6 g; 149 × 6 / 100 = 8.94 → 8.9
+    expect(response.ingredients[0].grams).toBe(6);
+    expect(response.ingredients[0].kcal).toBe(8.9);
+  });
+
+  it('NUT-9 divides a Foundation unit-only portion by its amount ("5 tomatoes" = 49.7 g → 9.94 g each; §16 U15 321360)', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 3, unit: 'piece', name: 'Grape tomatoes' }], 1),
+    );
+    searchReturns(harness, {
+      '+grape +tomatoes raw': [
+        hit({
+          fdcId: 321360,
+          description: 'Tomatoes, grape, raw',
+          dataType: 'Foundation',
+          kcalPer100g: 20,
+        }),
+      ],
+    });
+    harness.usda.getFood.mockResolvedValue(
+      detail(321360, 'Tomatoes, grape, raw', [
+        { gramWeight: 49.7, description: 'tomatoes', amount: 5, sequenceNumber: 1 },
+      ]),
+    );
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(harness.usda.getFood).toHaveBeenCalledWith(321360);
+    // 3 × (49.7 g ÷ 5) = 29.82 g; 20 × 29.82 / 100 = 5.964 → 6
+    expect(response.ingredients[0].grams).toBe(29.82);
+    expect(response.ingredients[0].kcal).toBe(6);
+  });
+
+  it('NUT-5 leaves a `piece` ingredient unavailable when no portion qualifies', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 2, unit: 'piece', name: 'Carrots' }], 2),
+    );
+    harness.usda.searchFoods.mockResolvedValue([
+      hit({ fdcId: 170393, description: 'Carrots, raw', kcalPer100g: 41 }),
+    ]);
+    harness.usda.getFood.mockResolvedValue(
+      detail(170393, 'Carrots, raw', [
+        { gramWeight: 128, description: 'cup chopped', amount: 1, sequenceNumber: 1 },
+      ]),
+    );
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(response.ingredients[0].grams).toBeNull();
     expect(response.ingredients[0].kcal).toBeNull();
     expect(response.partial).toBe(true);
+  });
+
+  it('NUT-5 leaves a `piece` ingredient unavailable when the food detail is missing', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 2, unit: 'piece', name: 'Carrots' }], 2),
+    );
+    harness.usda.searchFoods.mockResolvedValue([
+      hit({ fdcId: 170393, description: 'Carrots, raw', kcalPer100g: 41 }),
+    ]);
+    harness.usda.getFood.mockResolvedValue(null);
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(response.ingredients[0].kcal).toBeNull();
+    expect(response.partial).toBe(true);
+  });
+});
+
+describe('NutritionService.compute weight notes (NUT-10)', () => {
+  it('NUT-10 counts a `none` ingredient noted "1 lb" as 453.59237 g', async () => {
+    const harness = makeHarness(
+      version(
+        [{ quantity: null, unit: 'none', name: 'Ground Beef', note: '1 lb' }],
+        4,
+      ),
+    );
+    // Only the ingredient query answers, so the NUT-11 meal lookup finds no dish.
+    searchReturns(harness, {
+      '+ground +beef raw': [
+        hit({ fdcId: 174036, description: 'Beef, ground, raw', kcalPer100g: 254 }),
+      ],
+    });
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(harness.usda.searchFoods).toHaveBeenCalledWith(
+      '+ground +beef raw',
+      INGREDIENT_DATA_TYPES,
+    );
+    expect(harness.usda.getFood).not.toHaveBeenCalled();
+    // 254 × 453.59237 / 100 = 1152.1246… → 1152.1
+    expect(response.ingredients[0]).toEqual({
+      name: 'Ground Beef',
+      grams: 453.59,
+      kcal: 1152.1,
+      matchedDescription: 'Beef, ground, raw',
+    });
+    expect(response.partial).toBe(false);
+  });
+
+  it('NUT-10 counts a `none` ingredient noted "4 oz" as 4 × 28.349523125 g', async () => {
+    const harness = makeHarness(
+      version(
+        [{ quantity: null, unit: 'none', name: 'Cheddar Cheese', note: '4 oz' }],
+        2,
+      ),
+    );
+    harness.usda.searchFoods.mockResolvedValue([
+      hit({ description: 'Cheese, cheddar', kcalPer100g: 403 }),
+    ]);
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    // 113.3980925 g; 403 × 113.3980925 / 100 = 456.99… → 457
+    expect(response.ingredients[0].grams).toBe(113.4);
+    expect(response.ingredients[0].kcal).toBe(457);
   });
 });
 
@@ -406,7 +876,9 @@ describe('NutritionService.compute meal mode (NUT-3, NUT-6)', () => {
       fdcId: 2341573,
       description: 'Lasagna with meat',
       kcalPer100g: 139,
-      portions: [{ gramWeight: 200, description: '1 cup' }],
+      portions: [
+        { gramWeight: 200, description: '1 cup', amount: null, sequenceNumber: 1 },
+      ],
     } as UsdaFoodDetail);
 
     const response = await harness.service.compute(USER, RECIPE_ID, 'meal');
@@ -458,6 +930,843 @@ describe('NutritionService.compute meal mode (NUT-3, NUT-6)', () => {
       ingredients: [],
       matchedDescription: null,
       source: 'USDA FoodData Central',
+      estimate: null,
     });
+  });
+});
+
+describe('NutritionService.compute estimate (NUT-11)', () => {
+  const TITLE = 'Lasagna with meat';
+
+  /** 200 g egg noodles at 384 kcal/100 g: 768 kcal, 384 per portion over 2. */
+  const NOODLES: Ingredient = { quantity: 200, unit: 'g', name: 'egg noodles' };
+  /** No USDA hit in these tables, so it stays unavailable. */
+  const FLOUR: Ingredient = { quantity: 100, unit: 'g', name: 'Plain Flour' };
+  const SALT: Ingredient = { quantity: null, unit: 'none', name: 'Sea Salt' };
+
+  const NOODLE_HITS = { '+egg +noodles raw': [hit({ kcalPer100g: 384 })] };
+  /** 139 kcal/100 g × 250 g = 347.5 → 348 kcal per portion. */
+  const MEAL_HITS = {
+    [TITLE]: [
+      hit({
+        fdcId: 2341573,
+        description: TITLE,
+        dataType: 'Survey (FNDDS)',
+        kcalPer100g: 139,
+        gramWeightPerMeasure: 250,
+      }),
+    ],
+  };
+
+  it('NUT-11 looks up the meal name too when ingredients mode is asked', async () => {
+    const harness = makeHarness(version([NOODLES], 2, TITLE));
+    searchReturns(harness, { ...NOODLE_HITS, ...MEAL_HITS });
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(mealSearches(harness)).toEqual([[TITLE, MEAL_DATA_TYPES]]);
+    expect(response.mode).toBe('ingredients');
+    expect(response.kcalPerPortion).toBe(384);
+    expect(response.ingredients.map((row) => row.name)).toEqual([
+      'egg noodles',
+    ]);
+  });
+
+  it('NUT-11 looks up the ingredients too when meal mode is asked', async () => {
+    const harness = makeHarness(version([NOODLES], 2, TITLE));
+    searchReturns(harness, { ...NOODLE_HITS, ...MEAL_HITS });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'meal');
+
+    expect(ingredientSearches(harness)).toEqual([
+      ['+egg +noodles raw', INGREDIENT_DATA_TYPES],
+    ]);
+    expect(response.mode).toBe('meal');
+    expect(response.kcalPerPortion).toBe(348);
+    expect(response.ingredients.map((row) => row.name)).toEqual([TITLE]);
+  });
+
+  it.each(['ingredients', 'meal'] as const)(
+    'NUT-11 both values available (%s asked): low the smaller, high the larger, rounded to 10, not "at least"',
+    async (mode) => {
+      const harness = makeHarness(version([NOODLES], 2, TITLE));
+      searchReturns(harness, { ...NOODLE_HITS, ...MEAL_HITS });
+
+      const response = await harness.service.compute(USER, RECIPE_ID, mode);
+
+      // meal 348 → 350, ingredients 384 → 380
+      expect(response.estimate).toEqual({
+        lowKcalPerPortion: 350,
+        highKcalPerPortion: 380,
+        atLeast: false,
+        notCounted: [],
+      });
+    },
+  );
+
+  it('NUT-11 both values available with a partial ingredients value: still not "at least", unmatched names listed', async () => {
+    const harness = makeHarness(version([NOODLES, FLOUR, SALT], 2, TITLE));
+    searchReturns(harness, { ...NOODLE_HITS, ...MEAL_HITS });
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(response.partial).toBe(true);
+    expect(response.estimate).toEqual({
+      lowKcalPerPortion: 350,
+      highKcalPerPortion: 380,
+      atLeast: false,
+      notCounted: ['Plain Flour'],
+    });
+  });
+
+  it('NUT-11 only a partial ingredients value: low = high = it, "at least"', async () => {
+    const harness = makeHarness(version([NOODLES, FLOUR], 2, TITLE));
+    searchReturns(harness, NOODLE_HITS);
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(response.estimate).toEqual({
+      lowKcalPerPortion: 380,
+      highKcalPerPortion: 380,
+      atLeast: true,
+      notCounted: ['Plain Flour'],
+    });
+  });
+
+  it('NUT-11 only a complete ingredients value: low = high = it, not "at least"', async () => {
+    const harness = makeHarness(version([NOODLES, SALT], 2, TITLE));
+    searchReturns(harness, NOODLE_HITS);
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(response.estimate).toEqual({
+      lowKcalPerPortion: 380,
+      highKcalPerPortion: 380,
+      atLeast: false,
+      notCounted: [],
+    });
+  });
+
+  it('NUT-11 only the meal value: low = high = it, not "at least", unavailable ingredients named', async () => {
+    const harness = makeHarness(version([FLOUR], 2, TITLE));
+    searchReturns(harness, MEAL_HITS);
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'meal');
+
+    expect(response.estimate).toEqual({
+      lowKcalPerPortion: 350,
+      highKcalPerPortion: 350,
+      atLeast: false,
+      notCounted: ['Plain Flour'],
+    });
+  });
+
+  it.each(['ingredients', 'meal'] as const)(
+    'NUT-11 neither value available (%s asked): estimate is null',
+    async (mode) => {
+      const harness = makeHarness(version([FLOUR], 2, TITLE));
+      searchReturns(harness, {});
+
+      const response = await harness.service.compute(USER, RECIPE_ID, mode);
+
+      expect(response.estimate).toBeNull();
+    },
+  );
+
+  it('NUT-11 a meal dish without a portion weight gives no meal value', async () => {
+    const harness = makeHarness(version([NOODLES], 2, TITLE));
+    searchReturns(harness, {
+      ...NOODLE_HITS,
+      [TITLE]: [
+        hit({
+          fdcId: 2341573,
+          description: TITLE,
+          dataType: 'Survey (FNDDS)',
+          kcalPer100g: 139,
+          gramWeightPerMeasure: null,
+        }),
+      ],
+    });
+    harness.usda.getFood.mockResolvedValue(null);
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(response.estimate).toEqual({
+      lowKcalPerPortion: 380,
+      highKcalPerPortion: 380,
+      atLeast: false,
+      notCounted: [],
+    });
+  });
+
+  it('NUT-11 a USDA outage (503) in the meal lookup, ingredients asked, leaves the meal value out', async () => {
+    const harness = makeHarness(version([NOODLES], 2, TITLE));
+    searchReturns(harness, {
+      ...NOODLE_HITS,
+      [TITLE]: new ServiceUnavailableException('USDA is unavailable'),
+    });
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(response.kcalPerPortion).toBe(384);
+    expect(response.estimate).toEqual({
+      lowKcalPerPortion: 380,
+      highKcalPerPortion: 380,
+      atLeast: false,
+      notCounted: [],
+    });
+  });
+
+  it('NUT-11 a USDA outage (503) in the ingredient lookups, meal asked, leaves the ingredients value out', async () => {
+    const harness = makeHarness(version([NOODLES], 2, TITLE));
+    searchReturns(harness, {
+      ...MEAL_HITS,
+      '+egg +noodles raw': new ServiceUnavailableException('USDA is unavailable'),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'meal');
+
+    expect(response.kcalPerPortion).toBe(348);
+    expect(response.estimate).toEqual({
+      lowKcalPerPortion: 350,
+      highKcalPerPortion: 350,
+      atLeast: false,
+      notCounted: ['egg noodles'],
+    });
+  });
+
+  it('NUT-11 a USDA outage (503) in the asked meal lookup still fails the request', async () => {
+    const harness = makeHarness(version([NOODLES], 2, TITLE));
+    searchReturns(harness, {
+      ...NOODLE_HITS,
+      [TITLE]: new ServiceUnavailableException('USDA is unavailable'),
+    });
+
+    await expect(
+      harness.service.compute(USER, RECIPE_ID, 'meal'),
+    ).rejects.toThrow(ServiceUnavailableException);
+  });
+
+  it('NUT-11 a USDA rate limit (429) in the meal lookup fails an ingredients request', async () => {
+    const harness = makeHarness(version([NOODLES], 2, TITLE));
+    searchReturns(harness, {
+      ...NOODLE_HITS,
+      [TITLE]: new HttpException(
+        'USDA rate limit reached',
+        HttpStatus.TOO_MANY_REQUESTS,
+      ),
+    });
+
+    const error = await harness.service
+      .compute(USER, RECIPE_ID, 'ingredients')
+      .catch((thrown: unknown) => thrown);
+
+    expect((error as HttpException).getStatus()).toBe(
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
+  });
+
+  it('NUT-11 a USDA rate limit (429) in the ingredient lookups fails a meal request', async () => {
+    const harness = makeHarness(version([NOODLES], 2, TITLE));
+    searchReturns(harness, {
+      ...MEAL_HITS,
+      '+egg +noodles raw': new HttpException(
+        'USDA rate limit reached',
+        HttpStatus.TOO_MANY_REQUESTS,
+      ),
+    });
+
+    const error = await harness.service
+      .compute(USER, RECIPE_ID, 'meal')
+      .catch((thrown: unknown) => thrown);
+
+    expect((error as HttpException).getStatus()).toBe(
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
+  });
+});
+
+describe('NutritionService.compute container words (NUT-8)', () => {
+  it('NUT-8 "Garlic cloves" keeps both words in the query but keys the match on garlic', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 10, unit: 'g', name: 'Garlic cloves' }], 2),
+    );
+    searchReturns(harness, {
+      '+garlic +cloves raw': [
+        hit({ fdcId: 1, description: 'Spices, cloves, ground', kcalPer100g: 274 }),
+        hit({ fdcId: 2, description: 'Garlic, raw', kcalPer100g: 149 }),
+      ],
+    });
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(ingredientSearches(harness)[0]).toEqual([
+      '+garlic +cloves raw',
+      INGREDIENT_DATA_TYPES,
+    ]);
+    expect(response.ingredients[0]).toEqual({
+      name: 'Garlic cloves',
+      grams: 10,
+      kcal: 14.9,
+      matchedDescription: 'Garlic, raw',
+    });
+  });
+
+  it('NUT-8 leaves the recipe ingredient name unchanged in the response', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 300, unit: 'g', name: 'Chicken Breasts' }], 2),
+    );
+    searchReturns(harness, {
+      '+chicken +breasts raw': [
+        hit({
+          fdcId: 171077,
+          description: 'Chicken, breast, boneless, skinless, raw',
+          kcalPer100g: 120,
+        }),
+      ],
+    });
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(response.ingredients[0]).toEqual({
+      name: 'Chicken Breasts',
+      grams: 300,
+      kcal: 360,
+      matchedDescription: 'Chicken, breast, boneless, skinless, raw',
+    });
+  });
+});
+
+/** Answers `getFood` by fdcId; an id missing from the table has no detail (null). */
+function foodsReturn(
+  harness: Harness,
+  table: Record<number, UsdaFoodDetail | Error>,
+): void {
+  harness.usda.getFood.mockImplementation(async (fdcId: number) => {
+    const entry = table[fdcId];
+    if (entry === undefined) return null;
+    if (entry instanceof Error) throw entry;
+    return entry;
+  });
+}
+
+/** The fdcIds `getFood` was asked for, in call order. */
+function detailCalls(harness: Harness): number[] {
+  return harness.usda.getFood.mock.calls.map(([fdcId]) => fdcId as number);
+}
+
+describe('NutritionService.compute household measures (NUT-6)', () => {
+  it('NUT-6 weighs 3 cups of dry rice by the chosen food own "1 cup" portion, not 240 ml', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 3, unit: 'cup', name: 'Rice' }], 3),
+    );
+    searchReturns(harness, {
+      '+rice raw': [hit({ fdcId: 101, description: 'Rice, raw', kcalPer100g: 360 })],
+    });
+    foodsReturn(harness, {
+      101: detail(101, 'Rice, raw', [
+        { gramWeight: 185, description: '1 cup', amount: null, sequenceNumber: 1 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(detailCalls(harness)).toEqual([101]);
+    // 3 × 185 g = 555 g; 360 × 555 / 100 = 1998
+    expect(response.ingredients[0]).toEqual({
+      name: 'Rice',
+      grams: 555,
+      kcal: 1998,
+      matchedDescription: 'Rice, raw',
+    });
+  });
+
+  it('NUT-6 divides a leading number in the portion text ("2 tablespoons", 30 g → 15 g per tbsp)', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 2, unit: 'tbsp', name: 'Olive oil' }], 2),
+    );
+    searchReturns(harness, {
+      '+olive +oil raw': [
+        hit({ fdcId: 102, description: 'Oil, olive, salad or cooking', kcalPer100g: 884 }),
+      ],
+    });
+    foodsReturn(harness, {
+      102: detail(102, 'Oil, olive, salad or cooking', [
+        { gramWeight: 30, description: '2 tablespoons', amount: null, sequenceNumber: 1 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    // 2 × 15 g = 30 g; 884 × 30 / 100 = 265.2
+    expect(response.ingredients[0].grams).toBe(30);
+    expect(response.ingredients[0].kcal).toBe(265.2);
+  });
+
+  it('NUT-6 weighs `tsp` by the chosen food own teaspoon portion', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 2, unit: 'tsp', name: 'Sugar' }], 1),
+    );
+    searchReturns(harness, {
+      '+sugar raw': [hit({ fdcId: 103, description: 'Sugar, granulated', kcalPer100g: 400 })],
+    });
+    foodsReturn(harness, {
+      103: detail(103, 'Sugar, granulated', [
+        { gramWeight: 200, description: '1 cup', amount: null, sequenceNumber: 1 },
+        { gramWeight: 4, description: '1 tsp', amount: null, sequenceNumber: 2 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    // 2 × 4 g = 8 g; 400 × 8 / 100 = 32
+    expect(response.ingredients[0].grams).toBe(8);
+    expect(response.ingredients[0].kcal).toBe(32);
+  });
+
+  it('NUT-6 weighs 1 cup of ricotta by the Foundation "0.2 cup" = 64.6 g portion (323 g, not 64.6 g; §16 U15 746766)', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 1, unit: 'cup', name: 'Ricotta cheese' }], 1),
+    );
+    searchReturns(harness, {
+      '+ricotta +cheese raw': [
+        hit({
+          fdcId: 746766,
+          description: 'Cheese, ricotta, whole milk',
+          dataType: 'Foundation',
+          kcalPer100g: 150,
+        }),
+      ],
+    });
+    foodsReturn(harness, {
+      746766: detail(746766, 'Cheese, ricotta, whole milk', [
+        { gramWeight: 64.6, description: 'cup', amount: 0.2, sequenceNumber: 1 },
+        { gramWeight: 129, description: 'cup', amount: 0.5, sequenceNumber: 2 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(detailCalls(harness)).toEqual([746766]);
+    // 1 × (64.6 g ÷ 0.2) = 323 g; 150 × 323 / 100 = 484.5
+    expect(response.ingredients[0]).toEqual({
+      name: 'Ricotta cheese',
+      grams: 323,
+      kcal: 484.5,
+      matchedDescription: 'Cheese, ricotta, whole milk',
+    });
+  });
+
+  it('NUT-6 weighs 2 tbsp of hummus by the Foundation "2 tablespoon" = 33.9 g portion (16.95 g per tbsp; §16 U15 321358)', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 2, unit: 'tbsp', name: 'Hummus' }], 1),
+    );
+    searchReturns(harness, {
+      '+hummus raw': [
+        hit({
+          fdcId: 321358,
+          description: 'Hummus, commercial',
+          dataType: 'Foundation',
+          kcalPer100g: 200,
+        }),
+      ],
+    });
+    foodsReturn(harness, {
+      321358: detail(321358, 'Hummus, commercial', [
+        { gramWeight: 33.9, description: 'tablespoon', amount: 2, sequenceNumber: 1 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    // 2 × (33.9 g ÷ 2) = 33.9 g; 200 × 33.9 / 100 = 67.8
+    expect(response.ingredients[0].grams).toBe(33.9);
+    expect(response.ingredients[0].kcal).toBe(67.8);
+  });
+
+  it('NUT-6 takes the measure from the next hit when the chosen food has none; the kcal stay the chosen food', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 1, unit: 'cup', name: 'Rice' }], 1),
+    );
+    searchReturns(harness, {
+      '+rice raw': [
+        hit({ fdcId: 201, description: 'Rice, raw', kcalPer100g: 360 }),
+        hit({ fdcId: 202, description: 'Rice, cooked', kcalPer100g: 130 }),
+      ],
+    });
+    foodsReturn(harness, {
+      201: detail(201, 'Rice, raw', [
+        { gramWeight: 85, description: 'RACC', amount: 1, sequenceNumber: 1 },
+      ]),
+      202: detail(202, 'Rice, cooked', [
+        { gramWeight: 160, description: '1 cup', amount: null, sequenceNumber: 1 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(detailCalls(harness)).toEqual([201, 202]);
+    // 1 × 160 g; 360 × 160 / 100 = 576
+    expect(response.ingredients[0]).toEqual({
+      name: 'Rice',
+      grams: 160,
+      kcal: 576,
+      matchedDescription: 'Rice, raw',
+    });
+  });
+
+  it('NUT-6 walks the next hits in score order, not USDA order', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 1, unit: 'cup', name: 'Rice' }], 1),
+    );
+    searchReturns(harness, {
+      '+rice raw': [
+        // Score −3 ("pudding" is neither a name word nor neutral).
+        hit({ fdcId: 301, description: 'Rice pudding', kcalPer100g: 120 }),
+        // Score 5: the chosen food.
+        hit({ fdcId: 302, description: 'Rice, raw', kcalPer100g: 360 }),
+        // Score 3.
+        hit({ fdcId: 303, description: 'Rice, cooked', kcalPer100g: 130 }),
+      ],
+    });
+    foodsReturn(harness, {
+      301: detail(301, 'Rice pudding', [
+        { gramWeight: 100, description: '1 cup', amount: null, sequenceNumber: 1 },
+      ]),
+      302: detail(302, 'Rice, raw', []),
+      303: detail(303, 'Rice, cooked', [
+        { gramWeight: 200, description: '1 cup', amount: null, sequenceNumber: 1 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(detailCalls(harness)).toEqual([302, 303]);
+    expect(response.ingredients[0].grams).toBe(200);
+    expect(response.ingredients[0].matchedDescription).toBe('Rice, raw');
+  });
+
+  it('NUT-6 looks at most at 3 next hits, then falls back to water density (240 g per cup)', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 1, unit: 'cup', name: 'Rice' }], 1),
+    );
+    searchReturns(harness, {
+      '+rice raw': [
+        hit({ fdcId: 401, description: 'Rice, raw', kcalPer100g: 360 }),
+        hit({ fdcId: 402, description: 'Rice, white, raw', kcalPer100g: 365 }),
+        hit({ fdcId: 403, description: 'Rice, brown, raw', kcalPer100g: 370 }),
+        hit({ fdcId: 404, description: 'Rice, wild, raw', kcalPer100g: 357 }),
+        hit({ fdcId: 405, description: 'Rice, cooked', kcalPer100g: 130 }),
+      ],
+    });
+    foodsReturn(harness, {
+      401: detail(401, 'Rice, raw', []),
+      402: detail(402, 'Rice, white, raw', []),
+      403: detail(403, 'Rice, brown, raw', []),
+      404: detail(404, 'Rice, wild, raw', []),
+      405: detail(405, 'Rice, cooked', [
+        { gramWeight: 160, description: '1 cup', amount: null, sequenceNumber: 1 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(detailCalls(harness)).toEqual([401, 402, 403, 404]);
+    // 1 × 240 g (water density); 360 × 240 / 100 = 864
+    expect(response.ingredients[0].grams).toBe(240);
+    expect(response.ingredients[0].kcal).toBe(864);
+  });
+
+  it('NUT-6 falls back to water density when no food detail is available (15 g per tbsp)', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 2, unit: 'tbsp', name: 'Olive oil' }], 1),
+    );
+    searchReturns(harness, {
+      '+olive +oil raw': [
+        hit({ fdcId: 501, description: 'Oil, olive, salad or cooking', kcalPer100g: 884 }),
+      ],
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(detailCalls(harness)).toEqual([501]);
+    // 2 × 15 g = 30 g; 884 × 30 / 100 = 265.2
+    expect(response.ingredients[0].grams).toBe(30);
+    expect(response.ingredients[0].kcal).toBe(265.2);
+  });
+
+  it('NUT-6 never borrows a measure from a hit the NUT-8 skips drop', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 1, unit: 'cup', name: 'Rice' }], 1),
+    );
+    searchReturns(harness, {
+      '+rice raw': [
+        hit({ fdcId: 601, description: 'Rice, raw', kcalPer100g: 360 }),
+        // No head word: skipped by NUT-8.
+        hit({ fdcId: 602, description: 'Wheat flour, white', kcalPer100g: 364 }),
+        // No energy value: skipped by NUT-8.
+        hit({ fdcId: 603, description: 'Rice, white, raw', kcalPer100g: null }),
+      ],
+    });
+    foodsReturn(harness, {
+      601: detail(601, 'Rice, raw', []),
+      602: detail(602, 'Wheat flour, white', [
+        { gramWeight: 125, description: '1 cup', amount: null, sequenceNumber: 1 },
+      ]),
+      603: detail(603, 'Rice, white, raw', [
+        { gramWeight: 185, description: '1 cup', amount: null, sequenceNumber: 1 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(detailCalls(harness)).toEqual([601]);
+    expect(response.ingredients[0].grams).toBe(240);
+  });
+
+  it('NUT-6 borrows only from the search that chose the food (no second search when the strict one has a hit)', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 1, unit: 'cup', name: 'Rice' }], 1),
+    );
+    searchReturns(harness, {
+      '+rice raw': [hit({ fdcId: 701, description: 'Rice, raw', kcalPer100g: 360 })],
+      Rice: [hit({ fdcId: 702, description: 'Rice, cooked', kcalPer100g: 130 })],
+    });
+    foodsReturn(harness, {
+      701: detail(701, 'Rice, raw', []),
+      702: detail(702, 'Rice, cooked', [
+        { gramWeight: 160, description: '1 cup', amount: null, sequenceNumber: 1 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(ingredientSearches(harness)).toEqual([['+rice raw', INGREDIENT_DATA_TYPES]]);
+    expect(detailCalls(harness)).toEqual([701]);
+    expect(response.ingredients[0].grams).toBe(240);
+  });
+
+  it('NUT-6 fetches no food detail for a unit that is not `piece`, `cup`, `tbsp` or `tsp`', async () => {
+    const harness = makeHarness(
+      version(
+        [
+          { quantity: 200, unit: 'g', name: 'Rice' },
+          { quantity: 250, unit: 'ml', name: 'Milk' },
+        ],
+        1,
+      ),
+    );
+    searchReturns(harness, {
+      '+rice raw': [hit({ fdcId: 801, description: 'Rice, raw', kcalPer100g: 360 })],
+      '+milk raw': [hit({ fdcId: 802, description: 'Milk, whole', kcalPer100g: 61 })],
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(harness.usda.getFood).not.toHaveBeenCalled();
+    expect(response.ingredients.map((row) => row.grams)).toEqual([200, 250]);
+  });
+
+  it('UNSPECIFIED a USDA outage (503) while reading the measure portion leaves the ingredient unavailable', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 1, unit: 'cup', name: 'Rice' }], 1),
+    );
+    searchReturns(harness, {
+      '+rice raw': [hit({ fdcId: 901, description: 'Rice, raw', kcalPer100g: 360 })],
+    });
+    foodsReturn(harness, {
+      901: new ServiceUnavailableException('USDA FoodData Central is unavailable'),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(response.ingredients[0]).toEqual({
+      name: 'Rice',
+      grams: null,
+      kcal: null,
+      matchedDescription: null,
+    });
+    expect(response.partial).toBe(true);
+  });
+});
+
+describe('NutritionService.compute piece fallback to the next hits (NUT-9)', () => {
+  const CHICKEN_QUERY = '+chicken +breasts raw';
+
+  it('NUT-9 "Chicken breasts" gets a breast weight from the next chicken-breast hit; kcal stay the chosen food', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 2, unit: 'piece', name: 'Chicken breasts' }], 2),
+    );
+    searchReturns(harness, {
+      [CHICKEN_QUERY]: [
+        hit({
+          fdcId: 1001,
+          description: 'Chicken, breast, boneless, skinless, raw',
+          kcalPer100g: 120,
+        }),
+        hit({
+          fdcId: 1002,
+          description: 'Chicken, broilers or fryers, breast, meat only, raw',
+          kcalPer100g: 110,
+        }),
+      ],
+    });
+    foodsReturn(harness, {
+      1001: detail(1001, 'Chicken, breast, boneless, skinless, raw', [
+        { gramWeight: 112, description: 'RACC', amount: 1, sequenceNumber: 1 },
+      ]),
+      1002: detail(1002, 'Chicken, broilers or fryers, breast, meat only, raw', [
+        { gramWeight: 140, description: 'cup, chopped or diced', amount: 1, sequenceNumber: 1 },
+        { gramWeight: 174, description: 'breast, bone and skin removed', amount: 1, sequenceNumber: 2 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(detailCalls(harness)).toEqual([1001, 1002]);
+    // 2 × 174 g = 348 g; 120 × 348 / 100 = 417.6
+    expect(response.ingredients[0]).toEqual({
+      name: 'Chicken breasts',
+      grams: 348,
+      kcal: 417.6,
+      matchedDescription: 'Chicken, breast, boneless, skinless, raw',
+    });
+  });
+
+  it('NUT-9 does not fetch the next hits when the chosen food has a piece portion', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 1, unit: 'piece', name: 'Chicken breasts' }], 1),
+    );
+    searchReturns(harness, {
+      [CHICKEN_QUERY]: [
+        hit({ fdcId: 1101, description: 'Chicken, breast, boneless, skinless, raw', kcalPer100g: 120 }),
+        hit({ fdcId: 1102, description: 'Chicken, broilers or fryers, breast, meat only, raw', kcalPer100g: 110 }),
+      ],
+    });
+    foodsReturn(harness, {
+      1101: detail(1101, 'Chicken, breast, boneless, skinless, raw', [
+        { gramWeight: 200, description: '1 breast', amount: null, sequenceNumber: 1 },
+      ]),
+      1102: detail(1102, 'Chicken, broilers or fryers, breast, meat only, raw', [
+        { gramWeight: 174, description: 'breast, bone and skin removed', amount: 1, sequenceNumber: 1 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(detailCalls(harness)).toEqual([1101]);
+    expect(response.ingredients[0].grams).toBe(200);
+  });
+
+  it('NUT-9 moves on to the next hit when the chosen food has no detail at all', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 1, unit: 'piece', name: 'Chicken breasts' }], 1),
+    );
+    searchReturns(harness, {
+      [CHICKEN_QUERY]: [
+        hit({ fdcId: 1201, description: 'Chicken, breast, boneless, skinless, raw', kcalPer100g: 120 }),
+        hit({ fdcId: 1202, description: 'Chicken, broilers or fryers, breast, meat only, raw', kcalPer100g: 110 }),
+      ],
+    });
+    foodsReturn(harness, {
+      1202: detail(1202, 'Chicken, broilers or fryers, breast, meat only, raw', [
+        { gramWeight: 174, description: 'breast, bone and skin removed', amount: 1, sequenceNumber: 1 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(detailCalls(harness)).toEqual([1201, 1202]);
+    expect(response.ingredients[0].grams).toBe(174);
+    expect(response.ingredients[0].kcal).toBe(208.8);
+  });
+
+  it('NUT-9 looks at most at 3 next hits; none with a piece leaves the ingredient unavailable (NUT-5)', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 1, unit: 'piece', name: 'Chicken breasts' }], 1),
+    );
+    const descriptions = [
+      'Chicken, breast, raw',
+      'Chicken, breast, meat only, raw',
+      'Chicken, breast, meat and skin, raw',
+      'Chicken, broilers or fryers, breast, meat only, raw',
+      'Chicken, breast, cooked',
+    ];
+    searchReturns(harness, {
+      [CHICKEN_QUERY]: descriptions.map((description, index) =>
+        hit({ fdcId: 1301 + index, description, kcalPer100g: 120 }),
+      ),
+    });
+    foodsReturn(harness, {
+      1301: detail(1301, descriptions[0], []),
+      1302: detail(1302, descriptions[1], []),
+      1303: detail(1303, descriptions[2], []),
+      1304: detail(1304, descriptions[3], []),
+      1305: detail(1305, descriptions[4], [
+        { gramWeight: 174, description: '1 breast', amount: null, sequenceNumber: 1 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(detailCalls(harness)).toEqual([1301, 1302, 1303, 1304]);
+    expect(response.ingredients[0].grams).toBeNull();
+    expect(response.ingredients[0].kcal).toBeNull();
+    expect(response.partial).toBe(true);
+  });
+
+  it('NUT-9 never borrows a piece from a hit without the head word', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 1, unit: 'piece', name: 'Chicken breasts' }], 1),
+    );
+    searchReturns(harness, {
+      [CHICKEN_QUERY]: [
+        hit({ fdcId: 1401, description: 'Chicken, breast, boneless, skinless, raw', kcalPer100g: 120 }),
+        hit({ fdcId: 1402, description: 'Turkey, breast, raw', kcalPer100g: 114 }),
+      ],
+    });
+    foodsReturn(harness, {
+      1401: detail(1401, 'Chicken, breast, boneless, skinless, raw', []),
+      1402: detail(1402, 'Turkey, breast, raw', [
+        { gramWeight: 300, description: '1 breast', amount: null, sequenceNumber: 1 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(detailCalls(harness)).toEqual([1401]);
+    expect(response.ingredients[0].kcal).toBeNull();
   });
 });

@@ -1,7 +1,8 @@
-// §3 (REC-1..8, IMG-3/6, SAVE-1..6, CAT-3/4): every write and read of a recipe.
+// §3 (REC-1..8, IMG-3/6/7, SAVE-1..10, CAT-3/4/7): every write and read of a recipe.
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -19,6 +20,8 @@ import {
 import { FriendsService } from '@rsn/api/feature-friends';
 import {
   MAX_IMAGES_PER_RECIPE,
+  MAX_INGREDIENTS,
+  MAX_STEPS,
   validateRecipeContent,
   type RecipeContent,
   type Visibility,
@@ -29,7 +32,11 @@ import type {
   RecipeListResponse,
   RecipeVersionsResponse,
 } from '@rsn/shared/util-contracts';
-import { RecipeAccessService } from './recipe-access.service';
+import {
+  RecipeAccessService,
+  isSavedCopy,
+  relationOf,
+} from './recipe-access.service';
 import { RecipeDtoService } from './recipe-dto.service';
 
 /** WX-4: at most this many of the caller's recipes are offered to the recommender. */
@@ -70,6 +77,8 @@ function versionColumns(
 
 @Injectable()
 export class RecipesService {
+  private readonly logger = new Logger(RecipesService.name);
+
   constructor(
     @InjectRepository(RecipeEntity)
     private readonly recipes: Repository<RecipeEntity>,
@@ -126,7 +135,10 @@ export class RecipesService {
           currentVersionId: null,
           savedFromRecipeId: null,
           forkedFromRecipeId: null,
+          forkedAt: null,
+          syncedVersionNumber: null,
           externalId: null,
+          externalTitle: null,
           externalImageUrl: null,
           ratingAverage: null,
           ratingCount: 0,
@@ -151,8 +163,8 @@ export class RecipesService {
   }
 
   /**
-   * REC-6/7: only the owner edits, and every edit adds a version. SAVE-5/6: the first
-   * edit of a saved copy records the fork it came from.
+   * REC-6/7: only the owner edits, and every edit adds a version. SAVE-5/6/7: the first
+   * edit of a saved copy makes it a fork and records the recipe it came from.
    */
   async update(
     userId: string,
@@ -173,9 +185,14 @@ export class RecipesService {
         content,
         nextNumber,
         previous.imagePaths ?? [],
-        recipe.savedFromRecipeId !== null && recipe.forkedFromRecipeId === null
-          ? recipe.savedFromRecipeId
-          : undefined,
+        isSavedCopy(recipe)
+          ? {
+              forkedAt: new Date(),
+              ...(recipe.savedFromRecipeId === null
+                ? {}
+                : { forkedFromRecipeId: recipe.savedFromRecipeId }),
+            }
+          : {},
       );
     });
     return this.get(userId, id);
@@ -190,16 +207,23 @@ export class RecipesService {
   ): Promise<RecipeDetailDto> {
     const recipe = await this.access.loadOrThrow(id);
     this.access.assertIsOwner(userId, recipe);
+    // SAVE-8: a saved copy stays private until its first edit makes it a fork.
+    if (isSavedCopy(recipe) && visibility !== 'private') {
+      throw new BadRequestException(
+        'A saved recipe stays private until you edit it',
+      );
+    }
 
     if (visibility === 'shared') {
       const wanted = [...new Set(sharedWithUserIds ?? [])];
-      // REC-2: a recipe is shared with friends only.
+      // UI-51, REC-2 (QOL-002): sharing with nobody is not a state.
+      if (wanted.length === 0) {
+        throw new BadRequestException('Pick at least one friend to share with');
+      }
+      // REC-2, FR-1, §11.6: a recipe is shared with friends only.
       const friendIds = new Set(await this.friends.friendIdsOf(userId));
-      const strangers = wanted.filter((candidate) => !friendIds.has(candidate));
-      if (strangers.length > 0) {
-        throw new BadRequestException(
-          'A recipe can only be shared with friends: ' + strangers.join(', '),
-        );
+      if (wanted.some((candidate) => !friendIds.has(candidate))) {
+        throw new BadRequestException('You can only share with friends');
       }
       await this.dataSource.transaction(async (manager) => {
         await manager.delete(RecipeShareEntity, { recipeId: recipe.id });
@@ -226,13 +250,23 @@ export class RecipesService {
   }
 
   /**
-   * REC-6, SAVE-4, §12.1: an own recipe is soft-deleted so saved copies keep their
-   * attribution; a saved copy is removed outright.
+   * REC-6, SAVE-4, SAVE-7, §12.1: an own recipe or a fork is soft-deleted so saved copies
+   * keep their attribution and images; a saved copy is removed outright, together with
+   * the image objects it owns (IMG-7). Either way the recipe stops being live, so every
+   * image path it carried is offered to the IMG-7 release rule afterwards.
    */
   async remove(userId: string, id: string): Promise<void> {
     const recipe = await this.access.loadOrThrow(id);
     this.access.assertIsOwner(userId, recipe);
-    if (recipe.savedFromRecipeId !== null) {
+    const versionRows = await this.versions.find({
+      where: { recipeId: recipe.id },
+      select: { imagePaths: true },
+    });
+    const allPaths = [
+      ...new Set(versionRows.flatMap((row) => row.imagePaths ?? [])),
+    ];
+    if (isSavedCopy(recipe)) {
+      const ownedPaths = allPaths.filter((path) => ownsImage(recipe.id, path));
       await this.dataSource.transaction(async (manager) => {
         // current_version_id points at a version, so it is cleared before the cascade.
         await manager.update(
@@ -242,12 +276,22 @@ export class RecipesService {
         );
         await manager.delete(RecipeEntity, { id: recipe.id });
       });
+      for (const path of ownedPaths) await this.removeObject(path);
+      // IMG-7: the copy's linked images may have been the last live link to a deleted source's.
+      await this.releaseUnusedImages(
+        allPaths.filter((path) => !ownsImage(recipe.id, path)),
+      );
       return;
     }
     await this.recipes.update({ id: recipe.id }, { deletedAt: new Date() });
+    // IMG-7: its own objects stay while a live recipe still shows them; the rest go now.
+    await this.releaseUnusedImages(allPaths);
   }
 
-  /** SAVE-1, SAVE-4: a public recipe becomes a private copy of the caller's, once. */
+  /**
+   * SAVE-1, SAVE-4, SAVE-7: a public recipe becomes a private saved copy of the caller's,
+   * once; a live fork of it counts as that copy. SAVE-10 records the version it took.
+   */
   async save(userId: string, id: string): Promise<RecipeDetailDto> {
     const source = await this.access.loadOrThrow(id);
     if (source.visibility !== 'public') {
@@ -277,7 +321,10 @@ export class RecipesService {
           currentVersionId: null,
           savedFromRecipeId: source.id,
           forkedFromRecipeId: null,
+          forkedAt: null,
+          syncedVersionNumber: sourceVersion.versionNumber,
           externalId: source.externalId,
+          externalTitle: source.externalTitle,
           externalImageUrl: source.externalImageUrl,
           ratingAverage: null,
           ratingCount: 0,
@@ -296,7 +343,7 @@ export class RecipesService {
     return this.get(userId, copyId);
   }
 
-  /** CAT-3, CAT-4: a TheMealDB meal is pulled into the database when it is saved. */
+  /** CAT-3, CAT-4, CAT-7: a TheMealDB meal is pulled into the database as a saved copy. */
   async saveCatalogue(
     userId: string,
     mealId: string,
@@ -307,6 +354,8 @@ export class RecipesService {
         ownerId: userId,
         source: 'themealdb',
         externalId: mealId,
+        // A copy of another user's TheMealDB fork carries the idMeal too; it is not the meal's copy.
+        savedFromRecipeId: IsNull(),
         deletedAt: IsNull(),
       },
     });
@@ -317,7 +366,13 @@ export class RecipesService {
       throw new NotFoundException(`TheMealDB has no meal ${mealId}`);
     }
     // CAT-4, CAT-6: the mapper fills servings 2 and the parsed ingredients and steps.
-    const content = toRecipeContent(meal);
+    const mapped = toRecipeContent(meal);
+    // §3.1.1 upper limits: a save keeps the first 60 steps and the first 50 ingredients.
+    const content: RecipeContent = {
+      ...mapped,
+      ingredients: mapped.ingredients.slice(0, MAX_INGREDIENTS),
+      steps: mapped.steps.slice(0, MAX_STEPS),
+    };
     this.assertValidContent(content);
 
     const recipeId = await this.dataSource.transaction(async (manager) => {
@@ -329,7 +384,12 @@ export class RecipesService {
           currentVersionId: null,
           savedFromRecipeId: null,
           forkedFromRecipeId: null,
+          forkedAt: null,
+          // SAVE-10: TheMealDB copies are never checked for updates.
+          syncedVersionNumber: null,
           externalId: mealId,
+          // SAVE-9: the meal name at save time, for "Saved from … on TheMealDB".
+          externalTitle: content.title,
           // CAT-6: TheMealDB hosts the image; nothing is uploaded to Firebase.
           externalImageUrl: meal.strMealThumb ?? null,
           ratingAverage: null,
@@ -341,6 +401,58 @@ export class RecipesService {
       return recipe.id;
     });
     return this.get(userId, recipeId);
+  }
+
+  /**
+   * SAVE-10, `POST /recipes/:id/sync`: the caller's copy of a user recipe takes the
+   * source's current content as a new version. A saved copy stays saved, a fork stays a fork.
+   */
+  async sync(userId: string, id: string): Promise<RecipeDetailDto> {
+    const copy = await this.access.loadOrThrow(id);
+    this.access.assertIsOwner(userId, copy);
+    const source =
+      copy.savedFromRecipeId === null
+        ? null
+        : await this.recipes.findOne({
+            where: { id: copy.savedFromRecipeId, deletedAt: IsNull() },
+            relations: { currentVersion: true },
+          });
+    const isShared =
+      source === null
+        ? false
+        : await this.shares.exists({
+            where: { recipeId: source.id, userId },
+          });
+    if (
+      source === null ||
+      relationOf(userId, source, isShared) === 'none' ||
+      source.currentVersion == null ||
+      copy.syncedVersionNumber === null ||
+      source.currentVersion.versionNumber <= copy.syncedVersionNumber
+    ) {
+      throw new BadRequestException('This recipe has no update to take');
+    }
+    const sourceVersion = source.currentVersion;
+    // loadOrThrow joins the current version; the images it shows before the sync.
+    const previousPaths = copy.currentVersion?.imagePaths ?? [];
+    const nextPaths = sourceVersion.imagePaths ?? [];
+
+    await this.dataSource.transaction(async (manager) => {
+      const nextNumber = (await this.maxVersionNumber(manager, copy.id)) + 1;
+      await this.appendVersion(
+        manager,
+        copy,
+        contentOf(sourceVersion),
+        nextNumber,
+        nextPaths,
+        { syncedVersionNumber: sourceVersion.versionNumber },
+      );
+    });
+    // IMG-7: the copy's current version no longer shows the images the sync left out.
+    await this.releaseUnusedImages(
+      previousPaths.filter((path) => !nextPaths.includes(path)),
+    );
+    return this.get(userId, id);
   }
 
   /** REC-7: the version history, oldest first; visibility applies to the whole history. */
@@ -396,8 +508,8 @@ export class RecipesService {
         `A recipe version carries at most ${MAX_IMAGES_PER_RECIPE} images`,
       );
     }
-    // The storage service validates the MIME type and the size and answers 503 when
-    // the FIREBASE_* keys are empty (IMG-6).
+    // The storage service detects the type from the bytes, checks the size, and answers
+    // 503 when the FIREBASE_* keys are empty or the bucket write fails (IMG-6).
     const objectPath = await this.images.upload({
       recipeId: recipe.id,
       buffer: file.buffer,
@@ -409,7 +521,11 @@ export class RecipesService {
     return { imageUrls: await this.signedUrls(next) };
   }
 
-  /** IMG-3: removes one image of the current version from the bucket and the version. */
+  /**
+   * IMG-3, IMG-7: removes one image of the current version. A linked image (a copy's or a
+   * sync's, owned by another recipe) only leaves this version; an image this recipe owns
+   * is deleted from the bucket and from every version of every recipe that carries it.
+   */
   async removeImage(
     userId: string,
     id: string,
@@ -424,8 +540,13 @@ export class RecipesService {
       throw new BadRequestException(`This recipe has no image ${index}`);
     }
     const next = paths.filter((_, position) => position !== index);
-    await this.versions.update({ id: version.id }, { imagePaths: next });
-    await this.images.remove(objectPath);
+    if (!ownsImage(recipe.id, objectPath)) {
+      await this.versions.update({ id: version.id }, { imagePaths: next });
+      // IMG-7 (BUG-028): this copy may have been the last live recipe showing a deleted source's image.
+      await this.releaseUnusedImages([objectPath]);
+      return { imageUrls: await this.signedUrls(next) };
+    }
+    await this.deleteImageEverywhere(objectPath);
     return { imageUrls: await this.signedUrls(next) };
   }
 
@@ -452,7 +573,12 @@ export class RecipesService {
     content: RecipeContent,
     versionNumber: number,
     imagePaths: string[],
-    forkedFromRecipeId?: string,
+    recipeColumns: Partial<
+      Pick<
+        RecipeEntity,
+        'forkedAt' | 'forkedFromRecipeId' | 'syncedVersionNumber'
+      >
+    > = {},
   ): Promise<RecipeVersionEntity> {
     const version = await manager.save(
       manager.create(RecipeVersionEntity, {
@@ -467,8 +593,8 @@ export class RecipesService {
       { id: recipe.id },
       {
         currentVersionId: version.id,
-        // SAVE-5/6: the first edit of a saved copy records its origin.
-        ...(forkedFromRecipeId === undefined ? {} : { forkedFromRecipeId }),
+        // SAVE-7: the first edit of a saved copy forks it; SAVE-10: a sync records its version.
+        ...recipeColumns,
       },
     );
     return version;
@@ -501,6 +627,78 @@ export class RecipesService {
     return version;
   }
 
+  /**
+   * IMG-7 (2026-09-30, BUG-028): called after a recipe stopped showing these paths (an image
+   * removal on a copy, a sync, or removing a recipe). An image whose owning recipe (the
+   * `<recipeId>` of its path) is soft-deleted or gone is deleted once no live recipe shows
+   * it, where "shows" means the path is in the current version of a recipe row whose
+   * `deleted_at` is null. A hard-deleted saved copy has no rows left, so it counts for
+   * nothing; past versions (REC-7) of any recipe, and every version of a soft-deleted
+   * recipe, keep no object alive, and the path is dropped from them before the object goes.
+   * An image whose owner is live is left alone: only that owner deletes it.
+   */
+  private async releaseUnusedImages(paths: string[]): Promise<void> {
+    for (const path of new Set(paths)) {
+      const ownerId = owningRecipeId(path);
+      // A path not in the IMG-6 shape names no recipe, so nobody is known to hold its rights.
+      if (ownerId === null) continue;
+      try {
+        const owner = await this.recipes.findOne({
+          where: { id: ownerId },
+          select: { id: true, deletedAt: true },
+        });
+        if (owner !== null && owner.deletedAt === null) continue;
+        const rows: { shown: boolean }[] = await this.dataSource.query(
+          `SELECT EXISTS (
+             SELECT 1 FROM "recipes" "live"
+             JOIN "recipe_versions" "shown_version"
+               ON "shown_version"."id" = "live"."current_version_id"
+             WHERE "live"."deleted_at" IS NULL
+               AND $1 = ANY("shown_version"."image_paths")
+           ) AS "shown"`,
+          [path],
+        );
+        if (rows[0]?.shown === true) continue;
+        await this.deleteImageEverywhere(path);
+      } catch (error: unknown) {
+        // The caller's own change is done; a failed clean-up only leaves an unused object.
+        const reason = error instanceof Error ? error.message : 'unknown error';
+        this.logger.warn(
+          `Could not release image ${path} (${reason}); the object is left unused`,
+        );
+      }
+    }
+  }
+
+  /**
+   * IMG-7: the path leaves every version of every recipe first, then the object leaves the
+   * bucket, so no version ever points at a deleted object.
+   */
+  private async deleteImageEverywhere(objectPath: string): Promise<void> {
+    await this.dataSource.query(
+      `UPDATE "recipe_versions"
+       SET "image_paths" = array_remove("image_paths", $1), "updated_at" = now()
+       WHERE $1 = ANY("image_paths")`,
+      [objectPath],
+    );
+    await this.removeObject(objectPath);
+  }
+
+  /**
+   * IMG-7: the bucket is changed after the database, so a failed delete only leaves an
+   * unused object behind; it is logged and the request still succeeds.
+   */
+  private async removeObject(objectPath: string): Promise<void> {
+    try {
+      await this.images.remove(objectPath);
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : 'unknown error';
+      this.logger.warn(
+        `Could not delete image ${objectPath} (${reason}); the object is left unused`,
+      );
+    }
+  }
+
   /** IMG-4: non-empty signed URLs, or an empty list when Firebase is unconfigured. */
   private async signedUrls(paths: string[]): Promise<string[]> {
     if (paths.length === 0) return [];
@@ -508,6 +706,20 @@ export class RecipesService {
       (url) => url.length > 0,
     );
   }
+}
+
+/** IMG-6, IMG-7: an image belongs to the recipe whose id is in its object path. */
+function ownsImage(recipeId: string, objectPath: string): boolean {
+  return objectPath.startsWith(`recipes/${recipeId}/`);
+}
+
+/** IMG-6 object path `recipes/<recipeId>/<uuid>.<ext>`: the owning recipe's id. */
+const OBJECT_PATH_OWNER =
+  /^recipes\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\//i;
+
+/** IMG-7: the recipe an image belongs to, or null for a path not in the IMG-6 shape. */
+function owningRecipeId(objectPath: string): string | null {
+  return OBJECT_PATH_OWNER.exec(objectPath)?.[1] ?? null;
 }
 
 /** A stored version read back as §3.1.1 content (used when a copy is made). */
