@@ -11,6 +11,7 @@ import type {
 
 import { AuthScreen, UnreachableScreen } from '@rsn/web/feature-auth';
 import {
+  clearEditorDraft,
   HomeScreen,
   RecipeDetailScreen,
   RecipeEditorScreen,
@@ -340,6 +341,8 @@ function AppShell(): ReactElement {
           onCancel={() => setPendingLeave(null)}
           onConfirm={() => {
             setPendingLeave(null);
+            // UI-35: Discard drops the editor's kept draft (cookbook.draft).
+            clearEditorDraft();
             pendingLeave();
           }}
         />

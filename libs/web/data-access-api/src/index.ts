@@ -1,16 +1,21 @@
 // Public surface of @rsn/web/data-access-api (SPEC.md §11.3, §11.5 UI-17).
 import './lib/globals';
 export {
+  AI_REQUEST_TIMEOUT_MS,
+  AI_TIMEOUT_MESSAGE,
   ApiClient,
   ApiError,
   apiClient,
   DEFAULT_API_BASE_URL,
   isConnectivityError,
+  isTimeoutError,
   NETWORK_ERROR_MESSAGE,
   SERVER_ERROR_MESSAGE,
   SERVER_OWN_MESSAGES,
+  TIMEOUT_STATUS,
+  timeoutError,
 } from './lib/client';
-export type { HttpMethod } from './lib/client';
+export type { HttpMethod, RequestOptions } from './lib/client';
 
 export {
   TokenStore,

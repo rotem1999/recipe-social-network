@@ -31,7 +31,7 @@ import type {
   UserSearchResponse,
   VisibilityRequest,
 } from '@rsn/shared/util-contracts';
-import { ApiClient, apiClient } from './client';
+import { AI_REQUEST_TIMEOUT_MS, ApiClient, apiClient } from './client';
 
 /** Builds `?a=b` from the parameters that are set; returns '' when none are. */
 function query(params: Record<string, string | number | undefined>): string {
@@ -231,12 +231,18 @@ export function createEndpoints(client: ApiClient = apiClient): Endpoints {
         { value },
       ),
 
-    // COOK-1..10
-    cookAsk: (body) => client.post<CookAskResponse>('/cook/ask', body),
+    // COOK-1..10; UI-52: abandoned after 20 seconds
+    cookAsk: (body) =>
+      client.post<CookAskResponse>('/cook/ask', body, {
+        timeoutMs: AI_REQUEST_TIMEOUT_MS,
+      }),
     cookQuota: () => client.get<QuotaDto>('/cook/quota'),
 
-    // WX-1..10
-    recommend: (body) => client.post<RecommendResponse>('/recommend', body),
+    // WX-1..10; UI-52: abandoned after 20 seconds
+    recommend: (body) =>
+      client.post<RecommendResponse>('/recommend', body, {
+        timeoutMs: AI_REQUEST_TIMEOUT_MS,
+      }),
   };
 }
 

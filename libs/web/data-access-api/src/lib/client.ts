@@ -33,8 +33,33 @@ export const SERVER_OWN_MESSAGES: readonly string[] = [
   'Image storage is unavailable right now',
 ];
 
+/**
+ * UI-52: how long the client waits for an AI request (`POST /cook/ask`,
+ * `POST /recommend`) before abandoning it.
+ */
+export const AI_REQUEST_TIMEOUT_MS = 20_000;
+
+/** UI-52: the message of an AI request abandoned after {@link AI_REQUEST_TIMEOUT_MS}. */
+export const AI_TIMEOUT_MESSAGE = 'The assistant is taking too long. Try again.';
+
+/**
+ * UI-52: the status of an abandoned request. It is neither 0 nor a 5xx, so
+ * {@link isConnectivityError} is false for it: a timeout never shows the
+ * UI-26 unreachable screen, and it never clears the tokens (UI-44).
+ */
+export const TIMEOUT_STATUS = 408;
+
 /** HTTP verbs used by the §11.6 surface. */
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+/** Per-request options of {@link ApiClient}. */
+export interface RequestOptions {
+  /**
+   * UI-52: abandons the request (aborting the `fetch`) when no answer came
+   * within this many milliseconds, rejecting with {@link AI_TIMEOUT_MESSAGE}.
+   */
+  timeoutMs?: number;
+}
 
 /**
  * A non-2xx response from the API. `message` comes from `ApiErrorResponse`;
@@ -68,11 +93,31 @@ function networkError(): ApiError {
   return new ApiError(0, NETWORK_ERROR_MESSAGE);
 }
 
-/** UI-26: a single network call; a rejected `fetch` becomes {@link networkError}. */
+/** UI-52: the error of a request abandoned after its timeout. */
+export function timeoutError(): ApiError {
+  return new ApiError(TIMEOUT_STATUS, AI_TIMEOUT_MESSAGE);
+}
+
+/** UI-52: true for the error of a request the client abandoned after its timeout. */
+export function isTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === TIMEOUT_STATUS &&
+    error.message === AI_TIMEOUT_MESSAGE
+  );
+}
+
+/**
+ * UI-26: a single network call; a rejected `fetch` becomes {@link networkError},
+ * except one aborted by its UI-52 timeout, which becomes {@link timeoutError}.
+ */
 async function fetchOrThrow(url: string, init: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init);
   } catch {
+    if (init.signal?.aborted === true) {
+      throw timeoutError();
+    }
     // "Failed to fetch" and friends never reach the screen (UI-26).
     throw networkError();
   }
@@ -173,9 +218,12 @@ export class ApiClient {
     return this.request<T>('GET', path);
   }
 
-  /** POST a JSON body (omitted when `body` is undefined). */
-  post<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>('POST', path, body);
+  /**
+   * POST a JSON body (omitted when `body` is undefined); UI-52 `timeoutMs`
+   * abandons it when no answer came in time.
+   */
+  post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+    return this.request<T>('POST', path, body, options);
   }
 
   /** PUT a JSON body. */
@@ -205,9 +253,47 @@ export class ApiClient {
     method: HttpMethod,
     path: string,
     body?: unknown,
+    options?: RequestOptions,
   ): Promise<T> {
     const payload = body === undefined ? undefined : JSON.stringify(body);
-    return this.send<T>(method, path, payload);
+    const timeoutMs = options?.timeoutMs;
+    if (timeoutMs === undefined) {
+      return this.send<T>(method, path, payload);
+    }
+    return this.sendWithTimeout<T>(method, path, payload, timeoutMs);
+  }
+
+  /**
+   * UI-52: {@link send} abandoned after `timeoutMs`. The whole exchange
+   * (request, and a refresh-and-retry after a 401) must answer in time; when
+   * it does not, the `fetch` in flight is aborted and the call rejects with
+   * {@link timeoutError}. The tokens are left as they are: a timeout says
+   * nothing about the session (UI-26, UI-44), and a shared refresh already
+   * under way still settles on its own.
+   */
+  private async sendWithTimeout<T>(
+    method: HttpMethod,
+    path: string,
+    body: BodyInit | undefined,
+    timeoutMs: number,
+  ): Promise<T> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        // Reject first, so the abort's own rejection never wins the race.
+        reject(timeoutError());
+        controller.abort();
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([
+        this.send<T>(method, path, body, controller.signal),
+        expired,
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -219,13 +305,18 @@ export class ApiClient {
     method: HttpMethod,
     path: string,
     body?: BodyInit,
+    signal?: AbortSignal,
   ): Promise<T> {
-    let response = await this.fetchOnce(method, path, body);
+    let response = await this.fetchOnce(method, path, body, signal);
 
     if (response.status === 401 && path !== REFRESH_PATH) {
       const refreshed = await this.refreshTokens();
+      if (signal?.aborted === true) {
+        // UI-52: abandoned while the tokens were refreshed; no retry.
+        throw timeoutError();
+      }
       if (refreshed) {
-        response = await this.fetchOnce(method, path, body);
+        response = await this.fetchOnce(method, path, body, signal);
       }
     }
 
@@ -245,6 +336,7 @@ export class ApiClient {
     method: HttpMethod,
     path: string,
     body?: BodyInit,
+    signal?: AbortSignal,
   ): Promise<Response> {
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (typeof body === 'string') {
@@ -255,7 +347,12 @@ export class ApiClient {
     if (accessToken !== null) {
       headers['Authorization'] = `Bearer ${accessToken}`;
     }
-    return fetchOrThrow(`${this.baseUrl}${path}`, { method, headers, body });
+    const init: RequestInit = { method, headers, body };
+    if (signal !== undefined) {
+      // UI-52: only the AI requests carry a timeout signal.
+      init.signal = signal;
+    }
+    return fetchOrThrow(`${this.baseUrl}${path}`, init);
   }
 
   /**

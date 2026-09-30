@@ -33,7 +33,19 @@ import {
   isUnit,
   validateRecipeContent,
 } from '@rsn/shared/util-domain';
-import { ApiError, useApi, useRequest } from '@rsn/web/data-access-api';
+import {
+  ApiError,
+  useApi,
+  useAuth,
+  useRequest,
+} from '@rsn/web/data-access-api';
+import {
+  clearEditorDraft,
+  NEW_RECIPE_DRAFT_TARGET,
+  readEditorDraft,
+  writeEditorDraft,
+} from './editor-draft';
+import type { EditorDraftFields } from './editor-draft';
 import { setUploadNotice, uploadNoticeText } from './upload-notice';
 import {
   Button,
@@ -209,6 +221,16 @@ export function RecipeEditorScreen({
 }: RecipeEditorScreenProps): ReactElement {
   const api = useApi();
   const isEdit = recipeId !== undefined;
+  // UI-35: the draft is kept per user and per editor (the recipe id or "new").
+  const userId = useAuth().user?.id ?? null;
+  const draftTarget = recipeId ?? NEW_RECIPE_DRAFT_TARGET;
+  // UI-35: the draft this editor opens with, read once before anything can
+  // overwrite it. On create it fills the fields at once; on edit it is laid
+  // over the loaded version.
+  const [openingDraft] = useState<EditorDraftFields | null>(() =>
+    userId === null ? null : readEditorDraft(userId, draftTarget),
+  );
+  const createDraft = recipeId === undefined ? openingDraft : null;
   const { data: existing, error: loadError } =
     useRequest<RecipeDetailDto | null>(
       () =>
@@ -218,22 +240,40 @@ export function RecipeEditorScreen({
       [recipeId],
     );
 
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
+  const [title, setTitle] = useState(createDraft?.title ?? '');
+  const [description, setDescription] = useState(
+    createDraft?.description ?? '',
+  );
   // UI-31: a new recipe has no default category.
-  const [category, setCategory] = useState<Category | ''>('');
-  const [servings, setServings] = useState('2');
-  const [prepMinutes, setPrepMinutes] = useState('');
-  const [cookMinutes, setCookMinutes] = useState('');
-  const [ingredients, setIngredients] = useState<Ingredient[]>([
-    { ...EMPTY_INGREDIENT },
-  ]);
-  const [steps, setSteps] = useState<Step[]>([{ ...EMPTY_STEP }]);
+  const [category, setCategory] = useState<Category | ''>(
+    createDraft?.category ?? '',
+  );
+  const [servings, setServings] = useState(createDraft?.servings ?? '2');
+  const [prepMinutes, setPrepMinutes] = useState(
+    createDraft?.prepMinutes ?? '',
+  );
+  const [cookMinutes, setCookMinutes] = useState(
+    createDraft?.cookMinutes ?? '',
+  );
+  const [ingredients, setIngredients] = useState<Ingredient[]>(() =>
+    createDraft === null
+      ? [{ ...EMPTY_INGREDIENT }]
+      : createDraft.ingredients.map((ingredient) => ({ ...ingredient })),
+  );
+  const [steps, setSteps] = useState<Step[]>(() =>
+    createDraft === null
+      ? [{ ...EMPTY_STEP }]
+      : createDraft.steps.map((step) => ({ ...step })),
+  );
   // UI-31: stable row keys, so Move up / Move down keeps focus on the moved row.
-  const nextKey = useRef(2);
+  const nextKey = useRef(ingredients.length + steps.length);
   const newKey = (): number => nextKey.current++;
-  const [ingredientKeys, setIngredientKeys] = useState<number[]>([0]);
-  const [stepKeys, setStepKeys] = useState<number[]>([1]);
+  const [ingredientKeys, setIngredientKeys] = useState<number[]>(() =>
+    ingredients.map((_, index) => index),
+  );
+  const [stepKeys, setStepKeys] = useState<number[]>(() =>
+    steps.map((_, index) => ingredients.length + index),
+  );
   const [imageUrls, setImageUrls] = useState<string[]>([]);
   /** On create the files wait here and are uploaded after `POST /recipes` (IMG-3). */
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -247,6 +287,8 @@ export function RecipeEditorScreen({
   const fileInput = useRef<HTMLInputElement>(null);
   /** UI-40: what the editor opened with; the loaded version on edit. */
   const [baseline, setBaseline] = useState(EMPTY_SNAPSHOT);
+  /** UI-35: whether the editor has opened (on edit: the recipe has loaded). */
+  const [opened, setOpened] = useState(recipeId === undefined);
   /** UI-40: the uploaded image or the picked file waiting for "Remove this photo?". */
   const [removingImage, setRemovingImage] = useState<{
     kind: 'uploaded' | 'pending';
@@ -258,16 +300,6 @@ export function RecipeEditorScreen({
     if (existing === null) {
       return;
     }
-    setTitle(existing.title);
-    setDescription(existing.description ?? '');
-    setCategory(existing.category);
-    setServings(String(existing.servings));
-    setPrepMinutes(
-      existing.prepMinutes === undefined ? '' : String(existing.prepMinutes),
-    );
-    setCookMinutes(
-      existing.cookMinutes === undefined ? '' : String(existing.cookMinutes),
-    );
     const loadedIngredients =
       existing.ingredients.length === 0
         ? [{ ...EMPTY_INGREDIENT }]
@@ -276,10 +308,35 @@ export function RecipeEditorScreen({
       existing.steps.length === 0
         ? [{ ...EMPTY_STEP }]
         : existing.steps.map((step) => ({ ...step }));
-    setIngredients(loadedIngredients);
-    setSteps(loadedSteps);
-    setIngredientKeys(loadedIngredients.map(() => nextKey.current++));
-    setStepKeys(loadedSteps.map(() => nextKey.current++));
+    // UI-35: a draft kept for this recipe is laid over the loaded version; the
+    // loaded version stays what the edit opened with (UI-40).
+    const draft = openingDraft;
+    setTitle(draft?.title ?? existing.title);
+    setDescription(draft?.description ?? existing.description ?? '');
+    setCategory(draft?.category ?? existing.category);
+    setServings(draft?.servings ?? String(existing.servings));
+    setPrepMinutes(
+      draft?.prepMinutes ??
+        (existing.prepMinutes === undefined
+          ? ''
+          : String(existing.prepMinutes)),
+    );
+    setCookMinutes(
+      draft?.cookMinutes ??
+        (existing.cookMinutes === undefined
+          ? ''
+          : String(existing.cookMinutes)),
+    );
+    const shownIngredients =
+      draft === null
+        ? loadedIngredients
+        : draft.ingredients.map((ingredient) => ({ ...ingredient }));
+    const shownSteps =
+      draft === null ? loadedSteps : draft.steps.map((step) => ({ ...step }));
+    setIngredients(shownIngredients);
+    setSteps(shownSteps);
+    setIngredientKeys(shownIngredients.map(() => nextKey.current++));
+    setStepKeys(shownSteps.map(() => nextKey.current++));
     setImageUrls([...existing.imageUrls]);
     // UI-40: the loaded version is what the edit opened with.
     setBaseline(
@@ -297,7 +354,8 @@ export function RecipeEditorScreen({
         pendingFiles: 0,
       }),
     );
-  }, [existing]);
+    setOpened(true);
+  }, [existing, openingDraft]);
 
   // UI-40: whether the fields differ from what the editor opened with.
   const dirty =
@@ -318,6 +376,44 @@ export function RecipeEditorScreen({
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
+  // UI-35: the fields are kept in sessionStorage while they differ from what
+  // the editor opened with (picked files are not kept); an editor holding what
+  // it opened with keeps no draft, so one that opens clean clears any draft.
+  // Nothing is written on edit until the recipe has loaded.
+  useEffect(() => {
+    if (!opened || userId === null) {
+      return;
+    }
+    const fields: EditorDraftFields = {
+      title,
+      description,
+      category,
+      servings,
+      prepMinutes,
+      cookMinutes,
+      ingredients,
+      steps,
+    };
+    if (snapshotOf({ ...fields, pendingFiles: 0 }) === baseline) {
+      clearEditorDraft();
+    } else {
+      writeEditorDraft(userId, draftTarget, fields);
+    }
+  }, [
+    opened,
+    userId,
+    draftTarget,
+    baseline,
+    title,
+    description,
+    category,
+    servings,
+    prepMinutes,
+    cookMinutes,
+    ingredients,
+    steps,
+  ]);
 
   /** UI-31: editing a field drops its message. */
   const clearError = (id: string): void =>
@@ -622,7 +718,10 @@ export function RecipeEditorScreen({
     setBusy(true);
     if (recipeId !== undefined) {
       try {
-        onSaved(await api.updateRecipe(recipeId, content));
+        const saved = await api.updateRecipe(recipeId, content);
+        // UI-35: Save clears the draft.
+        clearEditorDraft();
+        onSaved(saved);
       } catch (cause: unknown) {
         setSubmitError(message(cause));
         setBusy(false);
@@ -638,6 +737,9 @@ export function RecipeEditorScreen({
       setBusy(false);
       return;
     }
+    // UI-35: Save clears the draft as soon as the recipe exists, so a reload
+    // during the image uploads never offers the created recipe again.
+    clearEditorDraft();
     // UI-25: the recipe exists now, so the editor always moves on to it; a failed
     // upload becomes a notice on the detail screen instead of a second Create.
     let urls = created.imageUrls;

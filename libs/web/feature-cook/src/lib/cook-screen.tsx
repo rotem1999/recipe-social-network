@@ -15,7 +15,12 @@ import {
   // step shows its minutes without a timer button.
   MAX_COOK_TIMER_MINUTES,
 } from '@rsn/shared/util-domain';
-import { ApiError, useApi, useRequest } from '@rsn/web/data-access-api';
+import {
+  ApiError,
+  isTimeoutError,
+  useApi,
+  useRequest,
+} from '@rsn/web/data-access-api';
 import {
   Button,
   EmptyState,
@@ -272,6 +277,9 @@ export function CookScreen({
       }
       // COOK-8: the daily quota is refused server-side with 429.
       const refused = cause instanceof ApiError && cause.status === 429;
+      // UI-52: an ask abandoned after 20 seconds shows "The assistant is
+      // taking too long. Try again." here, under the question.
+      const timedOut = isTimeoutError(cause);
       setAskError(
         refused
           ? "You've used today's AI asks"
@@ -280,9 +288,13 @@ export function CookScreen({
             : 'The assistant could not be reached.',
       );
       // UI-15 / COOK-10: after a 429 the quota line shows 0 and Ask is
-      // disabled; after a 5xx the unit stays spent. Both re-read
-      // `GET /cook/quota`, as `ApiError` does not carry the 429 body.
-      if (refused || (cause instanceof ApiError && cause.status >= 500)) {
+      // disabled; after a 5xx or a UI-52 timeout the unit stays spent. All
+      // re-read `GET /cook/quota`, as `ApiError` does not carry the 429 body.
+      if (
+        refused ||
+        timedOut ||
+        (cause instanceof ApiError && cause.status >= 500)
+      ) {
         reloadQuota();
       }
       setAsking(false);

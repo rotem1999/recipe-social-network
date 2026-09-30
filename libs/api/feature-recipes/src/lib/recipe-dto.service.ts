@@ -31,6 +31,13 @@ export interface PublicCardsOptions {
   page: number;
   pageSize: number;
   excludeIds?: string[];
+  /** WX-10 (discover candidates): leave out the recipes this user owns. */
+  excludeOwnerId?: string;
+  /**
+   * WX-10 (discover candidates): leave out the recipes this user has a live copy of
+   * (DISC-10 `myCopyId`: a saved copy or a fork that is not deleted, SAVE-7).
+   */
+  excludeCopiedBy?: string;
 }
 
 /** What `listPublicCards` returns: one page plus the "there is more" flag. */
@@ -134,15 +141,29 @@ export class RecipeDtoService {
     userId: string,
     options: PublicCardsOptions,
   ): Promise<PublicCardsPage> {
-    const { category, page, pageSize, excludeIds } = options;
+    const {
+      category,
+      page,
+      pageSize,
+      excludeIds,
+      excludeOwnerId,
+      excludeCopiedBy,
+    } = options;
+    // WX-10: the sources of the caller's live copies join the excluded ids.
+    const copiedIds =
+      excludeCopiedBy === undefined
+        ? []
+        : await this.liveCopySourceIds(excludeCopiedBy);
+    const excluded = [...new Set([...(excludeIds ?? []), ...copiedIds])];
     const rows = await this.recipes.find({
       where: {
         visibility: 'public',
         deletedAt: IsNull(),
         ...(category === undefined ? {} : { currentVersion: { category } }),
-        ...(excludeIds === undefined || excludeIds.length === 0
+        ...(excludeOwnerId === undefined
           ? {}
-          : { id: Not(In(excludeIds)) }),
+          : { ownerId: Not(excludeOwnerId) }),
+        ...(excluded.length === 0 ? {} : { id: Not(In(excluded)) }),
       },
       relations: { currentVersion: true, owner: true },
       order: { updatedAt: 'DESC' },
@@ -203,6 +224,28 @@ export class RecipeDtoService {
       if (copy.externalId !== null) byMealId.set(copy.externalId, copy.id);
     }
     return byMealId;
+  }
+
+  /**
+   * DISC-10, WX-10: the ids of the user recipes this user has a live copy of. A saved
+   * copy and a fork both keep `savedFromRecipeId` (SAVE-7); a deleted fork is not live.
+   */
+  private async liveCopySourceIds(userId: string): Promise<string[]> {
+    const copies = await this.recipes.find({
+      where: {
+        ownerId: userId,
+        savedFromRecipeId: Not(IsNull()),
+        deletedAt: IsNull(),
+      },
+      select: { id: true, savedFromRecipeId: true },
+    });
+    return [
+      ...new Set(
+        copies
+          .map((copy) => copy.savedFromRecipeId)
+          .filter((id): id is string => id !== null),
+      ),
+    ];
   }
 
   /** RATE-4: the caller's own grade, or null when they have not rated the recipe. */

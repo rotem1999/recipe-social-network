@@ -4,8 +4,9 @@
 // Move up / Move down, Add hidden at the limits), UI-25 (every picked image is
 // attempted after create; the notice), UI-40 (dirty reporting and the photo
 // removal confirmations), UI-20 (no removal of a catalogue photo), UI-41, UI-45
-// (growing two-row step textareas, the "Note" placeholder) and UI-47 (the
-// notice counts in words).
+// (growing two-row step textareas, the "Note" placeholder), UI-47 (the
+// notice counts in words) and UI-35 (the unsaved fields kept in
+// sessionStorage `cookbook.draft`).
 import {
   fireEvent,
   render,
@@ -17,6 +18,12 @@ import type { RecipeDetailDto } from '@rsn/shared/util-contracts';
 import { ApiError } from '@rsn/web/data-access-api';
 import { RecipeEditorScreen } from './recipe-editor-screen';
 import { clearUploadNotice, peekUploadNotice } from './upload-notice';
+import {
+  DRAFT_STORAGE_KEY,
+  readEditorDraft,
+  writeEditorDraft,
+} from './editor-draft';
+import type { EditorDraftFields } from './editor-draft';
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -154,6 +161,8 @@ function openEditor(
 
 describe('RecipeEditorScreen', () => {
   beforeEach(() => {
+    // UI-35: the editor keeps a draft in sessionStorage; none may leak between tests.
+    sessionStorage.clear();
     mocks.api.getRecipe.mockReset();
     mocks.api.createRecipe.mockReset().mockResolvedValue(CREATED);
     mocks.api.updateRecipe.mockReset();
@@ -911,5 +920,396 @@ describe('RecipeEditorScreen', () => {
     ]) {
       expect(screen.getByLabelText(label).getAttribute('dir')).toBe('auto');
     }
+  });
+});
+
+describe('RecipeEditorScreen drafts (UI-35)', () => {
+  /** A create draft that differs from the empty editor in every field. */
+  const NEW_DRAFT: EditorDraftFields = {
+    title: 'Ramen',
+    description: 'A quick weeknight bowl.',
+    category: 'Miscellaneous',
+    servings: '4',
+    prepMinutes: '15',
+    cookMinutes: '25',
+    ingredients: [
+      { quantity: 200, unit: 'g', name: 'noodles' },
+      { quantity: 1, unit: 'l', name: 'stock', note: 'hot' },
+    ],
+    steps: [{ text: 'Boil the noodles.', durationMinutes: 4 }, { text: 'Serve.' }],
+  };
+
+  /** EXISTING as the editor shows it once loaded (UI-40's opening state on edit). */
+  const LOADED: EditorDraftFields = {
+    title: 'Shakshuka',
+    description: '',
+    category: 'Beef',
+    servings: '2',
+    prepMinutes: '',
+    cookMinutes: '',
+    ingredients: [
+      { quantity: 3, unit: 'none', name: 'eggs' },
+      { quantity: 200, unit: 'g', name: 'tomatoes', note: 'chopped' },
+    ],
+    steps: [{ text: 'Fry the onion.' }, { text: 'Crack the eggs.' }],
+  };
+
+  function storedDraft(): { userId: string; target: string; fields: EditorDraftFields } | null {
+    const text = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+    return text === null ? null : JSON.parse(text);
+  }
+
+  function value(label: string): string {
+    return (screen.getByLabelText(label) as HTMLInputElement).value;
+  }
+
+  function renderNew(
+    handlers: {
+      onSaved?: (recipe: RecipeDetailDto) => void;
+      onDirtyChange?: (dirty: boolean) => void;
+    } = {},
+  ) {
+    return render(
+      <RecipeEditorScreen
+        onSaved={handlers.onSaved ?? vi.fn()}
+        onCancel={vi.fn()}
+        onDirtyChange={handlers.onDirtyChange}
+      />,
+    );
+  }
+
+  beforeEach(() => {
+    sessionStorage.clear();
+    mocks.api.getRecipe.mockReset();
+    mocks.api.createRecipe.mockReset().mockResolvedValue(CREATED);
+    mocks.api.updateRecipe.mockReset();
+    mocks.api.uploadImage.mockReset();
+    mocks.api.deleteImage.mockReset();
+  });
+
+  afterEach(() => {
+    clearUploadNotice('r1');
+  });
+
+  it('UI-35 keeps no draft while a new editor holds what it opened with', () => {
+    renderNew();
+
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('UI-35 writes the fields to cookbook.draft for the user and "new" once they differ', () => {
+    renderNew();
+
+    set('Title', 'Shakshuka');
+
+    expect(storedDraft()).toEqual({
+      userId: 'u1',
+      target: 'new',
+      fields: {
+        title: 'Shakshuka',
+        description: '',
+        category: '',
+        servings: '2',
+        prepMinutes: '',
+        cookMinutes: '',
+        ingredients: [{ quantity: null, unit: 'none', name: '' }],
+        steps: [{ text: '' }],
+      },
+    });
+
+    set('Ingredient 1', 'eggs');
+    set('Step 1', 'Fry the onion.');
+
+    expect(storedDraft()?.fields.ingredients[0]?.name).toBe('eggs');
+    expect(storedDraft()?.fields.steps).toEqual([{ text: 'Fry the onion.' }]);
+  });
+
+  it('UI-35 clears the draft once the fields are back to what the editor opened with', () => {
+    renderNew();
+    set('Title', 'Shakshuka');
+    expect(storedDraft()).not.toBeNull();
+
+    set('Title', '');
+
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('UI-35 keeps the draft when the editor goes away unsaved, and the same user gets it back', () => {
+    const first = renderNew();
+    set('Title', 'Shakshuka');
+    set('Servings', '3');
+    first.unmount();
+
+    expect(storedDraft()?.fields.title).toBe('Shakshuka');
+
+    renderNew();
+
+    expect(value('Title')).toBe('Shakshuka');
+    expect(value('Servings')).toBe('3');
+  });
+
+  it('UI-35 restores every field of a draft kept for this user on a new recipe and reports it dirty', () => {
+    writeEditorDraft('u1', 'new', NEW_DRAFT);
+    const onDirtyChange = vi.fn();
+
+    renderNew({ onDirtyChange });
+
+    expect(value('Title')).toBe('Ramen');
+    expect(value('Description')).toBe('A quick weeknight bowl.');
+    expect(value('Category')).toBe('Miscellaneous');
+    expect(value('Servings')).toBe('4');
+    expect(value('Prep minutes')).toBe('15');
+    expect(value('Cook minutes')).toBe('25');
+    expect(value('Quantity 1')).toBe('200');
+    expect(value('Unit 1')).toBe('g');
+    expect(value('Ingredient 1')).toBe('noodles');
+    expect(value('Ingredient 2')).toBe('stock');
+    expect(value('Note 2')).toBe('hot');
+    expect(value('Step 1')).toBe('Boil the noodles.');
+    expect(value('Step 1 minutes')).toBe('4');
+    expect(value('Step 2')).toBe('Serve.');
+    // UI-40: the restored fields differ from the empty editor.
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+    // The draft stays until Save or Discard.
+    expect(readEditorDraft('u1', 'new')).toEqual(NEW_DRAFT);
+  });
+
+  it('UI-35 creates the recipe from the restored draft', async () => {
+    writeEditorDraft('u1', 'new', NEW_DRAFT);
+    const onSaved = vi.fn();
+    renderNew({ onSaved });
+
+    create();
+
+    await waitFor(() => expect(mocks.api.createRecipe).toHaveBeenCalledTimes(1));
+    const request = mocks.api.createRecipe.mock.calls[0][0];
+    expect(request.title).toBe('Ramen');
+    expect(request.category).toBe('Miscellaneous');
+    expect(request.servings).toBe(4);
+    expect(request.ingredients.map((row: { name: string }) => row.name)).toEqual([
+      'noodles',
+      'stock',
+    ]);
+    expect(request.steps[0]).toEqual({ text: 'Boil the noodles.', durationMinutes: 4 });
+  });
+
+  it("UI-35 ignores another user's draft, and the editor opening unchanged clears it", () => {
+    writeEditorDraft('u2', 'new', NEW_DRAFT);
+
+    renderNew();
+
+    expect(value('Title')).toBe('');
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+  });
+
+  it("UI-35 ignores another editor's draft on a new recipe and clears it (one draft per window)", () => {
+    writeEditorDraft('u1', 'r1', { ...LOADED, title: 'Shakshuka deluxe' });
+
+    renderNew();
+
+    expect(value('Title')).toBe('');
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('UI-35 ignores a malformed draft and clears it', () => {
+    sessionStorage.setItem(
+      DRAFT_STORAGE_KEY,
+      JSON.stringify({
+        userId: 'u1',
+        target: 'new',
+        fields: { ...NEW_DRAFT, category: 'Soup' },
+      }),
+    );
+
+    renderNew();
+
+    expect(value('Title')).toBe('');
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('UI-35 does not keep picked image files', async () => {
+    const onDirtyChange = vi.fn();
+    renderNew({ onDirtyChange });
+
+    pick(png('one.png'));
+    await screen.findByRole('button', { name: /one\.png/ });
+
+    // UI-40 still counts the picked file, but no draft holds it.
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+
+    set('Title', 'Shakshuka');
+
+    expect(Object.keys(storedDraft()?.fields ?? {}).sort()).toEqual(
+      [
+        'category',
+        'cookMinutes',
+        'description',
+        'ingredients',
+        'prepMinutes',
+        'servings',
+        'steps',
+        'title',
+      ],
+    );
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).not.toContain('one.png');
+  });
+
+  it('UI-35 Save on create clears the draft after createRecipe and before the image uploads', async () => {
+    let draftWhenCreating: string | null = 'unread';
+    let draftWhenUploading: string | null = 'unread';
+    mocks.api.createRecipe.mockImplementation(async () => {
+      draftWhenCreating = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+      return CREATED;
+    });
+    mocks.api.uploadImage.mockImplementation(async () => {
+      draftWhenUploading = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+      return { imageUrls: [OWN_IMAGE] };
+    });
+    const onSaved = vi.fn();
+    renderNew({ onSaved });
+    fillValid();
+    pick(png('one.png'));
+    await screen.findByRole('button', { name: /one\.png/ });
+
+    create();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(draftWhenCreating).not.toBeNull();
+    expect(draftWhenUploading).toBeNull();
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('UI-35 keeps the draft when POST /recipes fails', async () => {
+    mocks.api.createRecipe.mockRejectedValue(
+      new ApiError(503, "Something went wrong on CookBook's server. Try again."),
+    );
+    renderNew();
+    fillValid();
+
+    create();
+
+    expect(
+      await screen.findByText(
+        "Something went wrong on CookBook's server. Try again.",
+      ),
+    ).toBeTruthy();
+    expect(storedDraft()?.fields.title).toBe('Shakshuka');
+  });
+
+  it('UI-35 writes nothing on edit until the recipe has loaded', async () => {
+    const kept = { ...LOADED, title: 'Shakshuka deluxe' };
+    writeEditorDraft('u1', 'r1', kept);
+    const before = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+    mocks.api.getRecipe.mockReturnValue(new Promise(() => undefined));
+
+    render(
+      <RecipeEditorScreen recipeId="r1" onSaved={vi.fn()} onCancel={vi.fn()} />,
+    );
+    await waitFor(() => expect(mocks.api.getRecipe).toHaveBeenCalled());
+
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBe(before);
+  });
+
+  it('UI-35 lays a draft kept for this recipe over the loaded version and reports it dirty', async () => {
+    writeEditorDraft('u1', 'r1', {
+      ...LOADED,
+      title: 'Shakshuka deluxe',
+      ingredients: [
+        ...LOADED.ingredients,
+        { quantity: 1, unit: 'tsp', name: 'cumin' },
+      ],
+    });
+    const onDirtyChange = vi.fn();
+
+    openEditor(EXISTING, { onDirtyChange });
+
+    expect(await screen.findByDisplayValue('Shakshuka deluxe')).toBeTruthy();
+    expect(value('Ingredient 3')).toBe('cumin');
+    expect(value('Category')).toBe('Beef');
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
+    expect(readEditorDraft('u1', 'r1')?.title).toBe('Shakshuka deluxe');
+  });
+
+  it('UI-35 UI-40 keeps the loaded version as the opening state under a restored draft', async () => {
+    writeEditorDraft('u1', 'r1', { ...LOADED, title: 'Shakshuka deluxe' });
+    const onDirtyChange = vi.fn();
+    openEditor(EXISTING, { onDirtyChange });
+    await screen.findByDisplayValue('Shakshuka deluxe');
+
+    set('Title', 'Shakshuka');
+
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('UI-35 an edit that opens unchanged clears a draft kept for another editor', async () => {
+    writeEditorDraft('u1', 'new', NEW_DRAFT);
+
+    openEditor(EXISTING);
+
+    await screen.findByDisplayValue('tomatoes');
+    expect(value('Title')).toBe('Shakshuka');
+    await waitFor(() =>
+      expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull(),
+    );
+  });
+
+  it('UI-35 writes an edit draft under the recipe id', async () => {
+    openEditor(EXISTING);
+    await screen.findByDisplayValue('tomatoes');
+
+    set('Note 2', 'diced');
+
+    const draft = storedDraft();
+    expect(draft?.userId).toBe('u1');
+    expect(draft?.target).toBe('r1');
+    expect(draft?.fields.ingredients[1]).toEqual({
+      quantity: 200,
+      unit: 'g',
+      name: 'tomatoes',
+      note: 'diced',
+    });
+  });
+
+  it('UI-35 Save on edit clears the draft after updateRecipe', async () => {
+    const saved = { ...EXISTING, versionNumber: 3, versionCount: 3 };
+    let draftWhenSaving: string | null = 'unread';
+    mocks.api.updateRecipe.mockImplementation(async () => {
+      draftWhenSaving = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+      return saved;
+    });
+    const onSaved = vi.fn();
+    mocks.api.getRecipe.mockResolvedValue(EXISTING);
+    render(
+      <RecipeEditorScreen recipeId="r1" onSaved={onSaved} onCancel={vi.fn()} />,
+    );
+    await screen.findByDisplayValue('tomatoes');
+    set('Note 2', 'diced');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save version' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(saved));
+    expect(draftWhenSaving).not.toBeNull();
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('UI-35 keeps the edit draft when the save fails', async () => {
+    mocks.api.updateRecipe.mockRejectedValue(
+      new ApiError(503, "Something went wrong on CookBook's server. Try again."),
+    );
+    openEditor(EXISTING);
+    await screen.findByDisplayValue('tomatoes');
+    set('Note 2', 'diced');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save version' }));
+
+    expect(
+      await screen.findByText(
+        "Something went wrong on CookBook's server. Try again.",
+      ),
+    ).toBeTruthy();
+    expect(storedDraft()?.target).toBe('r1');
+    expect(storedDraft()?.fields.ingredients[1]?.note).toBe('diced');
   });
 });

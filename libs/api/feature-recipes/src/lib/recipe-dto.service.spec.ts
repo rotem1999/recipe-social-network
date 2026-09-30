@@ -1,5 +1,5 @@
 // §11.6 response bodies: RATE-2/4, COM-1/2, CAT-6, SAVE-2/6/7/9/10, DISC-10, REC-6/7.
-import { In, IsNull } from 'typeorm';
+import { In, IsNull, Not } from 'typeorm';
 import type { Repository } from 'typeorm';
 import type {
   RatingEntity,
@@ -1115,6 +1115,130 @@ describe('RecipeDtoService.listPublicCards (DISC-1, DISC-10, SAVE-7)', () => {
 
     expect(page.cards).toHaveLength(2);
     expect(page.hasMore).toBe(false);
+  });
+});
+
+describe('RecipeDtoService.listPublicCards recommendation exclusions (WX-10, BUG-027)', () => {
+  /** The `where` of the page query: the find call that asks for public rows. */
+  function pageWhere(h: Harness): Record<string, unknown> {
+    const call = (h.recipes.find.mock.calls as [{ where: Record<string, unknown> }][])
+      .map(([options]) => options)
+      .find((options) => options.where['visibility'] === 'public');
+    if (call === undefined) throw new Error('no page query was made');
+    return call.where;
+  }
+
+  it('DISC-1 the Discover feed without exclusions keeps own recipes and copied sources and reads no copies first', async () => {
+    const h = harness('none');
+
+    await h.service.listPublicCards(ME, { page: 1, pageSize: 20 });
+
+    expect(h.recipes.find).toHaveBeenCalledTimes(1);
+    expect(pageWhere(h)).toEqual({ visibility: 'public', deletedAt: IsNull() });
+  });
+
+  it('WX-10 excludeOwnerId leaves out the recipes that user owns', async () => {
+    const h = harness('none');
+
+    await h.service.listPublicCards(ME, {
+      page: 1,
+      pageSize: 30,
+      excludeOwnerId: ME,
+    });
+
+    expect(h.recipes.find).toHaveBeenCalledTimes(1);
+    expect(pageWhere(h)).toEqual({
+      visibility: 'public',
+      deletedAt: IsNull(),
+      ownerId: Not(ME),
+    });
+  });
+
+  it('WX-10 excludeCopiedBy reads that user live copies (saved copies and forks, not deleted) before the page', async () => {
+    const h = harness('none');
+    h.recipes.find
+      .mockResolvedValueOnce([
+        { id: 'copy-1', savedFromRecipeId: 'source-1' },
+        { id: 'fork-2', savedFromRecipeId: 'source-2' },
+      ])
+      .mockResolvedValue([]);
+
+    await h.service.listPublicCards(ME, {
+      page: 1,
+      pageSize: 30,
+      excludeCopiedBy: ME,
+    });
+
+    expect(h.recipes.find).toHaveBeenNthCalledWith(1, {
+      where: {
+        ownerId: ME,
+        savedFromRecipeId: Not(IsNull()),
+        deletedAt: IsNull(),
+      },
+      select: { id: true, savedFromRecipeId: true },
+    });
+    expect(pageWhere(h)).toEqual({
+      visibility: 'public',
+      deletedAt: IsNull(),
+      id: Not(In(['source-1', 'source-2'])),
+    });
+  });
+
+  it('WX-10 merges the copied sources with excludeIds, each id once', async () => {
+    const h = harness('none');
+    h.recipes.find
+      .mockResolvedValueOnce([
+        { id: 'copy-1', savedFromRecipeId: 'source-1' },
+        { id: 'copy-1b', savedFromRecipeId: 'source-1' },
+        { id: 'copy-2', savedFromRecipeId: 'shown-1' },
+      ])
+      .mockResolvedValue([]);
+
+    await h.service.listPublicCards(ME, {
+      page: 1,
+      pageSize: 30,
+      excludeIds: ['shown-1', 'shown-2'],
+      excludeOwnerId: ME,
+      excludeCopiedBy: ME,
+    });
+
+    expect(pageWhere(h)).toEqual({
+      visibility: 'public',
+      deletedAt: IsNull(),
+      ownerId: Not(ME),
+      id: Not(In(['shown-1', 'shown-2', 'source-1'])),
+    });
+  });
+
+  it('WX-10 adds no id clause when the user has no live copy and nothing else is excluded', async () => {
+    const h = harness('none');
+
+    await h.service.listPublicCards(ME, {
+      page: 1,
+      pageSize: 30,
+      excludeIds: [],
+      excludeCopiedBy: ME,
+    });
+
+    expect(h.recipes.find).toHaveBeenCalledTimes(2);
+    expect(pageWhere(h)).toEqual({ visibility: 'public', deletedAt: IsNull() });
+  });
+
+  it('WX-5 excludeIds alone still leaves out the shown ids', async () => {
+    const h = harness('none');
+
+    await h.service.listPublicCards(ME, {
+      page: 1,
+      pageSize: 30,
+      excludeIds: ['shown-1'],
+    });
+
+    expect(h.recipes.find).toHaveBeenCalledTimes(1);
+    expect(pageWhere(h)).toEqual({
+      visibility: 'public',
+      deletedAt: IsNull(),
+      id: Not(In(['shown-1'])),
+    });
   });
 });
 

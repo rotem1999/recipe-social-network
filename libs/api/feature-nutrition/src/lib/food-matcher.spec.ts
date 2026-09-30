@@ -2,7 +2,7 @@
 // ingredient name means. Pure functions, no I/O; hits use the §9 field names.
 import type { UsdaFoodHit } from '@rsn/api/data-access-usda';
 
-import { chooseFood, scoreHit, strictQuery } from './food-matcher';
+import { chooseFood, rankFoods, scoreHit, strictQuery } from './food-matcher';
 
 let nextFdcId = 1;
 
@@ -285,5 +285,65 @@ describe('container words in food choice (NUT-8)', () => {
   it('NUT-8 a name of container words only keeps its last word as the head ("Slices")', () => {
     expect(scoreHit('Slices', hit('Garlic, raw'))).toBe(null);
     expect(scoreHit('Slices', hit('Slices, bread'))).not.toBe(null);
+  });
+});
+
+describe('rankFoods (NUT-8, NUT-9)', () => {
+  it('NUT-8 orders the surviving hits by score, best first', () => {
+    const ranked = rankFoods('Garlic', [
+      hit('Garlic sauce'),
+      hit('Garlic, cooked'),
+      hit('Garlic, raw'),
+    ]);
+    expect(ranked.map((food) => food.description)).toEqual([
+      'Garlic, raw',
+      'Garlic, cooked',
+      'Garlic sauce',
+    ]);
+  });
+
+  it('NUT-9 leaves out the hits the NUT-8 skips drop (no energy, no head word)', () => {
+    const ranked = rankFoods('Garlic', [
+      hit('Garlic, raw', { kcalPer100g: null }),
+      hit('Onions, raw'),
+      hit('Garlic, cooked'),
+    ]);
+    expect(ranked.map((food) => food.description)).toEqual(['Garlic, cooked']);
+  });
+
+  it('NUT-8 breaks a score tie by fewer words, then by USDA order', () => {
+    const ghee = hit('Butter, Clarified butter (ghee)');
+    const salted = hit('Butter, salted');
+    const whipped = hit('Butter, whipped');
+    const tub = hit('Butter, tub');
+    expect(rankFoods('Butter', [ghee, salted, whipped, tub])).toEqual([
+      salted,
+      whipped,
+      tub,
+      ghee,
+    ]);
+    expect(rankFoods('Butter', [tub, whipped, salted, ghee])).toEqual([
+      tub,
+      whipped,
+      salted,
+      ghee,
+    ]);
+  });
+
+  it('NUT-5 returns an empty list when every hit is skipped or there are none', () => {
+    expect(rankFoods('Garlic', [hit('Onions, raw')])).toEqual([]);
+    expect(rankFoods('Garlic', [])).toEqual([]);
+  });
+
+  it('NUT-8 chooseFood is the first ranked hit', () => {
+    const hits = [hit('Garlic sauce'), hit('Garlic, raw'), hit('Garlic, cooked')];
+    expect(chooseFood('Garlic', hits)).toBe(rankFoods('Garlic', hits)[0]);
+  });
+
+  it('NUT-8 does not reorder the hits it was given', () => {
+    const hits = [hit('Garlic sauce'), hit('Garlic, raw')];
+    const before = [...hits];
+    rankFoods('Garlic', hits);
+    expect(hits).toEqual(before);
   });
 });

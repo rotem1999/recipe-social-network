@@ -222,6 +222,16 @@ describe('CookService.ask (COOK-5, COOK-8, COOK-10)', () => {
     expect(input.temperature).toBe(0.4);
   });
 
+  it('COOK-10 switches reasoning off with reasoning { effort: "none" }', async () => {
+    const harness = makeHarness();
+
+    await harness.service.ask(USER, { recipeId: RECIPE_ID, stepIndex: 0 });
+
+    const [input] = harness.openRouter.chat.mock.calls[0];
+    expect(input.reasoning).toEqual({ effort: 'none' });
+    expect(input.responseFormatJson).toBeUndefined();
+  });
+
   it('COOK-9 sends exactly the two built messages, carrying the current step', async () => {
     const harness = makeHarness();
 

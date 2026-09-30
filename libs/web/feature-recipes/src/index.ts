@@ -14,4 +14,6 @@ export { RecipeDetailScreen } from './lib/recipe-detail-screen';
 export type { RecipeDetailScreenProps } from './lib/recipe-detail-screen';
 
 export { RecipeEditorScreen } from './lib/recipe-editor-screen';
+// UI-35: the shell's UI-40 Discard clears the editor's kept draft.
+export { clearEditorDraft, DRAFT_STORAGE_KEY } from './lib/editor-draft';
 export type { RecipeEditorScreenProps } from './lib/recipe-editor-screen';

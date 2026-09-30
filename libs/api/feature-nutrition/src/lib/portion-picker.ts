@@ -1,6 +1,9 @@
 // SPEC.md NUT-9: the weight of one piece of a food, from its USDA portions.
+// SPEC.md NUT-6: the weight of one cup, tablespoon or teaspoon of a food, likewise.
 
 import type { UsdaFoodPortion } from '@rsn/api/data-access-usda';
+import { readLeadingNumber } from '@rsn/shared/util-domain';
+import type { Unit } from '@rsn/shared/util-domain';
 
 import { containsPhrase, headWord, toWords } from './words';
 
@@ -94,6 +97,58 @@ export function pickPieceGrams(
   for (const rule of rules) {
     const found = candidates.find(rule);
     if (found !== undefined) return found.gramsPerPiece;
+  }
+  return null;
+}
+
+/** NUT-6: the household measures a food's own portion may weigh. */
+export type HouseholdMeasure = Extract<Unit, 'cup' | 'tbsp' | 'tsp'>;
+
+/** NUT-6: the portion words, after the NUT-8 word rules, that name each measure. */
+const MEASURE_WORDS: Readonly<Record<HouseholdMeasure, ReadonlySet<string>>> = {
+  cup: new Set(['cup']),
+  tbsp: new Set(['tbsp', 'tablespoon']),
+  tsp: new Set(['tsp', 'teaspoon']),
+};
+
+/** NUT-6: whether `unit` is a measure the chosen food's own portion weighs first. */
+export function isHouseholdMeasure(unit: Unit): unit is HouseholdMeasure {
+  return unit === 'cup' || unit === 'tbsp' || unit === 'tsp';
+}
+
+/**
+ * NUT-6: grams of one measure unit of a portion. A `portionDescription` that
+ * starts with a number (CAT-6 forms: "2 tablespoons", "1/2 cup", "1 1/2 cups")
+ * divides `gramWeight` by it; otherwise the NUT-9 weight per unit applies.
+ * The client keeps `amount` only for `modifier` text (NUT-9), so a null
+ * `amount` marks text that is the `portionDescription`, or else a unit name
+ * alone, which never starts with a number.
+ */
+function gramsPerMeasure(portion: UsdaFoodPortion): number {
+  if (portion.amount === null) {
+    const leading = readLeadingNumber(portion.description.trim());
+    if (leading !== null && leading.value > 0) {
+      return portion.gramWeight / leading.value;
+    }
+  }
+  return gramsPerPiece(portion);
+}
+
+/**
+ * NUT-6: grams of one `measure` of a food, from the first portion in NUT-9
+ * `sequenceNumber` order whose text (NUT-9 word rules) names that measure
+ * ("1 cup", "cup, chopped", "2 tablespoons"), per unit of the measure;
+ * null when no portion names it, and the caller falls back to water density.
+ */
+export function pickMeasureGrams(
+  portions: readonly UsdaFoodPortion[],
+  measure: HouseholdMeasure,
+): number | null {
+  const words = MEASURE_WORDS[measure];
+  for (const portion of inSequence(portions)) {
+    if (toWords(portion.description).some((word) => words.has(word))) {
+      return gramsPerMeasure(portion);
+    }
   }
   return null;
 }
