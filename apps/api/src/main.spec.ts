@@ -4,6 +4,8 @@
 // "ingredients.0.Name this ingredient"). `validationMessages` is not exported,
 // so the bootstrap runs against a fake Nest application and the pipe it
 // registers is exercised directly. No server listens, no database is opened.
+// SPEC §11.7 DOC-1: the same bootstrap mounts the API docs once, after the global
+// prefix and before listen; `setupApiDocs` is mocked, so no Swagger route is built.
 import 'reflect-metadata';
 import {
   BadRequestException,
@@ -25,6 +27,7 @@ import {
 // without the ESM-only packages.
 import { RecipeWriteDto } from '@rsn/api/feature-recipes';
 import { CommentRequestDto } from '@rsn/api/feature-social';
+import { setupApiDocs } from '@rsn/api/util-openapi';
 
 /**
  * `@nestjs/typeorm` 12.0.2, `@nestjs/jwt` 12.0.2 and `@nestjs/config` 5.x are published as
@@ -63,6 +66,18 @@ jest.mock('@nestjs/core', () => ({
   NestFactory: { create: jest.fn(async () => fakeApp) },
 }));
 jest.mock('./app/app.module', () => ({ AppModule: class AppModule {} }));
+/**
+ * DOC-1: only `setupApiDocs` is replaced; the rest of the library stays real because
+ * the feature controllers loaded with the DTOs use its `ApiErrorResponses` decorator.
+ */
+jest.mock('@rsn/api/util-openapi', () => ({
+  ...jest.requireActual('@rsn/api/util-openapi'),
+  setupApiDocs: jest.fn(() => true),
+}));
+
+const setupApiDocsMock = setupApiDocs as jest.MockedFunction<
+  typeof setupApiDocs
+>;
 
 /** A two-level DTO: a list of groups, each with a list of named items. */
 class ItemBody {
@@ -123,7 +138,11 @@ describe('main.ts bootstrap: the global ValidationPipe (UI-43)', () => {
     jest.spyOn(Logger, 'log').mockImplementation(() => undefined);
     await import('./main');
     // bootstrap() is started with `void`; let its awaits settle.
-    for (let tick = 0; tick < 10 && fakeApp.listen.mock.calls.length === 0; tick++) {
+    for (
+      let tick = 0;
+      tick < 10 && fakeApp.listen.mock.calls.length === 0;
+      tick++
+    ) {
       await new Promise((resolve) => setImmediate(resolve));
     }
     const registered = fakeApp.useGlobalPipes.mock.calls.flat();
@@ -152,7 +171,10 @@ describe('main.ts bootstrap: the global ValidationPipe (UI-43)', () => {
   it('UI-43 sends a nested message without the property path', async () => {
     const messages = await messagesOf(
       pipe,
-      { title: 'Box', groups: [{ label: 'Tools', items: [{ name: '', count: 2 }] }] },
+      {
+        title: 'Box',
+        groups: [{ label: 'Tools', items: [{ name: '', count: 2 }] }],
+      },
       OuterBody,
     );
 
@@ -188,13 +210,19 @@ describe('main.ts bootstrap: the global ValidationPipe (UI-43)', () => {
 
     expect(messages.length).toBeGreaterThan(0);
     for (const message of messages) {
-      expect(message).not.toMatch(/^(title|groups|items|label|name|count)\b|\.\d+\./);
+      expect(message).not.toMatch(
+        /^(title|groups|items|label|name|count)\b|\.\d+\./,
+      );
     }
   });
 
   it('UI-43 keeps whitelist and transform on: an unknown field is dropped and a valid body passes', async () => {
     const value = await pipe.transform(
-      { title: 'Box', groups: [{ label: 'Tools', items: [{ name: 'saw', count: 1 }] }], extra: 'x' },
+      {
+        title: 'Box',
+        groups: [{ label: 'Tools', items: [{ name: 'saw', count: 1 }] }],
+        extra: 'x',
+      },
       bodyOf(OuterBody),
     );
 
@@ -251,5 +279,47 @@ describe('main.ts bootstrap: the global ValidationPipe (UI-43)', () => {
 
     expect(recipe).toEqual(['Servings can be at most 6']);
     expect(comment).toEqual(['Write a comment']);
+  });
+});
+
+describe('main.ts bootstrap: the API docs (DOC-1)', () => {
+  beforeAll(async () => {
+    jest.spyOn(Logger, 'log').mockImplementation(() => undefined);
+    // The module is cached, so this is the same single bootstrap run as above.
+    await import('./main');
+    for (
+      let tick = 0;
+      tick < 10 && fakeApp.listen.mock.calls.length === 0;
+      tick++
+    ) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  });
+
+  afterAll(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('DOC-1 calls setupApiDocs exactly once', () => {
+    expect(setupApiDocsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('DOC-1 passes the app, the global prefix it set and process.env', () => {
+    expect(fakeApp.setGlobalPrefix).toHaveBeenCalledTimes(1);
+    const [globalPrefix] = fakeApp.setGlobalPrefix.mock.calls[0] as [string];
+    const [app, options] = setupApiDocsMock.mock.calls[0];
+
+    expect(app).toBe(fakeApp);
+    expect(options.globalPrefix).toBe(globalPrefix);
+    expect(options.env).toBe(process.env);
+  });
+
+  it('DOC-1 mounts the docs after setGlobalPrefix and before listen', () => {
+    const docsOrder = setupApiDocsMock.mock.invocationCallOrder[0];
+
+    expect(fakeApp.setGlobalPrefix.mock.invocationCallOrder[0]).toBeLessThan(
+      docsOrder,
+    );
+    expect(docsOrder).toBeLessThan(fakeApp.listen.mock.invocationCallOrder[0]);
   });
 });
