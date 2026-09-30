@@ -100,6 +100,16 @@ On Windows, if a dev server exits with `write EPIPE`, the Nx daemon restarted un
 $env:NX_DAEMON='false'; pnpm nx serve web
 ```
 
+### Open the renderer from another machine
+
+The web dev server forwards every request under `/api/v1` to the API on `localhost:3000`; it follows `API_PORT` and `API_GLOBAL_PREFIX` from the environment, `.env.local` or `.env`. Point the renderer at that path and serve on every network interface, in PowerShell:
+
+```powershell
+$env:VITE_API_BASE_URL='/api/v1'; pnpm nx serve web --host 0.0.0.0
+```
+
+Then open `http://<this PC's IP>:4200`, or `http://csn.dvirlabs.com:4200`, the one host name the dev server accepts besides localhost (and `*.localhost`) and IP addresses. The dev server serves files only from `apps/web`, `libs` and `node_modules`, so nothing else in the repository (a service-account JSON, `log/`) is reachable through it. Only port 4200 has to be reachable: allow it in Windows Firewall, and forward it on the router for devices outside the local network. The API's port and `CORS_ORIGINS` stay as they are. If the API is not running, API calls through the dev server fail with a 500, and the renderer shows its server-error message.
+
 In development React StrictMode mounts effects twice, so the Home screen sends each recommendation request twice. Production builds do not.
 
 ## API documentation
