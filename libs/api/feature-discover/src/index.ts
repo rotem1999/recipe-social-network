@@ -6,3 +6,9 @@ export { DiscoverController } from './lib/discover.controller';
 export { DiscoverQueryDto } from './lib/dto/discover-query.dto';
 export { CataloguePreviewParamsDto } from './lib/dto/catalogue-preview-params.dto';
 export { FavouriteCategoriesDto } from './lib/dto/favourite-categories.dto';
+export {
+  CatalogueItemResponseDto,
+  CataloguePreviewResponseDto,
+  DiscoverCategoryResponseDto,
+  DiscoverResponseDto,
+} from './lib/dto/discover-response.dto';

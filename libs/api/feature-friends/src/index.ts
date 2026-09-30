@@ -4,3 +4,10 @@ export { FriendsService } from './lib/friends.service';
 export { FriendsController } from './lib/friends.controller';
 export { UserSearchController } from './lib/user-search.controller';
 export { SendFriendRequestDto } from './lib/dto/send-friend-request.dto';
+export {
+  FriendRequestResponseDto,
+  FriendResponseDto,
+  FriendsResponseDto,
+  UserSearchResponseDto,
+  UserSearchResultResponseDto,
+} from './lib/dto/friends-response.dto';
