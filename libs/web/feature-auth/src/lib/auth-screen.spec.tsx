@@ -88,6 +88,87 @@ describe('AuthScreen', () => {
     expect(screen.getByRole('button', { name: 'Create account' })).toBeTruthy();
   });
 
+  it('UI-9 shows the username and email hints on sign-up while their fields have no error', () => {
+    render(<AuthScreen />);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign up' }));
+
+    expect(
+      screen.getByText(
+        'Use 3 to 32 characters: letters, numbers, underscore, dot or hyphen.',
+      ).classList.contains('field-hint'),
+    ).toBe(true);
+    expect(
+      screen
+        .getByText('Lets friends find you by email.')
+        .classList.contains('field-hint'),
+    ).toBe(true);
+  });
+
+  it('UI-9 hides the username hint while the username shows an error, so the rule is printed once', async () => {
+    render(<AuthScreen />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign up' }));
+
+    type('Username', 'x');
+    type('Password', 'correct-horse');
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
+
+    const rule =
+      'Use 3 to 32 characters: letters, numbers, underscore, dot or hyphen.';
+    const shown = await screen.findAllByText(rule);
+    expect(shown).toHaveLength(1);
+    expect(shown[0].getAttribute('role')).toBe('alert');
+    expect(shown[0].classList.contains('field-hint')).toBe(false);
+    // The email field has no error, so its hint stays.
+    expect(screen.getByText('Lets friends find you by email.')).toBeTruthy();
+    expect(mocks.signUp).not.toHaveBeenCalled();
+  });
+
+  it('UI-9 hides the email hint while the email shows an error', async () => {
+    render(<AuthScreen />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign up' }));
+
+    type('Username', 'rotem');
+    type('Password', 'correct-horse');
+    type('Email (optional)', 'not-an-email');
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
+
+    expect(
+      await screen.findByText('Enter an email address like you@example.com.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('Lets friends find you by email.')).toBeNull();
+    // The username has no error, so its hint stays.
+    expect(
+      screen
+        .getByText(
+          'Use 3 to 32 characters: letters, numbers, underscore, dot or hyphen.',
+        )
+        .classList.contains('field-hint'),
+    ).toBe(true);
+    expect(mocks.signUp).not.toHaveBeenCalled();
+  });
+
+  it('UI-9 brings the hints back when the switch clears the errors', async () => {
+    render(<AuthScreen />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign up' }));
+    type('Username', 'x');
+    type('Password', 'correct-horse');
+    type('Email (optional)', 'not-an-email');
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
+    await screen.findByText('Enter an email address like you@example.com.');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign in' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign up' }));
+
+    expect(screen.getByText('Lets friends find you by email.')).toBeTruthy();
+    expect(
+      screen.getAllByText(
+        'Use 3 to 32 characters: letters, numbers, underscore, dot or hyphen.',
+      ),
+    ).toHaveLength(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it("UI-9 shows the API's ApiError message inline under the form", async () => {
     mocks.signIn.mockRejectedValue(new ApiError(401, 'Wrong username or password'));
     render(<AuthScreen />);

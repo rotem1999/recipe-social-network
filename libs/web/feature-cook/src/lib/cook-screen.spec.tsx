@@ -18,6 +18,7 @@ import type {
 } from '@rsn/shared/util-contracts';
 import { CookScreen } from './cook-screen';
 import type { CookScreenProps } from './cook-screen';
+import { ApiError } from '@rsn/web/data-access-api';
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -330,7 +331,7 @@ describe('CookScreen', () => {
     expect(mocks.api.cookAsk).toHaveBeenCalledTimes(1);
   });
 
-  it('UNSPECIFIED an Enter that confirms an IME composition does not ask', async () => {
+  it('UI-15 an Enter that confirms an IME composition does not ask', async () => {
     show();
     const box = await screen.findByLabelText('Question about this step');
     await screen.findByText('3 of 100 AI asks left today');
@@ -338,6 +339,231 @@ describe('CookScreen', () => {
     fireEvent.keyDown(box, { key: 'Enter', isComposing: true });
 
     expect(mocks.api.cookAsk).not.toHaveBeenCalled();
+  });
+
+  it('UI-15 Shift+Enter in the question box starts a new line and does not ask', async () => {
+    show();
+    const box = await screen.findByLabelText('Question about this step');
+    await screen.findByText('3 of 100 AI asks left today');
+    fireEvent.change(box, { target: { value: 'Can I use shallots?' } });
+
+    // fireEvent returns false only when the handler called preventDefault.
+    const notPrevented = fireEvent.keyDown(box, {
+      key: 'Enter',
+      shiftKey: true,
+    });
+
+    expect(notPrevented).toBe(true);
+    expect(mocks.api.cookAsk).not.toHaveBeenCalled();
+  });
+
+  it('UI-15 a plain Enter in the question box is consumed and asks once', async () => {
+    show();
+    const box = await screen.findByLabelText('Question about this step');
+    await screen.findByText('3 of 100 AI asks left today');
+
+    const notPrevented = fireEvent.keyDown(box, { key: 'Enter' });
+
+    expect(notPrevented).toBe(false);
+    await waitFor(() => expect(mocks.api.cookAsk).toHaveBeenCalledTimes(1));
+  });
+
+  it('UI-15 COOK-10 makes the question box a one-row growing textarea capped at 500 characters', async () => {
+    show();
+
+    const box = await screen.findByLabelText('Question about this step');
+    expect(box.tagName).toBe('TEXTAREA');
+    expect(box.classList.contains('textarea-grow')).toBe(true);
+    expect(box.getAttribute('maxlength')).toBe('500');
+    expect(box.getAttribute('rows')).toBe('1');
+    // As wide as the answer box: the .cook-question wrapper, not a fixed inline width.
+    expect(box.closest('.cook-question')).not.toBeNull();
+    expect((box as HTMLTextAreaElement).style.maxWidth).toBe('');
+  });
+
+  it('UI-15 grows the question box to its content height, border included', async () => {
+    const scroll = vi
+      .spyOn(Element.prototype, 'scrollHeight', 'get')
+      .mockImplementation(function (this: Element) {
+        return this instanceof HTMLTextAreaElement
+          ? this.value.split('\n').length * 20
+          : 0;
+      });
+    const offset = vi
+      .spyOn(HTMLElement.prototype, 'offsetHeight', 'get')
+      .mockImplementation(function (this: HTMLElement) {
+        return this instanceof HTMLTextAreaElement ? 42 : 0;
+      });
+    const client = vi
+      .spyOn(Element.prototype, 'clientHeight', 'get')
+      .mockImplementation(function (this: Element) {
+        return this instanceof HTMLTextAreaElement ? 40 : 0;
+      });
+    try {
+      show();
+      const box = (await screen.findByLabelText(
+        'Question about this step',
+      )) as HTMLTextAreaElement;
+      expect(box.style.height).toBe('22px');
+
+      fireEvent.change(box, { target: { value: 'one\ntwo\nthree' } });
+      expect(box.style.height).toBe('62px');
+
+      // Deleted lines give their height back.
+      fireEvent.change(box, { target: { value: 'one' } });
+      expect(box.style.height).toBe('22px');
+    } finally {
+      scroll.mockRestore();
+      offset.mockRestore();
+      client.mockRestore();
+    }
+  });
+
+  it('UI-15 COOK-8 re-reads the quota after a 429, showing 0 and disabling Ask', async () => {
+    mocks.api.cookQuota
+      .mockResolvedValueOnce(QUOTA)
+      .mockResolvedValueOnce({ used: 100, limit: 100, remaining: 0 });
+    mocks.api.cookAsk.mockRejectedValue(
+      new ApiError(429, 'Daily AI quota reached'),
+    );
+    show();
+    await screen.findByText('3 of 100 AI asks left today');
+
+    fireEvent.click(screen.getByRole('button', { name: /Ask about this step/ }));
+
+    expect(await screen.findByText("You've used today's AI asks")).toBeTruthy();
+    expect(
+      await screen.findByText('0 of 100 AI asks left today'),
+    ).toBeTruthy();
+    expect(mocks.api.cookQuota).toHaveBeenCalledTimes(2);
+    const ask = screen.getByRole('button', { name: /No AI asks left today/ });
+    expect((ask as HTMLButtonElement).disabled).toBe(true);
+
+    // Enter no longer asks either.
+    fireEvent.keyDown(screen.getByLabelText('Question about this step'), {
+      key: 'Enter',
+    });
+    expect(mocks.api.cookAsk).toHaveBeenCalledTimes(1);
+  });
+
+  it('UI-15 COOK-10 re-reads the quota after a 5xx, so the spent unit shows', async () => {
+    mocks.api.cookQuota
+      .mockResolvedValueOnce(QUOTA)
+      .mockResolvedValueOnce({ used: 98, limit: 100, remaining: 2 });
+    mocks.api.cookAsk.mockRejectedValue(
+      new ApiError(503, "The assistant didn't answer. Ask again."),
+    );
+    show();
+    await screen.findByText('3 of 100 AI asks left today');
+
+    fireEvent.click(screen.getByRole('button', { name: /Ask about this step/ }));
+
+    expect(
+      await screen.findByText("The assistant didn't answer. Ask again."),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText('2 of 100 AI asks left today'),
+    ).toBeTruthy();
+    expect(mocks.api.cookQuota).toHaveBeenCalledTimes(2);
+    expect(
+      (
+        screen.getByRole('button', {
+          name: /Ask about this step/,
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+  });
+
+  it('UI-15 re-reads the quota after a 500 as well as a 503', async () => {
+    mocks.api.cookQuota
+      .mockResolvedValueOnce(QUOTA)
+      .mockResolvedValueOnce({ used: 98, limit: 100, remaining: 2 });
+    mocks.api.cookAsk.mockRejectedValue(
+      new ApiError(500, 'Something went wrong.'),
+    );
+    show();
+    await screen.findByText('3 of 100 AI asks left today');
+
+    fireEvent.click(screen.getByRole('button', { name: /Ask about this step/ }));
+
+    expect(
+      await screen.findByText('2 of 100 AI asks left today'),
+    ).toBeTruthy();
+    expect(mocks.api.cookQuota).toHaveBeenCalledTimes(2);
+  });
+
+  it('UI-15 does not re-read the quota after a 4xx other than 429 or a network error', async () => {
+    mocks.api.cookAsk
+      .mockRejectedValueOnce(new ApiError(403, 'You cannot cook this recipe.'))
+      .mockRejectedValueOnce(new ApiError(0, "Can't reach CookBook's server."));
+    show();
+    await screen.findByText('3 of 100 AI asks left today');
+
+    fireEvent.click(screen.getByRole('button', { name: /Ask about this step/ }));
+    expect(
+      await screen.findByText('You cannot cook this recipe.'),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Ask about this step/ }));
+    expect(
+      await screen.findByText("Can't reach CookBook's server."),
+    ).toBeTruthy();
+
+    expect(mocks.api.cookQuota).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('3 of 100 AI asks left today')).toBeTruthy();
+  });
+
+  it('UI-45 shows the cook-mode step text with its line breaks (text-pre-line)', async () => {
+    mocks.api.getRecipe.mockResolvedValue({
+      ...RECIPE,
+      steps: [{ text: 'Chop the onion.\nFry it until golden.' }],
+    });
+    show();
+
+    const step = await screen.findByRole('heading', { level: 1 });
+    expect(step.textContent).toBe('Chop the onion.\nFry it until golden.');
+    expect(step.classList.contains('text-pre-line')).toBe(true);
+  });
+
+  it('UI-15 keeps the line breaks and paragraphs of the AI answer (text-pre-line)', async () => {
+    const text = 'Keep the heat medium.\n\nStir now and then.';
+    mocks.api.cookAsk.mockResolvedValue({ ...ANSWER, answer: text });
+    show();
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Ask about this step/ }),
+    );
+
+    const answer = await screen.findByText(
+      (_content, element) =>
+        element?.classList.contains('cook-answer-text') === true &&
+        element.textContent === text,
+    );
+    expect(answer.classList.contains('text-pre-line')).toBe(true);
+  });
+
+  it('UI-37 BUG-030 fills the cook ingredients amount column with a note that is an amount', async () => {
+    mocks.api.getRecipe.mockResolvedValue({
+      ...RECIPE,
+      ingredients: [
+        { quantity: null, unit: 'none', name: 'Black Beans', note: '1 Can' },
+        { quantity: null, unit: 'none', name: 'Salt', note: 'to season' },
+        { quantity: 2, unit: 'piece', name: 'eggs' },
+      ],
+    });
+    const { container } = show();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Ingredients/ }));
+
+    const amounts = Array.from(container.querySelectorAll('.ingredient-qty'));
+    expect(amounts.map((element) => element.textContent)).toEqual([
+      '1 Can',
+      'to taste',
+      '2 pieces',
+    ]);
+    // UI-41: a note moved into the amount column keeps its own direction.
+    expect(amounts[0].getAttribute('dir')).toBe('auto');
+    expect(screen.getAllByText('1 Can')).toHaveLength(1);
+    expect(screen.getByText('to season').getAttribute('dir')).toBe('auto');
   });
 
   it('UI-15 / COOK-8 disables Ask with No AI asks left today when remaining is 0, and Enter does not ask', async () => {

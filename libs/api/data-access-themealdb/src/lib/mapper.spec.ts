@@ -126,6 +126,27 @@ describe('parseMeasure', () => {
     expect(parseMeasure('2 tbsps')).toEqual({ quantity: 2, unit: 'tbsp' });
     expect(parseMeasure('1 pinch')).toEqual({ quantity: 1, unit: 'pinch' });
   });
+
+  it.each(['pinch', 'a pinch', 'Pinch', 'A Pinch', 'A PINCH', '  a pinch  '])(
+    'CAT-6 reads the measure "%s" as the unit pinch with an empty quantity and no note',
+    (measure) => {
+      const parsed = parseMeasure(measure);
+
+      expect(parsed).toEqual({ quantity: null, unit: 'pinch' });
+      expect('note' in parsed).toBe(false);
+    },
+  );
+
+  it.each(['a pinch of salt', 'pinches', 'the pinch', 'pinch pinch'])(
+    'CAT-6 keeps "%s" raw because it is not only "pinch" or "a pinch"',
+    (measure) => {
+      expect(parseMeasure(measure)).toEqual({
+        quantity: null,
+        unit: 'none',
+        note: measure,
+      });
+    },
+  );
 });
 
 describe('toIngredients', () => {

@@ -178,7 +178,13 @@ export function AuthScreen(): ReactElement {
           label="Username"
           htmlFor={usernameId}
           error={errors.username}
-          hint={mode === 'sign-up' ? USERNAME_MESSAGE : undefined}
+          // UI-9: the grey hint hides while the field shows an error, so the rule
+          // is never printed twice.
+          hint={
+            mode === 'sign-up' && errors.username === undefined
+              ? USERNAME_MESSAGE
+              : undefined
+          }
         >
           <Input
             id={usernameId}
@@ -213,7 +219,12 @@ export function AuthScreen(): ReactElement {
             label="Email (optional)"
             htmlFor={emailId}
             error={errors.email}
-            hint="Lets friends find you by email."
+            // UI-9: the hint hides while the field shows an error.
+            hint={
+              errors.email === undefined
+                ? 'Lets friends find you by email.'
+                : undefined
+            }
           >
             <Input
               id={emailId}

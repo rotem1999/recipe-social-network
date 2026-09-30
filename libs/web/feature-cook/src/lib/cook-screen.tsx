@@ -1,7 +1,13 @@
 // SPEC.md §7 (COOK-1..COOK-10) and §11.5 UI-15/UI-47/UI-50, laid out from the
 // design guide §6 "Cook mode". The screen is full-width without the nav bar; the
 // shell hides the bar on the cook route (UI-16).
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactElement } from 'react';
 import {
   COOK_QUESTION_MAX_LENGTH,
@@ -15,11 +21,11 @@ import {
   EmptyState,
   Icon,
   InlineError,
-  Input,
   Kicker,
   ProgressBar,
   ProgressDots,
   Tag,
+  Textarea,
 } from '@rsn/web/ui';
 import { openChimeContext, playChime } from './cook-chime';
 import { CookIngredients } from './cook-ingredients';
@@ -84,11 +90,13 @@ export function CookScreen({
     loading: recipeLoading,
     error: recipeError,
   } = useRequest(() => api.getRecipe(recipeId), [recipeId]);
-  // UI-15: the quota is read on entry and replaced from every ask response.
-  const { data: quota, setData: setQuota } = useRequest(
-    () => api.cookQuota(),
-    [],
-  );
+  // UI-15: the quota is read on entry and replaced from every ask response;
+  // it is read again after a refused (429) or failed (5xx) ask.
+  const {
+    data: quota,
+    setData: setQuota,
+    reload: reloadQuota,
+  } = useRequest(() => api.cookQuota(), []);
 
   // UI-35: a restored step is clamped to the recipe's steps by `safeIndex`.
   const [stepIndex, setStepIndex] = useState(() =>
@@ -100,6 +108,9 @@ export function CookScreen({
   // UI-15: the chime's AudioContext, opened from the "Start timer" click.
   const audioRef = useRef<AudioContext | null>(null);
   const [question, setQuestion] = useState('');
+  // UI-15: the question box grows with its text; its wrapper finds the
+  // textarea, as the shared Textarea takes no ref.
+  const questionBoxRef = useRef<HTMLDivElement>(null);
   const [answer, setAnswer] = useState<string | null>(null);
   // UI-47: whether the shown answer replies to a typed question ("Answer") or
   // is the no-question tip ("Tip for this step").
@@ -260,23 +271,47 @@ export function CookScreen({
         return;
       }
       // COOK-8: the daily quota is refused server-side with 429.
+      const refused = cause instanceof ApiError && cause.status === 429;
       setAskError(
-        cause instanceof ApiError && cause.status === 429
+        refused
           ? "You've used today's AI asks"
           : cause instanceof Error
             ? cause.message
             : 'The assistant could not be reached.',
       );
+      // UI-15 / COOK-10: after a 429 the quota line shows 0 and Ask is
+      // disabled; after a 5xx the unit stays spent. Both re-read
+      // `GET /cook/quota`, as `ApiError` does not carry the 429 body.
+      if (refused || (cause instanceof ApiError && cause.status >= 500)) {
+        reloadQuota();
+      }
       setAsking(false);
     }
-  }, [api, outOfAsks, question, recipeId, safeIndex, setQuota]);
+  }, [api, outOfAsks, question, recipeId, reloadQuota, safeIndex, setQuota]);
+
+  // UI-15: the question box grows with its text; shrink first so deleted
+  // lines give their height back, and add the border, which scrollHeight
+  // leaves out (the approach of the editor's step textarea, UI-45).
+  useLayoutEffect(() => {
+    const area = questionBoxRef.current?.querySelector('textarea');
+    if (area === null || area === undefined) {
+      return;
+    }
+    area.style.height = 'auto';
+    area.style.height = `${area.scrollHeight + area.offsetHeight - area.clientHeight}px`;
+  }, [question, safeIndex, recipe]);
 
   // UI-15: Enter in the question box asks, unless an ask is running or none are
-  // left; an IME composition's Enter only confirms the composed text.
+  // left; Shift+Enter starts a new line, and an IME composition's Enter only
+  // confirms the composed text.
   const onQuestionKeyDown = (
-    event: ReactKeyboardEvent<HTMLInputElement>,
+    event: ReactKeyboardEvent<HTMLTextAreaElement>,
   ): void => {
-    if (event.key !== 'Enter' || event.nativeEvent.isComposing) {
+    if (
+      event.key !== 'Enter' ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing
+    ) {
       return;
     }
     event.preventDefault();
@@ -372,8 +407,8 @@ export function CookScreen({
         </Kicker>
         {/* UI-3: the step text is the screen's heading, so it takes the h1 token. */}
         {/* UI-41/UI-50: user-written text reads in its own direction; the
-            stage keeps the page's left alignment. */}
-        <h1 dir="auto" className="cook-step bidi-text">
+            stage keeps the page's left alignment. UI-45: its line breaks stay. */}
+        <h1 dir="auto" className="cook-step bidi-text text-pre-line">
           {step.text}
         </h1>
 
@@ -409,9 +444,15 @@ export function CookScreen({
             <Icon.Sparkles size={15} />
             {outOfAsks ? 'No AI asks left today' : 'Ask about this step'}
           </Button>
-          {/* COOK-10: the question is optional and capped at 500 characters;
-              Enter asks (UI-15); dir="auto" follows the typed text (UI-41). */}
-          <Input
+        </div>
+        {/* COOK-10: the question is optional and capped at 500 characters.
+            UI-15: an auto-growing textarea as wide as the answer box; Enter
+            asks, Shift+Enter starts a new line. UI-41: dir="auto" follows
+            the typed text. */}
+        <div ref={questionBoxRef} className="cook-question mt-3">
+          <Textarea
+            rows={1}
+            className="textarea-grow"
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             onKeyDown={onQuestionKeyDown}
@@ -419,7 +460,6 @@ export function CookScreen({
             maxLength={COOK_QUESTION_MAX_LENGTH}
             placeholder="Ask something about this step (optional)"
             aria-label="Question about this step"
-            style={{ maxWidth: '320px' }}
           />
         </div>
 
@@ -433,8 +473,12 @@ export function CookScreen({
             <Kicker tone="accent-2" className="mb-1">
               {answerForQuestion ? 'Answer' : 'Tip for this step'}
             </Kicker>
-            {/* UI-41/UI-50: AI text, directional inside the left-aligned panel. */}
-            <div dir="auto" className="cook-answer-text bidi-text">
+            {/* UI-41/UI-50: AI text, directional inside the left-aligned panel;
+                UI-15: it keeps its line breaks and paragraphs. */}
+            <div
+              dir="auto"
+              className="cook-answer-text bidi-text text-pre-line"
+            >
               {answer}
             </div>
           </div>

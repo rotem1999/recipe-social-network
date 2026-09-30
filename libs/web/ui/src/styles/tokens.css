@@ -541,6 +541,24 @@ textarea.input {
 .bidi-text.card-clamp {
   text-align: left;
 }
+/* UI-50: a clamped right-to-left title still ends with "…". Chromium draws the
+   line-clamp ellipsis at the line's end, which for right-to-left text is the
+   left, just outside the left-aligned text, where `overflow: hidden` would clip
+   it. The box reaches one ellipsis width further left (padding) and is pulled
+   back by the same amount (margin), so the text stays aligned with left-to-right
+   titles and the "…" hangs into the gutter before it. */
+.bidi-text.card-clamp:dir(rtl) {
+  margin-left: -1em;
+  padding-left: 1em;
+}
+/* UI-45, UI-15: steps, comments and AI answers keep their line breaks. */
+.text-pre-line {
+  white-space: pre-line;
+}
+/* UI-15: the cook-mode question box is as wide as the answer box. */
+.cook-question {
+  max-width: 560px;
+}
 /* UI-45: the editor's growing step textarea (height set from JS). */
 textarea.input.textarea-grow {
   min-height: 0;
@@ -1023,8 +1041,11 @@ a:hover {
   text-align: start;
   cursor: pointer;
 }
-/* UI-38: an inline text link in the body font, underlined on hover */
+/* UI-38: an inline text link in the body font, underlined on hover.
+   UI-50: inline in its line and aligned with it, never centred. */
 .link-button {
+  display: inline;
+  text-align: inherit;
   font: inherit;
   color: inherit;
   background: none;

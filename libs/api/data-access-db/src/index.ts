@@ -8,6 +8,7 @@ export {
 } from './data-source-options';
 export { InitialSchema1759000000000 } from './migrations/1759000000000-InitialSchema';
 export { SaveOwnership1759100000000 } from './migrations/1759100000000-SaveOwnership';
+export { SharedWithNobodyPrivate1759200000000 } from './migrations/1759200000000-SharedWithNobodyPrivate';
 export { DbModule } from './lib/data-access-db.module';
 export {
   MigrationCheckService,

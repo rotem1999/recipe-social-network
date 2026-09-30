@@ -5,7 +5,7 @@
 // and a Cook button on that copy.
 import { useCallback, useState } from 'react';
 import type { ReactElement } from 'react';
-import { formatQuantity, totalMinutes } from '@rsn/shared/util-domain';
+import { ingredientAmount, totalMinutes } from '@rsn/shared/util-domain';
 import { useApi, useRequest } from '@rsn/web/data-access-api';
 import { Button, Icon, InlineError, Tag, WashedImage } from '@rsn/web/ui';
 import { errorMessage } from './error-message';
@@ -128,25 +128,30 @@ export function CataloguePreviewScreen({
               </div>
               <h4 className="mt-6">Ingredients</h4>
               <div>
-                {meal.ingredients.map((ingredient, index) => (
-                  <div
-                    key={`${ingredient.name}-${index}`}
-                    className="measure-row"
-                  >
-                    <span className="ingredient-qty measure-qty">
-                      {/* UI-37 / UI-51: the shared formatter, as the saved copy reads. */}
-                      {formatQuantity(ingredient.quantity, ingredient.unit)}
-                    </span>
-                    <span dir="auto" className="grow">
-                      {ingredient.name}
-                    </span>
-                    {ingredient.note === undefined ? null : (
-                      <span dir="auto" className="text-muted text-compact">
-                        {ingredient.note}
+                {meal.ingredients.map((ingredient, index) => {
+                  // UI-37 / UI-51 / BUG-030: the shared formatter, as the saved copy
+                  // reads; a note that is an amount ("1 Can") fills the amount column.
+                  const { amount, note } = ingredientAmount(ingredient);
+                  return (
+                    <div
+                      key={`${ingredient.name}-${index}`}
+                      className="measure-row"
+                    >
+                      {/* UI-41: the amount can be a moved note (UI-37). */}
+                      <span className="ingredient-qty measure-qty" dir="auto">
+                        {amount}
                       </span>
-                    )}
-                  </div>
-                ))}
+                      <span dir="auto" className="grow">
+                        {ingredient.name}
+                      </span>
+                      {note === null ? null : (
+                        <span dir="auto" className="text-muted text-compact">
+                          {note}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
 

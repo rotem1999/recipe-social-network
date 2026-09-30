@@ -6,8 +6,9 @@
 import { useId, useState } from 'react';
 import type { ReactElement } from 'react';
 import type { Ingredient } from '@rsn/shared/util-domain';
-// UI-37: the same quantity wording as the detail screen's ingredient list.
-import { formatQuantity } from '@rsn/shared/util-domain';
+// UI-37: the same amount wording as the detail screen's ingredient list; a
+// CAT-6 note that is itself an amount fills the amount column (BUG-030).
+import { ingredientAmount } from '@rsn/shared/util-domain';
 import { Button, Icon } from '@rsn/web/ui';
 
 export interface CookIngredientsProps {
@@ -48,26 +49,30 @@ export function CookIngredients({
             </p>
           ) : (
             <ul className="list-reset stack">
-              {ingredients.map((ingredient, index) => (
-                <li
-                  // §3.1.1 ingredients are an ordered list and may repeat a name.
-                  key={`${index}-${ingredient.name}`}
-                  className="ingredient-row"
-                >
-                  <span className="ingredient-qty">
-                    {formatQuantity(ingredient.quantity, ingredient.unit)}
-                  </span>
-                  <span>
-                    <span dir="auto">{ingredient.name}</span>{' '}
-                    {ingredient.note === undefined ||
-                    ingredient.note === '' ? null : (
-                      <span className="text-muted text-small" dir="auto">
-                        {ingredient.note}
-                      </span>
-                    )}
-                  </span>
-                </li>
-              ))}
+              {ingredients.map((ingredient, index) => {
+                const { amount, note } = ingredientAmount(ingredient);
+                return (
+                  <li
+                    // §3.1.1 ingredients are an ordered list and may repeat a name.
+                    key={`${index}-${ingredient.name}`}
+                    className="ingredient-row"
+                  >
+                    {/* UI-41: a note moved into the amount column keeps its
+                        own direction. */}
+                    <span className="ingredient-qty" dir="auto">
+                      {amount}
+                    </span>
+                    <span>
+                      <span dir="auto">{ingredient.name}</span>{' '}
+                      {note === null ? null : (
+                        <span className="text-muted text-small" dir="auto">
+                          {note}
+                        </span>
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

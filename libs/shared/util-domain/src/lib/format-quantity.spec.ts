@@ -8,6 +8,7 @@ import {
   asFraction,
   formatNumber,
   formatQuantity,
+  ingredientAmount,
   pluralUnit,
 } from './format-quantity';
 import { UNITS } from './util-domain';
@@ -170,5 +171,172 @@ describe('formatQuantity', () => {
 
   it('UI-37 rounds a quantity that rounds to 1 into the singular', () => {
     expect(formatQuantity(1.001, 'piece')).toBe('1 piece');
+  });
+});
+
+describe('ingredientAmount', () => {
+  it('UI-37 BUG-030 moves a note that starts with a digit into the amount column', () => {
+    expect(
+      ingredientAmount({ quantity: null, unit: 'none', note: '1 Can' }),
+    ).toEqual({ amount: '1 Can', note: null });
+    expect(
+      ingredientAmount({ quantity: null, unit: 'none', note: '4 oz' }),
+    ).toEqual({ amount: '4 oz', note: null });
+    expect(
+      ingredientAmount({ quantity: null, unit: 'none', note: '1/2 tin' }),
+    ).toEqual({ amount: '1/2 tin', note: null });
+  });
+
+  it('UI-37 BUG-030 moves a note that starts with a fraction character', () => {
+    for (const note of ['¼ lb', '⅓ bottle', '½ jar', '⅔ packet', '¾ pint', '⅛ inch']) {
+      expect(ingredientAmount({ quantity: null, unit: 'none', note })).toEqual({
+        amount: note,
+        note: null,
+      });
+    }
+  });
+
+  it('UI-37 BUG-030 moves a note whose first word is a CAT-6 measurement word, in any letter case', () => {
+    for (const note of [
+      'Dash',
+      'dash of Tabasco',
+      'Pinch',
+      'Handful',
+      'Sprig',
+      'Bunch',
+      'Can',
+      'LB',
+      'Litre',
+      'liter',
+    ]) {
+      expect(ingredientAmount({ quantity: null, unit: 'none', note })).toEqual({
+        amount: note,
+        note: null,
+      });
+    }
+  });
+
+  it('UI-37 BUG-030 recognises the plurals of the CAT-6 measurement words', () => {
+    for (const note of [
+      'Cans',
+      'ounces',
+      'pounds',
+      'Slices',
+      'sprigs',
+      'bunches',
+      'pinches',
+      'inches',
+      'handfuls',
+      'drops',
+      'sticks',
+      'packets',
+      'packages',
+      'bottles',
+      'jars',
+      'tins',
+      'dashes',
+      'quarts',
+      'gallons',
+      'pints',
+    ]) {
+      expect(ingredientAmount({ quantity: null, unit: 'none', note })).toEqual({
+        amount: note,
+        note: null,
+      });
+    }
+  });
+
+  it('UI-37 BUG-030 moves "Cans", "inches", "pinches" and "lbs" as regular plurals', () => {
+    for (const note of ['Cans', '2 Cans', 'inches', 'pinches', 'lbs', 'LBS of flour']) {
+      expect(ingredientAmount({ quantity: null, unit: 'none', note })).toEqual({
+        amount: note,
+        note: null,
+      });
+    }
+  });
+
+  it('UI-37 keeps words that are not regular plurals of a measurement word as notes ("canes", "tines", "ozes", "lbss")', () => {
+    for (const note of ['canes', 'tines', 'ozes', 'lbss', 'jares', 'sprigses']) {
+      expect(ingredientAmount({ quantity: null, unit: 'none', note })).toEqual({
+        amount: 'to taste',
+        note,
+      });
+    }
+  });
+
+  it('UI-37 recognises only the listed fraction characters ¼ ⅓ ½ ⅔ ¾ ⅛', () => {
+    for (const note of ['⅕ wheel', '⅙ block', '⅜ loaf']) {
+      expect(ingredientAmount({ quantity: null, unit: 'none', note })).toEqual({
+        amount: 'to taste',
+        note,
+      });
+    }
+  });
+
+  it('UI-37 BUG-030 reads a measurement word with trailing punctuation as a measurement', () => {
+    expect(
+      ingredientAmount({ quantity: null, unit: 'none', note: 'Dash, to finish' }),
+    ).toEqual({ amount: 'Dash, to finish', note: null });
+  });
+
+  it('UI-37 trims the note it moves into the amount column', () => {
+    expect(
+      ingredientAmount({ quantity: null, unit: 'none', note: '  1 Can  ' }),
+    ).toEqual({ amount: '1 Can', note: null });
+  });
+
+  it('UI-37 keeps "to taste" and the note when the note is not an amount', () => {
+    for (const note of ['chopped', 'large', 'Juice of 1', 'canned', 'Fresh sprigs']) {
+      expect(ingredientAmount({ quantity: null, unit: 'none', note })).toEqual({
+        amount: 'to taste',
+        note,
+      });
+    }
+  });
+
+  it('UI-37 keeps a right-to-left note that is not an amount as the note', () => {
+    expect(
+      ingredientAmount({ quantity: null, unit: 'none', note: 'קצוץ דק' }),
+    ).toEqual({ amount: 'to taste', note: 'קצוץ דק' });
+  });
+
+  it('UI-37 reads "to taste" with no note when the note is missing, null, empty or blank', () => {
+    for (const note of [undefined, null, '', '   ']) {
+      expect(ingredientAmount({ quantity: null, unit: 'none', note })).toEqual({
+        amount: 'to taste',
+        note: null,
+      });
+    }
+    expect(ingredientAmount({ quantity: null, unit: 'none' })).toEqual({
+      amount: 'to taste',
+      note: null,
+    });
+  });
+
+  it('UI-37 formats a set quantity and keeps an amount-like note as the note', () => {
+    expect(
+      ingredientAmount({ quantity: 2, unit: 'none', note: '1 Can' }),
+    ).toEqual({ amount: '2', note: '1 Can' });
+    expect(
+      ingredientAmount({ quantity: 0.75, unit: 'cup', note: 'Dash' }),
+    ).toEqual({ amount: '¾ cup', note: 'Dash' });
+    expect(
+      ingredientAmount({ quantity: 2, unit: 'piece', note: 'large' }),
+    ).toEqual({ amount: '2 pieces', note: 'large' });
+  });
+
+  it('UI-37 shows the unit alone for an empty quantity with a unit, and keeps the note', () => {
+    expect(
+      ingredientAmount({ quantity: null, unit: 'pinch', note: '1 pinch' }),
+    ).toEqual({ amount: 'pinch', note: '1 pinch' });
+    expect(
+      ingredientAmount({ quantity: null, unit: 'cup', note: 'heaped' }),
+    ).toEqual({ amount: 'cup', note: 'heaped' });
+  });
+
+  it('UI-37 returns the trimmed note next to a formatted quantity', () => {
+    expect(
+      ingredientAmount({ quantity: 200, unit: 'g', note: '  sifted ' }),
+    ).toEqual({ amount: '200 g', note: 'sifted' });
   });
 });

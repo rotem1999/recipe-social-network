@@ -19,6 +19,9 @@ const CACHE_TTL_MS = 30 * 60 * 1000;
 /** Open-Meteo has no key and can be slow; never hold a recommendation longer than this. */
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/** WX-9 (BUG-029): geocoding asks for up to 10 hits (`count=10`). */
+const GEOCODING_HIT_COUNT = 10;
+
 interface CacheEntry<T> {
   value: T;
   expiresAt: number;
@@ -74,7 +77,7 @@ export class WeatherService {
     }
 
     try {
-      const location = await this.geocode(city);
+      const location = await this.geocode(city, timezone);
       if (location === null) return null;
 
       const weather = await this.readCurrentWeatherCached(
@@ -101,37 +104,47 @@ export class WeatherService {
   }
 
   /**
-   * WX-9: forward geocoding, city name → coordinates. Null when Open-Meteo
-   * returns no hit, or a hit whose `name` is not the city itself (compared
-   * case-insensitively, underscores as spaces, diacritics removed, or the city
-   * followed by " City"; BUG-025), so a fuzzy match such as
-   * "UTC" → Utrecht never becomes weather context (BUG-017). Cached per city
-   * for 30 minutes (WX-10).
+   * WX-9: forward geocoding, city name → coordinates. Asks for up to 10 hits and
+   * uses the first whose `name` is the city itself (compared case-insensitively,
+   * underscores as spaces, diacritics removed, or the city followed by " City";
+   * BUG-025) and whose own `timezone` is the caller's zone, both canonicalised
+   * through `Intl` (BUG-029: Calcutta, South Africa is not Asia/Calcutta). Null
+   * when no hit passes both, so a fuzzy match such as "UTC" → Utrecht never
+   * becomes weather context (BUG-017). Cached per zone and city for 30 minutes,
+   * the null included (WX-10).
    */
-  async geocode(city: string): Promise<GeoLocation | null> {
-    const key = city.toLowerCase();
+  async geocode(city: string, timezone: string): Promise<GeoLocation | null> {
+    const key = cacheKey(city, timezone);
     const cached = readCache(this.geoCache, key);
     if (cached !== undefined) return cached;
 
     const url = new URL(this.geocodingUrl());
     url.searchParams.set('name', city);
-    url.searchParams.set('count', '1');
+    url.searchParams.set('count', String(GEOCODING_HIT_COUNT));
     url.searchParams.set('language', 'en');
 
     const body = await this.getJson<GeocodingResponse>(url);
-    const hit = body?.results?.[0];
-    const matches =
-      hit !== undefined &&
-      typeof hit.name === 'string' &&
-      sameCityName(hit.name, city);
-    if (hit !== undefined && !matches) {
+    const hits = body?.results ?? [];
+    const zone = canonicalZone(timezone);
+    const hit =
+      zone === null
+        ? undefined
+        : hits.find(
+            (candidate) =>
+              typeof candidate.name === 'string' &&
+              sameCityName(candidate.name, city) &&
+              canonicalZone(candidate.timezone) === zone,
+          );
+    if (hits.length > 0 && hit === undefined) {
+      const seen = hits
+        .map((candidate) => `"${String(candidate.name)}" (${String(candidate.timezone)})`)
+        .join(', ');
       this.logger.warn(
-        `Open-Meteo geocoded "${city}" to "${String(hit.name)}"; no weather context`,
+        `Open-Meteo geocoded "${city}" to ${seen}; none is "${timezone}", no weather context`,
       );
     }
     const location: GeoLocation | null =
       hit === undefined ||
-      !matches ||
       typeof hit.name !== 'string' ||
       typeof hit.latitude !== 'number' ||
       typeof hit.longitude !== 'number'
@@ -185,13 +198,13 @@ export class WeatherService {
     };
   }
 
-  /** WX-10: 30-minute in-memory weather cache, keyed by city. */
+  /** WX-10: 30-minute in-memory weather cache, keyed by zone and city. */
   private async readCurrentWeatherCached(
     city: string,
     location: GeoLocation,
     timezone: string,
   ): Promise<CurrentWeather | null> {
-    const key = city.toLowerCase();
+    const key = cacheKey(city, timezone);
     const cached = readCache(this.weatherCache, key);
     if (cached !== undefined) return cached;
 
@@ -256,6 +269,26 @@ function sameCityName(hitName: string, city: string): boolean {
   const hit = comparableCityName(hitName);
   const segment = comparableCityName(city);
   return hit === segment || hit === `${segment} city`;
+}
+
+/**
+ * WX-9 (BUG-029): the zone as `Intl` resolves it, so a legacy name and its current
+ * name (`Asia/Calcutta`, `Asia/Kolkata`) compare equal. Null for a missing or
+ * unknown zone.
+ */
+function canonicalZone(timezone: unknown): string | null {
+  if (typeof timezone !== 'string' || timezone.trim().length === 0) return null;
+  try {
+    return new Intl.DateTimeFormat('en', { timeZone: timezone }).resolvedOptions()
+      .timeZone;
+  } catch {
+    return null;
+  }
+}
+
+/** WX-10: one cache entry per canonical zone and city. */
+function cacheKey(city: string, timezone: string): string {
+  return `${canonicalZone(timezone) ?? timezone}|${city}`.toLowerCase();
 }
 
 /** WX-9: underscores as spaces, Unicode NFD without combining marks, lower case. */

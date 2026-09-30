@@ -6,7 +6,7 @@ import type { Ingredient } from '@rsn/shared/util-domain';
 import {
   MAX_SERVINGS,
   MIN_SERVINGS,
-  formatQuantity,
+  ingredientAmount,
   scaleQuantity,
 } from '@rsn/shared/util-domain';
 import { Button } from '@rsn/web/ui';
@@ -64,30 +64,36 @@ export function IngredientsPanel({
         </span>
       </div>
       <ul className="list-reset stack">
-        {ingredients.map((ingredient, index) => (
-          <li
-            // §3.1.1 ingredients are an ordered list and may repeat a name.
-            key={`${index}-${ingredient.name}`}
-            className="ingredient-row"
-          >
-            <span className="ingredient-qty">
-              {formatQuantity(
-                scaleQuantity(ingredient.quantity, servings, shownServings),
-                ingredient.unit,
-              )}
-            </span>
-            {/* UI-41: names and notes are user text, so they carry dir="auto". */}
-            <span>
-              <span dir="auto">{ingredient.name}</span>{' '}
-              {ingredient.note === undefined ||
-              ingredient.note === '' ? null : (
-                <span dir="auto" className="text-muted text-small">
-                  {ingredient.note}
-                </span>
-              )}
-            </span>
-          </li>
-        ))}
+        {ingredients.map((ingredient, index) => {
+          // UI-37, BUG-030: a note that is itself an amount ("1 Can") fills the
+          // amount column instead of "to taste" and is not repeated as the note.
+          const { amount, note } = ingredientAmount({
+            quantity: scaleQuantity(ingredient.quantity, servings, shownServings),
+            unit: ingredient.unit,
+            note: ingredient.note,
+          });
+          return (
+            <li
+              // §3.1.1 ingredients are an ordered list and may repeat a name.
+              key={`${index}-${ingredient.name}`}
+              className="ingredient-row"
+            >
+              {/* UI-41: the amount can be a moved note (UI-37), so it is directional too. */}
+              <span className="ingredient-qty" dir="auto">
+                {amount}
+              </span>
+              {/* UI-41: names and notes are user text, so they carry dir="auto". */}
+              <span>
+                <span dir="auto">{ingredient.name}</span>{' '}
+                {note === null ? null : (
+                  <span dir="auto" className="text-muted text-small">
+                    {note}
+                  </span>
+                )}
+              </span>
+            </li>
+          );
+        })}
       </ul>
     </>
   );

@@ -203,8 +203,8 @@ export function CommentsSection({
                 ) : null}
               </div>
               {/* UI-41/UI-50: comments are user text, so they carry dir="auto";
-                  the row stays left-aligned. */}
-              <div dir="auto" className="text-body bidi-text">
+                  the row stays left-aligned. UI-45: the body keeps its line breaks. */}
+              <div dir="auto" className="text-body bidi-text text-pre-line">
                 {comment.body}
               </div>
             </div>

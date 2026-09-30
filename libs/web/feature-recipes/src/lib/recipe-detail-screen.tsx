@@ -70,18 +70,63 @@ function errorMessage(cause: unknown): string {
     : 'Something went wrong.';
 }
 
-/** UI-38: the SAVE-9 source link — an inline text link in the body font, underlined on hover. */
+/**
+ * UI-50: the SAVE-9 source label — only the source's title is the directional
+ * element (dir="auto"); "by <owner>" and "on TheMealDB" follow on the line.
+ */
+function SourceLabel({
+  title,
+  suffix,
+}: {
+  title: string;
+  suffix: string;
+}): ReactElement {
+  return (
+    <>
+      <span dir="auto" className="bidi-text">
+        {title}
+      </span>
+      {suffix === '' ? null : (
+        <>
+          {' '}
+          <span>{suffix}</span>
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * UI-38 / UI-50: the SAVE-9 source link — an inline text link in the body font,
+ * underlined on hover, flowing in its line rather than centred. A `<button>`
+ * always lays out as an inline-block (so a long title would drop below
+ * "Saved from" as its own box), hence a focusable span with the button role
+ * that opens on click, Enter and Space.
+ */
 function SourceLink({
-  label,
+  title,
+  suffix,
   onOpen,
 }: {
-  label: string;
+  title: string;
+  suffix: string;
   onOpen: () => void;
 }): ReactElement {
   return (
-    <button type="button" className="link-button" onClick={onOpen}>
-      {label}
-    </button>
+    <span
+      role="button"
+      tabIndex={0}
+      className="link-button"
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <SourceLabel title={title} suffix={suffix} />
+    </span>
   );
 }
 
@@ -100,20 +145,24 @@ function AttributionLine({
   onOpenRecipe: (id: string) => void;
 }): ReactElement {
   const isCatalogue = attribution.source === 'themealdb';
-  const label = isCatalogue
-    ? `${attribution.title} on TheMealDB`
+  const suffix = isCatalogue
+    ? 'on TheMealDB'
     : attribution.ownerUsername === null
-      ? attribution.title
-      : `${attribution.title} by ${attribution.ownerUsername}`;
+      ? ''
+      : `by ${attribution.ownerUsername}`;
   const sourceId = isCatalogue ? null : attribution.recipeId;
   return (
     // UI-19 / SAVE-9: the muted line under the title.
     <p className="byline">
       {prefix}{' '}
       {sourceId === null ? (
-        label
+        <SourceLabel title={attribution.title} suffix={suffix} />
       ) : (
-        <SourceLink label={label} onOpen={() => onOpenRecipe(sourceId)} />
+        <SourceLink
+          title={attribution.title}
+          suffix={suffix}
+          onOpen={() => onOpenRecipe(sourceId)}
+        />
       )}
     </p>
   );
@@ -487,7 +536,8 @@ export function RecipeDetailScreen({
                 <div className="step-text">
                   {/* UI-50: only the step's own text is directional; the minutes
                       tag sits outside it, so it always follows on the left-to-right line. */}
-                  <span dir="auto" className="bidi-text">
+                  {/* UI-45: the step keeps its line breaks. */}
+                  <span dir="auto" className="bidi-text text-pre-line">
                     {step.text}
                   </span>
                   {/* UI-15: the minutes tag shows on the detail screen too. */}
@@ -506,17 +556,14 @@ export function RecipeDetailScreen({
           {!isVersionView && shown.canRate ? (
             <>
               <div className="hr hr-section" />
-              {/* UI-47: no footnote under the rating input. */}
+              {/* UI-47: no footnote under or next to the rating input; the filled
+                  stars already show the caller's rating. */}
               <div className="row gap-3 mb-6">
                 <h4 className="m-0">Your rating</h4>
                 <StarInput
                   value={shown.rating?.mine ?? null}
                   onRate={(stars) => void rate(stars)}
                 />
-                {shown.rating?.mine === undefined ||
-                shown.rating?.mine === null ? null : (
-                  <span className="byline">Counted in the average</span>
-                )}
               </div>
             </>
           ) : null}

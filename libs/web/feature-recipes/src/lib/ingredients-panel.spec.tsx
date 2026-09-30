@@ -148,6 +148,90 @@ describe('IngredientsPanel', () => {
     expect(quantities()).toEqual(['to taste']);
   });
 
+  it('UI-37 BUG-030 shows a note that is an amount in the amount column and not again as the note', () => {
+    render(
+      <IngredientsPanel
+        ingredients={[
+          { quantity: null, unit: 'none', name: 'Black Beans', note: '1 Can' },
+          { quantity: null, unit: 'none', name: 'Chopped tomatoes', note: '½ jar' },
+          { quantity: null, unit: 'none', name: 'Salt', note: 'Pinch' },
+          { quantity: null, unit: 'none', name: 'Butter', note: '2 sticks' },
+        ]}
+        servings={2}
+      />,
+    );
+
+    expect(quantities()).toEqual(['1 Can', '½ jar', 'Pinch', '2 sticks']);
+    for (const note of ['1 Can', '½ jar', 'Pinch', '2 sticks']) {
+      expect(screen.getAllByText(note)).toHaveLength(1);
+    }
+    expect(screen.queryByText('to taste')).toBeNull();
+  });
+
+  it('UI-37 keeps "to taste" and the note when the note is not an amount', () => {
+    render(
+      <IngredientsPanel
+        ingredients={[
+          { quantity: null, unit: 'none', name: 'Parsley', note: 'chopped' },
+        ]}
+        servings={2}
+      />,
+    );
+
+    expect(quantities()).toEqual(['to taste']);
+    expect(screen.getByText('chopped').getAttribute('dir')).toBe('auto');
+  });
+
+  it('UI-37 keeps an amount-like note as the note when the ingredient has a quantity or a unit', () => {
+    render(
+      <IngredientsPanel
+        ingredients={[
+          { quantity: 2, unit: 'none', name: 'Tomatoes', note: '1 Can' },
+          { quantity: null, unit: 'pinch', name: 'Nutmeg', note: '1 pinch' },
+        ]}
+        servings={2}
+      />,
+    );
+
+    expect(quantities()).toEqual(['2', 'pinch']);
+    expect(screen.getByText('1 Can')).toBeTruthy();
+    expect(screen.getByText('1 pinch')).toBeTruthy();
+  });
+
+  it('UI-37 leaves a moved note unscaled when the stepper changes the servings', () => {
+    render(
+      <IngredientsPanel
+        ingredients={[
+          { quantity: null, unit: 'none', name: 'Black Beans', note: '1 Can' },
+          { quantity: 100, unit: 'g', name: 'rice' },
+        ]}
+        servings={2}
+      />,
+    );
+
+    fireEvent.click(stepper('More servings'));
+
+    expect(quantities()).toEqual(['1 Can', '150 g']);
+  });
+
+  it('UI-37 UI-41 gives the amount cell dir="auto", so a moved note keeps its own direction', () => {
+    render(
+      <IngredientsPanel
+        ingredients={[
+          { quantity: null, unit: 'none', name: 'חלב', note: '1 כוס' },
+          { quantity: 100, unit: 'g', name: 'rice' },
+        ]}
+        servings={2}
+      />,
+    );
+
+    const cells = Array.from(document.querySelectorAll('.ingredient-qty'));
+    expect(cells.map((cell) => cell.textContent)).toEqual(['1 כוס', '100 g']);
+    for (const cell of cells) {
+      expect(cell.getAttribute('dir')).toBe('auto');
+    }
+  });
+
   it('UI-41 gives ingredient names and notes dir="auto"', () => {
     render(
       <IngredientsPanel

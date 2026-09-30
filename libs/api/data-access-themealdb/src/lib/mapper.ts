@@ -119,6 +119,9 @@ const HEADING_MAX_WORDS = 5;
 /** CAT-6: a note equal to this (any letter case) adds nothing to an empty quantity. */
 const TO_TASTE_NOTE = 'to taste';
 
+/** CAT-6 (BUG-030): a measure that is only "pinch" or "a pinch", any letter case. */
+const PINCH_ONLY = /^(?:a\s+)?pinch$/i;
+
 function round(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -133,6 +136,8 @@ export function parseMeasure(
 ): Pick<Ingredient, 'quantity' | 'unit' | 'note'> {
   const raw = (rawMeasure ?? '').trim();
   if (raw.length === 0) return { quantity: null, unit: 'none' };
+  // CAT-6 (BUG-030): "pinch" / "a pinch" alone is the unit pinch with an empty quantity.
+  if (PINCH_ONLY.test(raw)) return { quantity: null, unit: 'pinch' };
 
   const parsed = readLeadingNumber(raw);
   if (parsed) {

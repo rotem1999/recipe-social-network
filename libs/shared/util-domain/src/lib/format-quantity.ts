@@ -68,3 +68,42 @@ export function formatQuantity(quantity: number | null, unit: Unit): string {
   }
   return parts.length === 0 ? 'to taste' : parts.join(' ');
 }
+
+/** CAT-6: the measurement words the app cannot express as a unit, singular and plural. */
+const MEASURE_WORDS: ReadonlySet<string> = new Set(
+  [
+    'oz', 'ounce', 'lb', 'pound', 'pint', 'quart', 'gallon', 'litre', 'liter',
+    'drop', 'stick', 'can', 'tin', 'jar', 'packet', 'package', 'bottle',
+    'handful', 'slice', 'sprig', 'cm', 'mm',
+  ]
+    .flatMap((word) => [word, `${word}s`])
+    // Words ending in a hissing sound take "es" in the plural.
+    .concat(['dash', 'dashes', 'bunch', 'bunches', 'inch', 'inches', 'pinch', 'pinches']),
+);
+
+/** UI-37: the note is really an amount ("1 Can", "½ jar", "Dash") rather than a note. */
+function noteIsAmount(note: string): boolean {
+  if (/^[\d¼⅓½⅔¾⅛]/.test(note)) {
+    return true;
+  }
+  const first = note.split(/\s+/)[0]?.toLowerCase().replace(/[^a-z]/g, '') ?? '';
+  return MEASURE_WORDS.has(first);
+}
+
+/**
+ * UI-37, BUG-030: the amount column and the note of one ingredient row. An empty
+ * quantity with the unit `none` reads "to taste", unless its note is itself an
+ * amount (CAT-6 keeps "1 Can" as a note): then the note fills the amount column
+ * and is not repeated as the note.
+ */
+export function ingredientAmount(ingredient: {
+  quantity: number | null;
+  unit: Unit;
+  note?: string | null;
+}): { amount: string; note: string | null } {
+  const note = ingredient.note?.trim() ? ingredient.note.trim() : null;
+  if (ingredient.quantity === null && ingredient.unit === 'none' && note !== null && noteIsAmount(note)) {
+    return { amount: note, note: null };
+  }
+  return { amount: formatQuantity(ingredient.quantity, ingredient.unit), note };
+}

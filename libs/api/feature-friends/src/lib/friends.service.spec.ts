@@ -91,6 +91,18 @@ interface Harness {
   shares: { createQueryBuilder: jest.Mock; delete: jest.Mock };
   shareBuilder: ShareQueryBuilderFake;
   users: { findById: jest.Mock; findByIds: jest.Mock; search: jest.Mock };
+  /**
+   * FR-4: `requests.manager.transaction` fake. The callback gets `tx.manager`, whose
+   * `withRepository` hands out transaction-scoped repositories (`tx.requests`,
+   * `tx.shares`), and `tx.log` records every write with whether a transaction was open.
+   */
+  tx: {
+    transaction: jest.Mock;
+    manager: { withRepository: jest.Mock; query: jest.Mock };
+    requests: { delete: jest.Mock };
+    shares: { createQueryBuilder: jest.Mock; delete: jest.Mock };
+    log: string[];
+  };
 }
 
 function harness(): Harness {
@@ -121,6 +133,51 @@ function harness(): Harness {
     search: jest.fn().mockResolvedValue([]),
   };
 
+  const log: string[] = [];
+  let open = false;
+  const record = (label: string) => log.push(open ? `tx:${label}` : label);
+  const txRequests = {
+    delete: jest.fn(() => {
+      record('requests.delete');
+      return Promise.resolve({ affected: 1 });
+    }),
+  };
+  const txShares = {
+    createQueryBuilder: jest.fn(() => shareBuilder as ShareQueryBuilderFake),
+    delete: jest.fn(() => {
+      record('shares.delete');
+      return Promise.resolve({ affected: 0 });
+    }),
+  };
+  const manager = {
+    withRepository: jest.fn((repository: unknown) => {
+      if (repository === requests) return txRequests;
+      if (repository === shares) return txShares;
+      throw new Error('withRepository called with an unknown repository');
+    }),
+    query: jest.fn(() => {
+      record('query');
+      return Promise.resolve([]);
+    }),
+  };
+  const transaction = jest.fn(
+    async (work: (entityManager: typeof manager) => Promise<unknown>) => {
+      log.push('begin');
+      open = true;
+      try {
+        const result = await work(manager);
+        log.push('commit');
+        return result;
+      } catch (error) {
+        log.push('rollback');
+        throw error;
+      } finally {
+        open = false;
+      }
+    },
+  );
+  Object.assign(requests, { manager: { transaction } });
+
   const service = new FriendsService(
     requests as unknown as Repository<FriendRequestEntity>,
     shares as unknown as Repository<RecipeShareEntity>,
@@ -132,6 +189,7 @@ function harness(): Harness {
     shares,
     shareBuilder: shareBuilder as ShareQueryBuilderFake,
     users,
+    tx: { transaction, manager, requests: txRequests, shares: txShares, log },
   };
 }
 
@@ -577,7 +635,7 @@ describe('FriendsService', () => {
 
   describe('FR-4 remove', () => {
     it('FR-4 deletes the accepted rows in both directions and every share between the pair', async () => {
-      const { service, requests, shares, shareBuilder } = harness();
+      const { service, requests, shares, shareBuilder, tx } = harness();
       requests.find.mockResolvedValueOnce([
         requestRow({ id: 'acc-1', fromUserId: ME, toUserId: OTHER, status: 'accepted' }),
         requestRow({ id: 'acc-2', fromUserId: OTHER, toUserId: ME, status: 'accepted' }),
@@ -594,24 +652,88 @@ describe('FriendsService', () => {
         expect.stringContaining('recipe.ownerId = :userId AND share.userId = :otherUserId'),
         { userId: ME, otherUserId: OTHER },
       );
-      expect(shares.delete).toHaveBeenCalledWith(['share-1', 'share-2']);
-      expect(requests.delete).toHaveBeenCalledWith(['acc-1', 'acc-2']);
+      // Both deletes go through the transaction's repositories, not the injected ones.
+      expect(tx.shares.createQueryBuilder).toHaveBeenCalledWith('share');
+      expect(tx.shares.delete).toHaveBeenCalledWith(['share-1', 'share-2']);
+      expect(tx.requests.delete).toHaveBeenCalledWith(['acc-1', 'acc-2']);
+      expect(shares.createQueryBuilder).not.toHaveBeenCalled();
+      expect(shares.delete).not.toHaveBeenCalled();
+      expect(requests.delete).not.toHaveBeenCalled();
     });
 
     it('FR-4 leaves the share table alone when the pair shared nothing', async () => {
-      const { service, requests, shares } = harness();
+      const { service, requests, shares, tx } = harness();
       requests.find.mockResolvedValueOnce([
         requestRow({ id: 'acc-1', status: 'accepted' }),
       ]);
 
       await service.remove(ME, OTHER);
 
+      expect(tx.shares.delete).not.toHaveBeenCalled();
       expect(shares.delete).not.toHaveBeenCalled();
-      expect(requests.delete).toHaveBeenCalledWith(['acc-1']);
+      expect(tx.requests.delete).toHaveBeenCalledWith(['acc-1']);
+    });
+
+    it('FR-4 makes a shared recipe of either user left with no recipients private', async () => {
+      const { service, requests, tx } = harness();
+      requests.find.mockResolvedValueOnce([
+        requestRow({ id: 'acc-1', status: 'accepted' }),
+      ]);
+
+      await service.remove(ME, OTHER);
+
+      expect(tx.manager.query).toHaveBeenCalledTimes(1);
+      const [sql, parameters] = tx.manager.query.mock.calls[0] as unknown as [
+        string,
+        unknown[],
+      ];
+      const statement = sql.replace(/\s+/g, ' ').trim();
+      expect(statement).toMatch(/^UPDATE "recipes" SET "visibility" = 'private'/);
+      expect(statement).toContain('"updated_at" = now()');
+      expect(statement).toContain('"owner_id" = ANY($1::uuid[])');
+      expect(statement).toContain(`"visibility" = 'shared'`);
+      expect(statement).toContain(
+        'NOT EXISTS ( SELECT 1 FROM "recipe_shares" s WHERE s."recipe_id" = "recipes"."id" )',
+      );
+      // Both users' recipes: the removal can empty the recipient list on either side.
+      expect(parameters).toEqual([[ME, OTHER]]);
+    });
+
+    it('FR-4 deletes the shares, privatises and deletes the friendship in one transaction, in that order', async () => {
+      const { service, requests, shareBuilder, tx } = harness();
+      requests.find.mockResolvedValueOnce([
+        requestRow({ id: 'acc-1', status: 'accepted' }),
+      ]);
+      shareBuilder.getRawMany.mockResolvedValue([{ shareId: 'share-1' }]);
+
+      await service.remove(ME, OTHER);
+
+      expect(tx.transaction).toHaveBeenCalledTimes(1);
+      expect(tx.log).toEqual([
+        'begin',
+        'tx:shares.delete',
+        'tx:query',
+        'tx:requests.delete',
+        'commit',
+      ]);
+    });
+
+    it('FR-4 fails the removal and keeps the friendship when the privatise step fails', async () => {
+      const { service, requests, tx } = harness();
+      requests.find.mockResolvedValueOnce([
+        requestRow({ id: 'acc-1', status: 'accepted' }),
+      ]);
+      tx.manager.query.mockRejectedValueOnce(new Error('update failed'));
+
+      await expect(service.remove(ME, OTHER)).rejects.toThrow('update failed');
+
+      expect(tx.requests.delete).not.toHaveBeenCalled();
+      expect(requests.delete).not.toHaveBeenCalled();
+      expect(tx.log).toEqual(['begin', 'rollback']);
     });
 
     it('FR-4 answers 404 when the two are not friends', async () => {
-      const { service, requests, shares } = harness();
+      const { service, requests, shares, tx } = harness();
       requests.find.mockResolvedValueOnce([requestRow({ status: 'pending' })]);
 
       await expect(service.remove(ME, OTHER)).rejects.toThrow(
@@ -619,15 +741,18 @@ describe('FriendsService', () => {
       );
       expect(shares.delete).not.toHaveBeenCalled();
       expect(requests.delete).not.toHaveBeenCalled();
+      expect(tx.transaction).not.toHaveBeenCalled();
+      expect(tx.manager.query).not.toHaveBeenCalled();
     });
 
     it('FR-4 answers 400 for removing yourself', async () => {
-      const { service, requests } = harness();
+      const { service, requests, tx } = harness();
 
       await expect(service.remove(ME, ME)).rejects.toThrow(
         BadRequestException,
       );
       expect(requests.find).not.toHaveBeenCalled();
+      expect(tx.transaction).not.toHaveBeenCalled();
     });
   });
 

@@ -267,6 +267,23 @@ describe('CommentsSection', () => {
     expect(rowOf('טעים מאוד').hasAttribute('dir')).toBe(false);
   });
 
+  it('UI-45 shows a comment body with its line breaks (text-pre-line)', async () => {
+    const text = 'Made it twice.\nLess salt the second time.';
+    mocks.api.listComments.mockResolvedValue(
+      list([comment({ id: 'c1', body: text })]),
+    );
+    render(<CommentsSection recipeId="r1" hasVotes={false} />);
+
+    const body = await screen.findByText(
+      (_content, element) =>
+        element?.getAttribute('dir') === 'auto' &&
+        element.textContent === text,
+    );
+    // The line break reaches the DOM unchanged; the class keeps it on screen.
+    expect(body.classList.contains('text-pre-line')).toBe(true);
+    expect(body.classList.contains('bidi-text')).toBe(true);
+  });
+
   it('UI-32 asks "Delete this comment?" and deletes only after Delete', async () => {
     mocks.api.listComments.mockResolvedValue(
       list([

@@ -248,4 +248,47 @@ describe('CataloguePreviewScreen', () => {
     expect(screen.getByText('pinch')).toBeTruthy();
     expect(screen.getByText('3')).toBeTruthy();
   });
+
+  it('UI-37 BUG-030 moves a CAT-6 note that is an amount into the preview amount column, once', async () => {
+    mocks.api.cataloguePreview.mockResolvedValue({
+      ...PREVIEW,
+      ingredients: [
+        { quantity: null, unit: 'none', name: 'Black Beans', note: '1 Can' },
+        { quantity: null, unit: 'none', name: 'Tabasco', note: 'Dash' },
+        { quantity: null, unit: 'none', name: 'Parsley', note: 'chopped' },
+      ],
+    });
+    const { container } = show({});
+
+    await screen.findByText('Black Beans');
+    const amounts = Array.from(container.querySelectorAll('.ingredient-qty')).map(
+      (element) => element.textContent,
+    );
+    expect(amounts).toEqual(['1 Can', 'Dash', 'to taste']);
+    // The moved note is not repeated as the note.
+    expect(screen.getAllByText('1 Can')).toHaveLength(1);
+    expect(screen.getAllByText('Dash')).toHaveLength(1);
+    // A note that is not an amount stays the note, next to "to taste".
+    expect(screen.getByText('chopped').classList.contains('ingredient-qty')).toBe(
+      false,
+    );
+  });
+
+  it('UI-37 UI-41 gives the preview amount cell dir="auto", so a moved note keeps its own direction', async () => {
+    mocks.api.cataloguePreview.mockResolvedValue({
+      ...PREVIEW,
+      ingredients: [
+        { quantity: null, unit: 'none', name: 'Milk', note: '1 כוס' },
+        { quantity: 200, unit: 'g', name: 'lasagna sheets' },
+      ],
+    });
+    const { container } = show({});
+
+    await screen.findByText('Milk');
+    const cells = Array.from(container.querySelectorAll('.ingredient-qty'));
+    expect(cells.map((cell) => cell.textContent)).toEqual(['1 כוס', '200 g']);
+    for (const cell of cells) {
+      expect(cell.getAttribute('dir')).toBe('auto');
+    }
+  });
 });
