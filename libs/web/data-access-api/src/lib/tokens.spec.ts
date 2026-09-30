@@ -98,3 +98,104 @@ describe('TokenStore (UI-17)', () => {
     expect(tokenStore.hasAccessToken()).toBe(false);
   });
 });
+
+describe('TokenStore session end (UI-44)', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('UI-44 starts with sessionEnded false', () => {
+    expect(new TokenStore().sessionEnded).toBe(false);
+  });
+
+  it('UI-44 endSession() removes both keys and marks the session ended when tokens were stored', () => {
+    const store = new TokenStore();
+    store.set('access-1', 'refresh-1');
+
+    store.endSession();
+
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBeNull();
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
+    expect(store.sessionEnded).toBe(true);
+  });
+
+  it('UI-44 endSession() marks the session ended when only one of the two tokens was stored', () => {
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
+    const onlyRefresh = new TokenStore();
+    onlyRefresh.endSession();
+    expect(onlyRefresh.sessionEnded).toBe(true);
+
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'access-1');
+    const onlyAccess = new TokenStore();
+    onlyAccess.endSession();
+    expect(onlyAccess.sessionEnded).toBe(true);
+  });
+
+  it('UI-44 endSession() with no tokens stored (a wrong password) leaves sessionEnded false', () => {
+    const store = new TokenStore();
+
+    store.endSession();
+
+    expect(store.sessionEnded).toBe(false);
+  });
+
+  it('UI-44 endSession() with no tokens stored keeps an earlier ended session ended', () => {
+    const store = new TokenStore();
+    store.set('access-1', 'refresh-1');
+    store.endSession();
+
+    // A wrong password on the sign-in screen that follows.
+    store.endSession();
+
+    expect(store.sessionEnded).toBe(true);
+  });
+
+  it('UI-44 clear() (a sign-out) resets sessionEnded', () => {
+    const store = new TokenStore();
+    store.set('access-1', 'refresh-1');
+    store.endSession();
+
+    store.clear();
+
+    expect(store.sessionEnded).toBe(false);
+  });
+
+  it('UI-44 clear() of a live session never marks it ended', () => {
+    const store = new TokenStore();
+    store.set('access-1', 'refresh-1');
+
+    store.clear();
+
+    expect(store.sessionEnded).toBe(false);
+  });
+
+  it('UI-44 set() (the next sign-in) resets sessionEnded', () => {
+    const store = new TokenStore();
+    store.set('access-1', 'refresh-1');
+    store.endSession();
+
+    store.set('access-2', 'refresh-2');
+
+    expect(store.sessionEnded).toBe(false);
+  });
+
+  it('UI-44 notifies subscribers on endSession() with sessionEnded already true', () => {
+    const store = new TokenStore();
+    store.set('access-1', 'refresh-1');
+    const seen: boolean[] = [];
+    store.subscribe(() => seen.push(store.sessionEnded));
+
+    store.endSession();
+
+    expect(seen).toEqual([true]);
+  });
+
+  it('UI-44 keeps sessionEnded in memory only, never in localStorage', () => {
+    const store = new TokenStore();
+    store.set('access-1', 'refresh-1');
+    store.endSession();
+
+    expect(localStorage.length).toBe(0);
+    expect(new TokenStore().sessionEnded).toBe(false);
+  });
+});

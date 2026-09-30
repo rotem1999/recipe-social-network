@@ -22,6 +22,10 @@ import { gramsFor } from './grams-converter';
 import { pickPieceGrams } from './portion-picker';
 import { SEASONING_DESCRIPTION, isSeasoning } from './seasonings';
 import { gramsFromWeightNote } from './weight-note';
+import { estimateFrom } from './nutrition-estimate';
+
+/** One mode's response before NUT-11 adds the `estimate` from both modes. */
+type ModeResponse = Omit<NutritionResponse, 'estimate'>;
 
 /** NUT-6: ingredient search order, best analytical data first. */
 const INGREDIENT_DATA_TYPES: UsdaDataType[] = [
@@ -67,7 +71,7 @@ async function mapWithConcurrency<TItem, TResult>(
 }
 
 /**
- * SPEC §9 NUT-1..NUT-10: calories for a recipe, from its ingredients (default)
+ * SPEC §9 NUT-1..NUT-11: calories for a recipe, from its ingredients (default)
  * or from its title as a composite dish, through FoodData Central.
  */
 @Injectable()
@@ -94,9 +98,35 @@ export class NutritionService {
       throw new NotFoundException('Recipe has no current version');
     }
 
-    return mode === 'meal'
-      ? this.computeMeal(version)
-      : this.computeIngredients(version);
+    // NUT-11: both modes are computed whichever was asked (the USDA cache keeps the
+    // repeat cheap); the asked mode's errors propagate as before, while a USDA outage
+    // (503) in the other mode only leaves that value out of the estimate.
+    if (mode === 'meal') {
+      const [meal, ingredients] = await Promise.all([
+        this.computeMeal(version),
+        this.otherMode(() => this.computeIngredients(version)),
+      ]);
+      return { ...meal, estimate: estimateFrom(ingredients, meal) };
+    }
+    const [ingredients, meal] = await Promise.all([
+      this.computeIngredients(version),
+      this.otherMode(() => this.computeMeal(version)),
+    ]);
+    return { ...ingredients, estimate: estimateFrom(ingredients, meal) };
+  }
+
+  /** NUT-11: the mode that was not asked; a USDA outage (503) yields null instead of failing. */
+  private async otherMode(
+    run: () => Promise<ModeResponse>,
+  ): Promise<ModeResponse | null> {
+    try {
+      return await run();
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -106,7 +136,7 @@ export class NutritionService {
    */
   private async computeIngredients(
     version: RecipeVersionEntity,
-  ): Promise<NutritionResponse> {
+  ): Promise<ModeResponse> {
     const ingredients = version.ingredients ?? [];
     const rows = await mapWithConcurrency(
       ingredients,
@@ -237,7 +267,7 @@ export class NutritionService {
    */
   private async computeMeal(
     version: RecipeVersionEntity,
-  ): Promise<NutritionResponse> {
+  ): Promise<ModeResponse> {
     const hit = (
       await this.usda.searchFoods(version.title, MEAL_DATA_TYPES)
     )[0];

@@ -27,12 +27,7 @@ export function Field({
       <label htmlFor={htmlFor}>{label}</label>
       {children}
       {hint === undefined || hint === null ? null : (
-        <p
-          className="text-muted"
-          style={{ fontSize: '12px', margin: 'var(--space-1) 0 0' }}
-        >
-          {hint}
-        </p>
+        <p className="text-muted field-hint">{hint}</p>
       )}
       {error === undefined || error === null ? null : (
         <InlineError>{error}</InlineError>

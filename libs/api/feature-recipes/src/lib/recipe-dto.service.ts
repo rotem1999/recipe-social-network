@@ -27,6 +27,7 @@ import {
 /** Options of `listPublicCards` (DISC-1..5, WX-6). */
 export interface PublicCardsOptions {
   category?: Category;
+  /** 1-based, as in `GET /discover?page=` (DISC-9); page 1 starts at the newest recipe. */
   page: number;
   pageSize: number;
   excludeIds?: string[];
@@ -108,6 +109,8 @@ export class RecipeDtoService {
       ingredients: version.ingredients,
       steps: version.steps,
       imageUrls,
+      // CAT-6, UI-20: kept apart from `imageUrls`, whose indexes address uploaded images (IMG-7).
+      externalImageUrl: recipe.externalImageUrl ?? null,
       // SAVE-2, COOK-5.
       canCook:
         relation === 'own' || relation === 'saved' || relation === 'shared',
@@ -143,7 +146,7 @@ export class RecipeDtoService {
       },
       relations: { currentVersion: true, owner: true },
       order: { updatedAt: 'DESC' },
-      skip: Math.max(page, 0) * pageSize,
+      skip: (Math.max(page, 1) - 1) * pageSize,
       // One row past the page tells the client whether to offer "more" (DISC-5).
       take: pageSize + 1,
     });

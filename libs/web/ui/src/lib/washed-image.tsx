@@ -30,6 +30,8 @@ export interface WashedImageProps {
   onError?: ReactEventHandler<HTMLImageElement>;
   onClick?: () => void;
   className?: string;
+  /** DISC-9: grid tiles load their photo lazily; 'lazy' unless a screen asks otherwise. */
+  loading?: 'lazy' | 'eager';
 }
 
 /** UI-3: every photograph goes through the guide's `.washed` wrapper. */
@@ -42,6 +44,7 @@ export function WashedImage({
   onError,
   onClick,
   className,
+  loading = 'lazy',
 }: WashedImageProps): ReactElement {
   const [background, ink] = TINTS[tintIndex(seed)];
   const hasSrc = src !== undefined && src !== null && src !== '';
@@ -58,7 +61,7 @@ export function WashedImage({
       onClick={onClick}
     >
       {hasSrc ? (
-        <img src={src} alt={alt} onError={onError} />
+        <img src={src} alt={alt} loading={loading} onError={onError} />
       ) : (
         (placeholder ?? <Icon.Utensils size={30} title={alt} />)
       )}

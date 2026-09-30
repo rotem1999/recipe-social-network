@@ -75,6 +75,13 @@ function catalogueItem(mealId: string, category: Category): CatalogueItemDto {
   };
 }
 
+/** DISC-9: `count` Seafood catalogue entries with distinct meal ids, in list order. */
+function seafoodCatalogue(count: number): CatalogueItemDto[] {
+  return Array.from({ length: count }, (_, index) =>
+    catalogueItem(String(53000 + index), 'Seafood'),
+  );
+}
+
 interface Harness {
   service: DiscoverService;
   users: { findById: jest.Mock; setFavouriteCategories: jest.Mock };
@@ -259,17 +266,111 @@ describe('DiscoverService.discover with a category (DISC-1, DISC-4, DISC-9)', ()
     ]);
   });
 
-  it('DISC-9 leaves the catalogue out past page 1, since it is not paged', async () => {
+  it('DISC-9 pages the catalogue 20 per page: page 1 carries entries 1 to 20', async () => {
     const harness = makeHarness([]);
-    harness.mealDb.listByCategory.mockResolvedValue([
-      catalogueItem('52959', 'Seafood'),
-    ]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(45));
+
+    const response = await harness.service.discover(USER, 'Seafood', 1);
+
+    expect(response.categories[0].catalogue.map((item) => item.mealId)).toEqual(
+      seafoodCatalogue(45)
+        .slice(0, 20)
+        .map((item) => item.mealId),
+    );
+    expect(response.categories[0].hasMore).toBe(true);
+  });
+
+  it('DISC-9 page 2 carries catalogue entries 21 to 40', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(45));
 
     const response = await harness.service.discover(USER, 'Seafood', 2);
 
-    expect(harness.mealDb.listByCategory).not.toHaveBeenCalled();
-    expect(response.categories[0].catalogue).toEqual([]);
+    expect(harness.mealDb.listByCategory).toHaveBeenCalledWith('Seafood');
+    expect(response.categories[0].catalogue.map((item) => item.mealId)).toEqual(
+      seafoodCatalogue(45)
+        .slice(20, 40)
+        .map((item) => item.mealId),
+    );
     expect(response.categories[0].page).toBe(2);
+    expect(response.categories[0].hasMore).toBe(true);
+  });
+
+  it('DISC-9 the last catalogue page carries the rest and reports no more when the recipes have none', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(45));
+
+    const response = await harness.service.discover(USER, 'Seafood', 3);
+
+    expect(response.categories[0].catalogue.map((item) => item.mealId)).toEqual(
+      seafoodCatalogue(45)
+        .slice(40)
+        .map((item) => item.mealId),
+    );
+    expect(response.categories[0].catalogue).toHaveLength(5);
+    expect(response.categories[0].hasMore).toBe(false);
+  });
+
+  it('DISC-9 reports no more when the catalogue ends exactly on the page and the recipes have none', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(40));
+
+    const response = await harness.service.discover(USER, 'Seafood', 2);
+
+    expect(response.categories[0].catalogue).toHaveLength(20);
+    expect(response.categories[0].hasMore).toBe(false);
+  });
+
+  it('DISC-9 reports more when the recipes have more even though the catalogue has ended', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(5));
+    harness.recipeDtos.listPublicCards.mockResolvedValue({
+      cards: [card('r21', 'Seafood')],
+      hasMore: true,
+    });
+
+    const response = await harness.service.discover(USER, 'Seafood', 2);
+
+    expect(response.categories[0].catalogue).toEqual([]);
+    expect(response.categories[0].hasMore).toBe(true);
+  });
+
+  it('DISC-9 serves an empty catalogue past its last page and asks for no copies', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(45));
+
+    const response = await harness.service.discover(USER, 'Seafood', 4);
+
+    expect(response.categories[0].catalogue).toEqual([]);
+    expect(response.categories[0].hasMore).toBe(false);
+    expect(harness.recipeDtos.catalogueCopyIds).not.toHaveBeenCalled();
+  });
+
+  it('DISC-9, DISC-10 asks for copy ids of the entries on the page only', async () => {
+    const harness = makeHarness([]);
+    harness.mealDb.listByCategory.mockResolvedValue(seafoodCatalogue(45));
+
+    await harness.service.discover(USER, 'Seafood', 2);
+
+    expect(harness.recipeDtos.catalogueCopyIds).toHaveBeenCalledTimes(1);
+    expect(harness.recipeDtos.catalogueCopyIds).toHaveBeenCalledWith(
+      USER.id,
+      seafoodCatalogue(45)
+        .slice(20, 40)
+        .map((item) => item.mealId),
+    );
+  });
+
+  it('DISC-9 passes the asked page on to the public recipe list', async () => {
+    const harness = makeHarness([]);
+
+    await harness.service.discover(USER, 'Seafood', 3);
+
+    expect(harness.recipeDtos.listPublicCards).toHaveBeenCalledWith(USER.id, {
+      category: 'Seafood',
+      page: 3,
+      pageSize: 20,
+    });
   });
 
   it('DISC-9 passes hasMore through from the recipe page', async () => {

@@ -15,7 +15,7 @@ import type {
 } from '@rsn/shared/util-contracts';
 import { CATEGORIES, type Category, isCategory } from '@rsn/shared/util-domain';
 
-/** DISC-9: 20 public recipes per page when one category is asked for. */
+/** DISC-9: 20 public recipes and 20 catalogue entries per page when one category is asked for. */
 const CATEGORY_PAGE_SIZE = 20;
 
 /** DISC-9: the split view (DISC-5) shows the first 8 items of every category. */
@@ -72,7 +72,11 @@ export class DiscoverService {
     return this.users.setFavouriteCategories(userId, categories);
   }
 
-  /** DISC-9: one category, `page` of public recipes plus the catalogue on page 1. */
+  /**
+   * DISC-9: one category, `page` of public recipes plus `page` of its catalogue entries,
+   * 20 of each; page n carries entries (n − 1) × 20 + 1 to n × 20 of either list, and
+   * `hasMore` is true when either list goes past this page.
+   */
   private async oneCategory(
     userId: string,
     favourites: Category[],
@@ -85,16 +89,17 @@ export class DiscoverService {
         page,
         pageSize: CATEGORY_PAGE_SIZE,
       }),
-      // The catalogue is not paged, so it is served with the first page only.
-      page === 1 ? this.catalogueFor(category) : Promise.resolve([]),
+      this.catalogueFor(category),
     ]);
+    const start = (Math.max(page, 1) - 1) * CATEGORY_PAGE_SIZE;
+    const end = start + CATEGORY_PAGE_SIZE;
     return {
       category,
       isFavourite: favourites.includes(category),
       recipes: recipes.cards,
-      catalogue: await this.withCopyIds(userId, catalogue),
+      catalogue: await this.withCopyIds(userId, catalogue.slice(start, end)),
       page,
-      hasMore: recipes.hasMore,
+      hasMore: recipes.hasMore || catalogue.length > end,
     };
   }
 

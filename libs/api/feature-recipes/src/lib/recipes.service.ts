@@ -20,6 +20,8 @@ import {
 import { FriendsService } from '@rsn/api/feature-friends';
 import {
   MAX_IMAGES_PER_RECIPE,
+  MAX_INGREDIENTS,
+  MAX_STEPS,
   validateRecipeContent,
   type RecipeContent,
   type Visibility,
@@ -214,13 +216,14 @@ export class RecipesService {
 
     if (visibility === 'shared') {
       const wanted = [...new Set(sharedWithUserIds ?? [])];
-      // REC-2: a recipe is shared with friends only.
+      // UI-51, REC-2 (QOL-002): sharing with nobody is not a state.
+      if (wanted.length === 0) {
+        throw new BadRequestException('Pick at least one friend to share with');
+      }
+      // REC-2, FR-1, §11.6: a recipe is shared with friends only.
       const friendIds = new Set(await this.friends.friendIdsOf(userId));
-      const strangers = wanted.filter((candidate) => !friendIds.has(candidate));
-      if (strangers.length > 0) {
-        throw new BadRequestException(
-          'A recipe can only be shared with friends: ' + strangers.join(', '),
-        );
+      if (wanted.some((candidate) => !friendIds.has(candidate))) {
+        throw new BadRequestException('You can only share with friends');
       }
       await this.dataSource.transaction(async (manager) => {
         await manager.delete(RecipeShareEntity, { recipeId: recipe.id });
@@ -359,7 +362,13 @@ export class RecipesService {
       throw new NotFoundException(`TheMealDB has no meal ${mealId}`);
     }
     // CAT-4, CAT-6: the mapper fills servings 2 and the parsed ingredients and steps.
-    const content = toRecipeContent(meal);
+    const mapped = toRecipeContent(meal);
+    // §3.1.1 upper limits: a save keeps the first 60 steps and the first 50 ingredients.
+    const content: RecipeContent = {
+      ...mapped,
+      ingredients: mapped.ingredients.slice(0, MAX_INGREDIENTS),
+      steps: mapped.steps.slice(0, MAX_STEPS),
+    };
     this.assertValidContent(content);
 
     const recipeId = await this.dataSource.transaction(async (manager) => {
@@ -488,8 +497,8 @@ export class RecipesService {
         `A recipe version carries at most ${MAX_IMAGES_PER_RECIPE} images`,
       );
     }
-    // The storage service validates the MIME type and the size and answers 503 when
-    // the FIREBASE_* keys are empty (IMG-6).
+    // The storage service detects the type from the bytes, checks the size, and answers
+    // 503 when the FIREBASE_* keys are empty or the bucket write fails (IMG-6).
     const objectPath = await this.images.upload({
       recipeId: recipe.id,
       buffer: file.buffer,

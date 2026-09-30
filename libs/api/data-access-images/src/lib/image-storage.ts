@@ -9,7 +9,10 @@ export interface ImageUploadInput {
   recipeId: string;
   /** Raw bytes of the image. */
   buffer: Buffer;
-  /** Declared MIME type; must be one of IMAGE_MIME_TYPES (IMG-6). */
+  /**
+   * MIME type declared by the client; not trusted. IMG-6 decides the type from the
+   * file's first bytes and stores the detected one.
+   */
   mimeType: string;
   /** Original file name, kept only for logging; never used in the object path. */
   originalName?: string;
@@ -21,7 +24,10 @@ export interface ImageStorage {
   isConfigured(): boolean;
   /** IMG-3: writes the bytes and returns the object path `recipes/<recipeId>/<uuid>.<ext>`. */
   upload(input: ImageUploadInput): Promise<string>;
-  /** Deletes one object; a missing object is not an error. */
+  /**
+   * Deletes one object; a missing object is not an error. Other failures reject with an
+   * Error holding only the storage status code and message (IMG-6).
+   */
   remove(objectPath: string): Promise<void>;
   /** IMG-4: one read signed URL per path, in the same order. */
   signedUrls(objectPaths: string[]): Promise<string[]>;

@@ -3,8 +3,9 @@ import {
   IsEmail,
   IsOptional,
   IsString,
-  Length,
   Matches,
+  MaxLength,
+  MinLength,
 } from 'class-validator';
 import type { SignUpRequest } from '@rsn/shared/util-contracts';
 import {
@@ -17,23 +18,32 @@ import {
 const toLowerTrimmed = ({ value }: { value: unknown }): unknown =>
   typeof value === 'string' ? value.trim().toLowerCase() : value;
 
-/** AUTH-5: `POST /auth/sign-up` body. */
+/** AUTH-5, UI-43: the same sentence the sign-up form shows (UI-9). */
+const USERNAME_MESSAGE =
+  'Use 3 to 32 characters: letters, numbers, underscore, dot or hyphen.';
+
+/** UI-43: the sign-up form's wording for a malformed email (UI-9). */
+const EMAIL_MESSAGE = 'Enter an email address like you@example.com.';
+
+/** AUTH-5: `POST /auth/sign-up` body; UI-43: messages written for people. */
 export class SignUpDto implements SignUpRequest {
-  @IsString()
+  @IsString({ message: USERNAME_MESSAGE })
   @Transform(toLowerTrimmed)
-  @Matches(USERNAME_PATTERN, {
-    message:
-      'username must be 3-32 characters of a-z, 0-9, underscore, dot or hyphen',
-  })
+  @Matches(USERNAME_PATTERN, { message: USERNAME_MESSAGE })
   username!: string;
 
-  @IsString()
-  @Length(PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH)
+  @IsString({ message: 'Enter a password' })
+  @MinLength(PASSWORD_MIN_LENGTH, {
+    message: `Use at least ${PASSWORD_MIN_LENGTH} characters.`,
+  })
+  @MaxLength(PASSWORD_MAX_LENGTH, {
+    message: `Use at most ${PASSWORD_MAX_LENGTH} characters.`,
+  })
   password!: string;
 
   @IsOptional()
-  @IsString()
+  @IsString({ message: EMAIL_MESSAGE })
   @Transform(toLowerTrimmed)
-  @IsEmail()
+  @IsEmail({}, { message: EMAIL_MESSAGE })
   email?: string;
 }

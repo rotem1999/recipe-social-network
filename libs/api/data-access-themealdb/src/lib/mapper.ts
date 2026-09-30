@@ -110,6 +110,18 @@ const FOREIGN_UNIT_WORDS: ReadonlySet<string> = new Set([
 /** CAT-6: "1." / "1)" / "STEP 1" / "Step 1:" prefixes are dropped from a step. */
 const STEP_NUMBER_PREFIX = /^(?:step\s*\d+\s*[.):\-–]?\s*|\d+\s*[.):\-–]\s*)/i;
 
+/** CAT-6: leading bullet marks (`*`, `-`, `•`) are stripped from each step. */
+const BULLET_PREFIX = /^[*\-•]+\s*/;
+
+/** CAT-6: a line ending with ":" and fewer than this many words is a heading, not a step. */
+const HEADING_MAX_WORDS = 5;
+
+/** CAT-6: a note equal to this (any letter case) adds nothing to an empty quantity. */
+const TO_TASTE_NOTE = 'to taste';
+
+/** CAT-6 (BUG-030): a measure that is only "pinch" or "a pinch", any letter case. */
+const PINCH_ONLY = /^(?:a\s+)?pinch$/i;
+
 function round(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -124,6 +136,8 @@ export function parseMeasure(
 ): Pick<Ingredient, 'quantity' | 'unit' | 'note'> {
   const raw = (rawMeasure ?? '').trim();
   if (raw.length === 0) return { quantity: null, unit: 'none' };
+  // CAT-6 (BUG-030): "pinch" / "a pinch" alone is the unit pinch with an empty quantity.
+  if (PINCH_ONLY.test(raw)) return { quantity: null, unit: 'pinch' };
 
   const parsed = readLeadingNumber(raw);
   if (parsed) {
@@ -150,6 +164,8 @@ export function parseMeasure(
     }
   }
 
+  // CAT-6: an empty quantity already reads "to taste", so the same words as a note are dropped.
+  if (raw.toLowerCase() === TO_TASTE_NOTE) return { quantity: null, unit: 'none' };
   return { quantity: null, unit: 'none', note: raw };
 }
 
@@ -189,15 +205,32 @@ function splitLongParagraph(paragraph: string): string[] {
   return chunks.length > 0 ? chunks : [paragraph];
 }
 
-/** CAT-6: `strInstructions` is one blob; split on line breaks, drop empty steps. */
+/** CAT-6: a step without its leading bullet marks. */
+function stripBullets(text: string): string {
+  return text.trim().replace(BULLET_PREFIX, '').trim();
+}
+
+/** CAT-6: "Pro Tips:", "Serving Suggestions:" — ends with ":" and has fewer than five words. */
+function isHeading(paragraph: string): boolean {
+  return (
+    paragraph.endsWith(':') &&
+    paragraph.split(/\s+/).filter((word) => word.length > 0).length <
+      HEADING_MAX_WORDS
+  );
+}
+
+/**
+ * CAT-6: `strInstructions` is one blob; split on line breaks, strip bullet marks and
+ * step numbers, drop headings and empty steps.
+ */
 export function toSteps(instructions: string | null | undefined): Step[] {
   const blob = instructions ?? '';
   const steps: Step[] = [];
   for (const line of blob.split(/\r\n|\r|\n/)) {
-    const paragraph = line.trim().replace(STEP_NUMBER_PREFIX, '').trim();
-    if (paragraph.length === 0) continue;
+    const paragraph = stripBullets(line).replace(STEP_NUMBER_PREFIX, '').trim();
+    if (paragraph.length === 0 || isHeading(paragraph)) continue;
     for (const chunk of splitLongParagraph(paragraph)) {
-      const text = chunk.trim();
+      const text = stripBullets(chunk);
       if (text.length > 0) steps.push({ text });
     }
   }

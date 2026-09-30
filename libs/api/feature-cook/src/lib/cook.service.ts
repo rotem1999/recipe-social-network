@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import type { AuthUser } from '@rsn/api/feature-auth';
 import { RecipeAccessService } from '@rsn/api/feature-recipes';
@@ -14,9 +15,16 @@ import type {
 import { AiQuotaService } from './ai-quota.service';
 import { CookPromptBuilder } from './cook-prompt.builder';
 
-/** COOK-10: one answer is at most 300 tokens, at a low temperature. */
-const MAX_TOKENS = 300;
+/**
+ * COOK-10: one answer is at most 1500 tokens (300 until 2026-09-30: the model
+ * spends most completion tokens on reasoning that is not returned), at a low
+ * temperature.
+ */
+const MAX_TOKENS = 1500;
 const TEMPERATURE = 0.4;
+
+/** COOK-10: the 503 message when the model returns no text. */
+const NO_ANSWER_MESSAGE = "The assistant didn't answer. Ask again.";
 
 /**
  * COOK-1/COOK-2: one stateless question about one step of a recipe the caller may cook.
@@ -67,9 +75,16 @@ export class CookService {
       temperature: TEMPERATURE,
     });
 
+    // COOK-10: an answer with no text is a 503; the call is already logged
+    // by OpenRouterService (LOG-5) and the quota unit stays spent (COOK-8).
+    const answer = result.text.trim();
+    if (answer === '') {
+      throw new ServiceUnavailableException(NO_ANSWER_MESSAGE);
+    }
+
     // COOK-10: the text, the tokens and the cost go back to the client.
     return {
-      answer: result.text.trim(),
+      answer,
       quota,
       model: result.model,
       promptTokens: result.promptTokens,

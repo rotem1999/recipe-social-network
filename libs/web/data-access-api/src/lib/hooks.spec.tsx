@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, vi } from 'vitest';
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,6 +11,7 @@ import {
 import type { ReactElement } from 'react';
 import type { UserDto } from '@rsn/shared/util-contracts';
 
+import { ApiError, NETWORK_ERROR_MESSAGE, SERVER_ERROR_MESSAGE } from './client';
 import { endpoints } from './endpoints';
 import { AuthProvider, useAuth, useTimezone } from './hooks';
 import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, tokenStore } from './tokens';
@@ -42,6 +44,20 @@ function AuthProbe(): ReactElement {
     <div>
       <span data-testid="status">{status}</span>
       <span data-testid="user">{user?.username ?? '-'}</span>
+    </div>
+  );
+}
+
+/** UI-26: the status, the user and the Retry of the unreachable screen. */
+function RetryProbe(): ReactElement {
+  const { status, user, retry } = useAuth();
+  return (
+    <div>
+      <span data-testid="status">{status}</span>
+      <span data-testid="user">{user?.username ?? '-'}</span>
+      <button type="button" onClick={retry}>
+        Retry
+      </button>
     </div>
   );
 }
@@ -110,10 +126,10 @@ describe('AuthProvider (UI-17)', () => {
     expect(screen.getByTestId('user').textContent).toBe('-');
   });
 
-  it('AUTH-7 clears the stored pair and signs out when me() is rejected', async () => {
+  it('UI-26 shows sign-in and leaves the tokens when the first me() fails with a 4xx other than 0/5xx', async () => {
     localStorage.setItem(ACCESS_TOKEN_KEY, 'stale-access');
     localStorage.setItem(REFRESH_TOKEN_KEY, 'stale-refresh');
-    me.mockRejectedValue(new Error('Unauthorized'));
+    me.mockRejectedValue(new ApiError(404, 'User not found', 'Not Found'));
 
     render(
       <AuthProvider>
@@ -124,9 +140,256 @@ describe('AuthProvider (UI-17)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('status').textContent).toBe('signed-out'),
     );
-    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBeNull();
-    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
+    // UI-26: only the client clears the pair; the next sign-in replaces it.
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('stale-access');
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('stale-refresh');
     expect(screen.getByTestId('user').textContent).toBe('-');
+  });
+
+  it('UI-26 shows sign-in and leaves the tokens when the first me() rejects with a non-API error', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'stale-access');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'stale-refresh');
+    me.mockRejectedValue(new Error('Unexpected token < in JSON'));
+
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('signed-out'),
+    );
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('stale-access');
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('stale-refresh');
+  });
+
+  it('UI-26 reports unreachable and keeps the tokens when the first me() fails with status 0', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'access-1');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
+    me.mockRejectedValue(new ApiError(0, NETWORK_ERROR_MESSAGE));
+
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('unreachable'),
+    );
+    expect(screen.getByTestId('user').textContent).toBe('-');
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('access-1');
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('refresh-1');
+  });
+
+  it('UI-26 reports unreachable and keeps the tokens when the first me() fails with a 5xx', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'access-1');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
+    me.mockRejectedValue(new ApiError(503, SERVER_ERROR_MESSAGE));
+
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('unreachable'),
+    );
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('access-1');
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('refresh-1');
+  });
+
+  it('UI-26 retry() repeats GET /me and signs in once the server answers', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'access-1');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
+    me.mockRejectedValueOnce(new ApiError(0, NETWORK_ERROR_MESSAGE));
+    let answer: (user: UserDto) => void = () => undefined;
+    me.mockReturnValueOnce(
+      new Promise<UserDto>((resolve) => {
+        answer = resolve;
+      }),
+    );
+
+    render(
+      <AuthProvider>
+        <RetryProbe />
+      </AuthProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('unreachable'),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    // AUTH-8: back to 'loading' while the repeated GET /me is in flight.
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('loading'),
+    );
+    expect(me).toHaveBeenCalledTimes(2);
+
+    act(() => answer(USER));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('signed-in'),
+    );
+    expect(screen.getByTestId('user').textContent).toBe('rotem');
+    expect(tokenStore.get()).toEqual({
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+    });
+  });
+
+  it('UI-26 retry() that fails again with a 5xx stays unreachable and keeps the tokens', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'access-1');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
+    me.mockRejectedValueOnce(new ApiError(0, NETWORK_ERROR_MESSAGE));
+    me.mockRejectedValueOnce(new ApiError(502, SERVER_ERROR_MESSAGE));
+
+    render(
+      <AuthProvider>
+        <RetryProbe />
+      </AuthProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('unreachable'),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(me).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('unreachable'),
+    );
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('access-1');
+  });
+
+  it('UI-26 retry() whose GET /me fails with a 4xx shows sign-in', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'access-1');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
+    me.mockRejectedValueOnce(new ApiError(0, NETWORK_ERROR_MESSAGE));
+    me.mockRejectedValueOnce(new ApiError(404, 'User not found'));
+
+    render(
+      <AuthProvider>
+        <RetryProbe />
+      </AuthProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('unreachable'),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('signed-out'),
+    );
+  });
+
+  it('UI-26 / UI-9 returns to sign-in at once when the client clears the tokens', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'access-1');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
+    me.mockResolvedValue(USER);
+
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('signed-in'),
+    );
+
+    // What the client does after a rejected refresh or a second 401.
+    act(() => tokenStore.clear());
+
+    expect(screen.getByTestId('status').textContent).toBe('signed-out');
+    expect(screen.getByTestId('user').textContent).toBe('-');
+  });
+
+  it('UI-26 stays signed in when the tokens are replaced by a refresh', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'access-1');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
+    me.mockResolvedValue(USER);
+
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('signed-in'),
+    );
+
+    act(() => tokenStore.set('access-2', 'refresh-2'));
+
+    expect(screen.getByTestId('status').textContent).toBe('signed-in');
+    expect(screen.getByTestId('user').textContent).toBe('rotem');
+  });
+
+  it('UI-26 stops listening to the token store when the provider unmounts', async () => {
+    const subscribe = vi.spyOn(tokenStore, 'subscribe');
+    const unsubscribe = vi.fn();
+    subscribe.mockReturnValue(unsubscribe);
+
+    const { unmount } = render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>,
+    );
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    unmount();
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    subscribe.mockRestore();
+  });
+
+  it('UI-26 refreshUser() keeps the session and the tokens when GET /me cannot reach the server', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'access-1');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
+    me.mockResolvedValueOnce(USER);
+    me.mockRejectedValueOnce(new ApiError(0, NETWORK_ERROR_MESSAGE));
+    let refreshed: UserDto | null | 'pending' = 'pending';
+
+    function RefreshProbe(): ReactElement {
+      const { status, user, refreshUser } = useAuth();
+      return (
+        <div>
+          <span data-testid="status">{status}</span>
+          <span data-testid="user">{user?.username ?? '-'}</span>
+          <button
+            type="button"
+            onClick={() => {
+              void refreshUser().then((value) => {
+                refreshed = value;
+              });
+            }}
+          >
+            Refresh
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <AuthProvider>
+        <RefreshProbe />
+      </AuthProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('signed-in'),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => expect(refreshed).toBeNull());
+    expect(me).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('status').textContent).toBe('signed-in');
+    expect(screen.getByTestId('user').textContent).toBe('rotem');
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('access-1');
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('refresh-1');
   });
 
   it('UI-17 stores the pair returned by sign-in and exposes the user', async () => {
@@ -204,6 +467,133 @@ describe('AuthProvider (UI-17)', () => {
     );
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBeNull();
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
+  });
+});
+
+describe('AuthProvider sessionEnded (UI-44)', () => {
+  function SessionProbe(): ReactElement {
+    const { status, sessionEnded, signIn: doSignIn, signOut } = useAuth();
+    return (
+      <div>
+        <span data-testid="status">{status}</span>
+        <span data-testid="ended">{String(sessionEnded)}</span>
+        <button
+          type="button"
+          onClick={() => {
+            void doSignIn({ username: 'rotem', password: 'correct horse' }).catch(
+              () => undefined,
+            );
+          }}
+        >
+          Sign in
+        </button>
+        <button type="button" onClick={signOut}>
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
+  /** Mounts a signed-in session on the shared token store. */
+  async function renderSignedIn(): Promise<void> {
+    tokenStore.set('access-1', 'refresh-1');
+    me.mockResolvedValue(USER);
+    render(
+      <AuthProvider>
+        <SessionProbe />
+      </AuthProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('signed-in'),
+    );
+  }
+
+  beforeEach(() => {
+    // The shared store keeps sessionEnded in memory between tests.
+    tokenStore.clear();
+  });
+
+  it('UI-44 is false while signed in', async () => {
+    await renderSignedIn();
+
+    expect(screen.getByTestId('ended').textContent).toBe('false');
+  });
+
+  it('UI-44 turns true and shows sign-in when the client ends the session', async () => {
+    await renderSignedIn();
+
+    // What the client does after a rejected refresh or a second 401.
+    act(() => tokenStore.endSession());
+
+    expect(screen.getByTestId('status').textContent).toBe('signed-out');
+    expect(screen.getByTestId('ended').textContent).toBe('true');
+  });
+
+  it('UI-44 stays false after a sign-out', async () => {
+    await renderSignedIn();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('signed-out'),
+    );
+    expect(screen.getByTestId('ended').textContent).toBe('false');
+  });
+
+  it('UI-44 clears when a sign-out follows an ended session', async () => {
+    await renderSignedIn();
+    act(() => tokenStore.endSession());
+    expect(screen.getByTestId('ended').textContent).toBe('true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('ended').textContent).toBe('false'),
+    );
+  });
+
+  it('UI-44 clears on the next successful sign-in', async () => {
+    await renderSignedIn();
+    act(() => tokenStore.endSession());
+    expect(screen.getByTestId('ended').textContent).toBe('true');
+    signIn.mockResolvedValue({
+      accessToken: 'access-2',
+      refreshToken: 'refresh-2',
+      user: USER,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('status').textContent).toBe('signed-in'),
+    );
+    expect(screen.getByTestId('ended').textContent).toBe('false');
+  });
+
+  it('UI-44 stays true after a failed sign-in (a wrong password) that follows an ended session', async () => {
+    await renderSignedIn();
+    act(() => tokenStore.endSession());
+    signIn.mockRejectedValue(new ApiError(401, 'Unauthorized', 'Unauthorized'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    await waitFor(() => expect(signIn).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('status').textContent).toBe('signed-out');
+    expect(screen.getByTestId('ended').textContent).toBe('true');
+  });
+
+  it('UI-44 stays false when a 401 arrives with no tokens stored', async () => {
+    render(
+      <AuthProvider>
+        <SessionProbe />
+      </AuthProvider>,
+    );
+
+    // A wrong password on the sign-in screen: the client ends a session that never was.
+    act(() => tokenStore.endSession());
+
+    expect(screen.getByTestId('status').textContent).toBe('signed-out');
+    expect(screen.getByTestId('ended').textContent).toBe('false');
   });
 });
 

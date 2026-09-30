@@ -52,6 +52,14 @@ function writeKey(key: string, value: string | null): void {
  */
 export class TokenStore {
   private readonly listeners = new Set<TokenListener>();
+  // UI-44: true after the client ended a live session on a 401; a sign-out or
+  // a new pair resets it. Kept in memory only, like the message it drives.
+  private ended = false;
+
+  /** UI-44: true when the last clear was a session ended by a 401, not a sign-out. */
+  get sessionEnded(): boolean {
+    return this.ended;
+  }
 
   /** Current access JWT, or null when signed out (AUTH-8 sends no header then). */
   getAccessToken(): string | null {
@@ -75,11 +83,30 @@ export class TokenStore {
   set(accessToken: string, refreshToken: string): void {
     writeKey(ACCESS_TOKEN_KEY, accessToken);
     writeKey(REFRESH_TOKEN_KEY, refreshToken);
+    this.ended = false;
     this.emit();
   }
 
-  /** Discards both tokens: sign-out, or a refresh that the API rejected (AUTH-7). */
+  /** Discards both tokens on a user sign-out (AUTH-7); UI-44 shows no message then. */
   clear(): void {
+    this.ended = false;
+    this.discard();
+  }
+
+  /**
+   * UI-26 / UI-44: discards both tokens because the API rejected the session
+   * (a refused refresh, or a 401 after the one refresh). The session counts as
+   * ended only when a token was stored; a 401 with none (a wrong password on
+   * the sign-in screen) leaves {@link sessionEnded} as it was.
+   */
+  endSession(): void {
+    if (this.getAccessToken() !== null || this.getRefreshToken() !== null) {
+      this.ended = true;
+    }
+    this.discard();
+  }
+
+  private discard(): void {
     writeKey(ACCESS_TOKEN_KEY, null);
     writeKey(REFRESH_TOKEN_KEY, null);
     this.emit();

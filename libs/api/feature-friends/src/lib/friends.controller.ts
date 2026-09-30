@@ -62,7 +62,7 @@ export class FriendsController {
     return this.friends.decline(user.id, id);
   }
 
-  /** §11.6 `DELETE /friends/requests/:id` — sender only (cancel). */
+  /** §11.6 `DELETE /friends/requests/:id` — FR-4: the sender cancels, the receiver declines. */
   @ApiErrorResponses(400, 401, 403, 404, 409)
   @Delete('requests/:id')
   cancel(

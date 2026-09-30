@@ -89,6 +89,12 @@ export class RecipeDetailResponseDto
   /** IMG-4: short-lived signed URLs. */
   imageUrls!: string[];
 
+  /**
+   * CAT-6, UI-20, IMG-7: the TheMealDB photo a TheMealDB copy carries; hosted by
+   * TheMealDB, never removable. Null when the recipe has none.
+   */
+  externalImageUrl!: string | null;
+
   /** SAVE-2, COOK-5. */
   canCook!: boolean;
 

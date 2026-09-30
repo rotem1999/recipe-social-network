@@ -243,3 +243,47 @@ describe('chooseFood (NUT-8)', () => {
     expect(descriptionOf(chosen)).toBe('Garlic sauce');
   });
 });
+
+describe('container words in food choice (NUT-8)', () => {
+  it('NUT-8 keeps container words in the strict query', () => {
+    expect(strictQuery('Garlic cloves')).toBe('+garlic +cloves raw');
+    expect(strictQuery('Chicken Breasts')).toBe('+chicken +breasts raw');
+  });
+
+  it('NUT-8 "Garlic cloves" scores "Garlic, raw" (head garlic, not clove)', () => {
+    // +3 first segment of name words, +2 raw; `clove` is not in the description.
+    expect(scoreHit('Garlic cloves', hit('Garlic, raw'))).toBe(5);
+  });
+
+  it('NUT-8 "Garlic cloves" skips a hit without garlic ("Spices, cloves, ground")', () => {
+    expect(scoreHit('Garlic cloves', hit('Spices, cloves, ground'))).toBe(null);
+  });
+
+  it('NUT-8 a container word still earns the +2 name-word bonus', () => {
+    // +3 first segment, +2 `clove`, +2 raw.
+    expect(scoreHit('Garlic cloves', hit('Garlic, raw, peeled cloves'))).toBe(7);
+  });
+
+  it('NUT-8 "Garlic cloves" → "Garlic, raw", not the spice', () => {
+    const chosen = chooseFood('Garlic cloves', [
+      hit('Spices, cloves, ground'),
+      hit('Garlic, raw'),
+    ]);
+    expect(descriptionOf(chosen)).toBe('Garlic, raw');
+  });
+
+  it('NUT-8 "Chicken breasts" → "Chicken, breast, boneless, skinless, raw" (§16 U11)', () => {
+    const chosen = chooseFood('Chicken breasts', [
+      hit('Chicken breast tenders, breaded, uncooked'),
+      hit('Chicken, breast, boneless, skinless, raw'),
+    ]);
+    expect(descriptionOf(chosen)).toBe(
+      'Chicken, breast, boneless, skinless, raw',
+    );
+  });
+
+  it('NUT-8 a name of container words only keeps its last word as the head ("Slices")', () => {
+    expect(scoreHit('Slices', hit('Garlic, raw'))).toBe(null);
+    expect(scoreHit('Slices', hit('Slices, bread'))).not.toBe(null);
+  });
+});

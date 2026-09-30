@@ -7,6 +7,7 @@ import {
   REQUIRED_DB_ENV_KEYS,
 } from '../data-source-options';
 import { ENTITIES } from '../entities';
+import { MigrationCheckService } from './migration-check.service';
 
 /**
  * DB-2: reads the `DB_*` keys through `ConfigService` (ConfigModule.forRoot({ isGlobal: true })
@@ -40,6 +41,8 @@ function dbEnvFromConfig(configService: ConfigService): NodeJS.ProcessEnv {
     }),
     TypeOrmModule.forFeature(ENTITIES),
   ],
+  // DB-6: warns at boot when migrations are pending.
+  providers: [MigrationCheckService],
   exports: [TypeOrmModule],
 })
 export class DbModule {}

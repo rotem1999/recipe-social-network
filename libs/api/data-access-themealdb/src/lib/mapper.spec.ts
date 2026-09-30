@@ -78,10 +78,34 @@ describe('parseMeasure', () => {
   });
 
   it('CAT-6 keeps a measure with no leading number raw', () => {
-    expect(parseMeasure('to taste')).toEqual({
+    expect(parseMeasure('Garnish')).toEqual({
       quantity: null,
       unit: 'none',
-      note: 'to taste',
+      note: 'Garnish',
+    });
+  });
+
+  it('CAT-6 drops a "to taste" note because the empty quantity already reads "to taste"', () => {
+    const parsed = parseMeasure('to taste');
+
+    expect(parsed).toEqual({ quantity: null, unit: 'none' });
+    expect('note' in parsed).toBe(false);
+  });
+
+  it('CAT-6 drops a "to taste" note in any letter case and with surrounding spaces', () => {
+    expect(parseMeasure('To Taste')).toEqual({ quantity: null, unit: 'none' });
+    expect(parseMeasure('TO TASTE')).toEqual({ quantity: null, unit: 'none' });
+    expect(parseMeasure('  to taste  ')).toEqual({
+      quantity: null,
+      unit: 'none',
+    });
+  });
+
+  it('CAT-6 keeps a note that only contains "to taste" among other words', () => {
+    expect(parseMeasure('salt to taste')).toEqual({
+      quantity: null,
+      unit: 'none',
+      note: 'salt to taste',
     });
   });
 
@@ -102,6 +126,27 @@ describe('parseMeasure', () => {
     expect(parseMeasure('2 tbsps')).toEqual({ quantity: 2, unit: 'tbsp' });
     expect(parseMeasure('1 pinch')).toEqual({ quantity: 1, unit: 'pinch' });
   });
+
+  it.each(['pinch', 'a pinch', 'Pinch', 'A Pinch', 'A PINCH', '  a pinch  '])(
+    'CAT-6 reads the measure "%s" as the unit pinch with an empty quantity and no note',
+    (measure) => {
+      const parsed = parseMeasure(measure);
+
+      expect(parsed).toEqual({ quantity: null, unit: 'pinch' });
+      expect('note' in parsed).toBe(false);
+    },
+  );
+
+  it.each(['a pinch of salt', 'pinches', 'the pinch', 'pinch pinch'])(
+    'CAT-6 keeps "%s" raw because it is not only "pinch" or "a pinch"',
+    (measure) => {
+      expect(parseMeasure(measure)).toEqual({
+        quantity: null,
+        unit: 'none',
+        note: measure,
+      });
+    },
+  );
 });
 
 describe('toIngredients', () => {
@@ -195,6 +240,55 @@ describe('toSteps', () => {
     for (const step of steps) {
       expect(step.text.length).toBeLessThanOrEqual(300);
     }
+  });
+
+  it('CAT-6 drops a heading line that ends with ":" and has fewer than five words', () => {
+    const steps = toSteps(
+      [
+        'Grill the meat.',
+        'Pro Tips:',
+        'Rest it for ten minutes.',
+        'Serving Suggestions:',
+        'Serve with salad.',
+      ].join('\n'),
+    );
+
+    expect(steps.map((step) => step.text)).toEqual([
+      'Grill the meat.',
+      'Rest it for ten minutes.',
+      'Serve with salad.',
+    ]);
+  });
+
+  it('CAT-6 keeps a line ending with ":" that has five words or more', () => {
+    const steps = toSteps('Mix the flour and sugar:\nFour words heading here:');
+
+    expect(steps.map((step) => step.text)).toEqual([
+      'Mix the flour and sugar:',
+    ]);
+  });
+
+  it('CAT-6 keeps a short line that does not end with ":"', () => {
+    expect(toSteps('Serve hot.')).toEqual([{ text: 'Serve hot.' }]);
+  });
+
+  it('CAT-6 strips the leading bullet marks `*`, `-` and `•` from each step', () => {
+    const steps = toSteps(
+      ['* Chop the onion', '- Fry it', '• Season it', '** Plate it'].join('\n'),
+    );
+
+    expect(steps.map((step) => step.text)).toEqual([
+      'Chop the onion',
+      'Fry it',
+      'Season it',
+      'Plate it',
+    ]);
+  });
+
+  it('CAT-6 strips a bullet before a step number and drops a bulleted heading', () => {
+    const steps = toSteps(['- 1. Boil the water', '* Pro Tips:', '•'].join('\n'));
+
+    expect(steps).toEqual([{ text: 'Boil the water' }]);
   });
 
   it('CAT-6 returns an empty list for missing instructions', () => {

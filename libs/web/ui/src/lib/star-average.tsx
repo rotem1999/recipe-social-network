@@ -61,11 +61,7 @@ export function StarAverage({
           {decimal}
         </span>
       )}
-      <span
-        className="text-muted"
-        style={{ fontSize: '12px' }}
-        aria-hidden="true"
-      >
+      <span className="text-muted text-small" aria-hidden="true">
         {hasRatings ? countLabel : 'No ratings yet'}
       </span>
     </span>
