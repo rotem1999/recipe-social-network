@@ -285,8 +285,41 @@ describe('ingredientAmount', () => {
     ).toEqual({ amount: '1 Can', note: null });
   });
 
+  it('UI-37 moves a note with a digit anywhere into the amount column ("Juice of 1/2", "Zest and juice of 1")', () => {
+    for (const note of ['Juice of 1/2', 'Zest and juice of 1', 'Juice of 1', 'About 200 g']) {
+      expect(ingredientAmount({ quantity: null, unit: 'none', note })).toEqual({
+        amount: note,
+        note: null,
+      });
+    }
+  });
+
+  it('UI-37 moves a note with a listed fraction character anywhere into the amount column', () => {
+    for (const note of ['Juice of ½', 'Zest of ¼', 'about ⅓', 'roughly ⅔', 'near ¾', 'a scant ⅛']) {
+      expect(ingredientAmount({ quantity: null, unit: 'none', note })).toEqual({
+        amount: note,
+        note: null,
+      });
+    }
+  });
+
+  it('UI-37 keeps "to taste" for a note with no digit, fraction or leading measurement word ("to serve", "For Greasing")', () => {
+    for (const note of ['to serve', 'For Greasing', 'Juice of a lemon', 'garnish with sprigs']) {
+      expect(ingredientAmount({ quantity: null, unit: 'none', note })).toEqual({
+        amount: 'to taste',
+        note,
+      });
+    }
+  });
+
+  it('UI-37 keeps an amount-like note with a digit as the note when a quantity is set', () => {
+    expect(
+      ingredientAmount({ quantity: 1, unit: 'piece', note: 'Juice of 1/2' }),
+    ).toEqual({ amount: '1 piece', note: 'Juice of 1/2' });
+  });
+
   it('UI-37 keeps "to taste" and the note when the note is not an amount', () => {
-    for (const note of ['chopped', 'large', 'Juice of 1', 'canned', 'Fresh sprigs']) {
+    for (const note of ['chopped', 'large', 'canned', 'Fresh sprigs']) {
       expect(ingredientAmount({ quantity: null, unit: 'none', note })).toEqual({
         amount: 'to taste',
         note,

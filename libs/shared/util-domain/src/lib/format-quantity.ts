@@ -83,7 +83,8 @@ const MEASURE_WORDS: ReadonlySet<string> = new Set(
 
 /** UI-37: the note is really an amount ("1 Can", "½ jar", "Dash") rather than a note. */
 function noteIsAmount(note: string): boolean {
-  if (/^[\d¼⅓½⅔¾⅛]/.test(note)) {
+  // A digit or fraction anywhere states an amount ("1 Can", "Juice of 1/2").
+  if (/[\d¼⅓½⅔¾⅛]/.test(note)) {
     return true;
   }
   const first = note.split(/\s+/)[0]?.toLowerCase().replace(/[^a-z]/g, '') ?? '';

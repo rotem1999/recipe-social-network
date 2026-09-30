@@ -817,6 +817,18 @@ describe('RecipeDetailScreen', () => {
     expect(step.classList.contains('text-pre-line')).toBe(true);
   });
 
+  it('UI-45 shows the recipe description with its line breaks (text-pre-line)', async () => {
+    const description = 'Eggs poached in tomato.\nServe with bread.';
+    show({ ...OWN, description });
+
+    const paragraph = await screen.findByText(
+      (_content, element) =>
+        element?.tagName === 'P' && element.textContent === description,
+    );
+    expect(paragraph.classList.contains('text-pre-line')).toBe(true);
+    expect(paragraph.getAttribute('dir')).toBe('auto');
+  });
+
   it('UI-50 renders the SAVE-9 source link as a focusable span with the button role', async () => {
     show(SAVED_COPY);
 

@@ -168,6 +168,31 @@ describe('IngredientsPanel', () => {
     expect(screen.queryByText('to taste')).toBeNull();
   });
 
+  it('UI-37 moves a note with a digit anywhere into the amount column and keeps "to taste" for "to serve"', () => {
+    render(
+      <IngredientsPanel
+        ingredients={[
+          { quantity: null, unit: 'none', name: 'Lemon', note: 'Juice of 1/2' },
+          { quantity: null, unit: 'none', name: 'Orange', note: 'Zest and juice of 1' },
+          { quantity: null, unit: 'none', name: 'Parsley', note: 'to serve' },
+          { quantity: null, unit: 'none', name: 'Butter', note: 'For Greasing' },
+        ]}
+        servings={2}
+      />,
+    );
+
+    expect(quantities()).toEqual([
+      'Juice of 1/2',
+      'Zest and juice of 1',
+      'to taste',
+      'to taste',
+    ]);
+    expect(screen.getAllByText('Juice of 1/2')).toHaveLength(1);
+    expect(screen.getAllByText('Zest and juice of 1')).toHaveLength(1);
+    expect(screen.getByText('to serve')).toBeTruthy();
+    expect(screen.getByText('For Greasing')).toBeTruthy();
+  });
+
   it('UI-37 keeps "to taste" and the note when the note is not an amount', () => {
     render(
       <IngredientsPanel

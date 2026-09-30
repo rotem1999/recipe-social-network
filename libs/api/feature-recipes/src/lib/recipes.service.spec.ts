@@ -1,5 +1,10 @@
 // §3: REC-1/6/7/8, SAVE-1/4..10, CAT-3/4/7, IMG-3/6/7 and §3.1.1 validation on every recipe write.
-import { BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Logger,
+  ValidationPipe,
+} from '@nestjs/common';
 import { IsNull } from 'typeorm';
 import type { DataSource, EntityManager, Repository } from 'typeorm';
 import {
@@ -22,6 +27,7 @@ import type {
   Visibility,
 } from '@rsn/shared/util-domain';
 import type { RecipeDetailDto } from '@rsn/shared/util-contracts';
+import { RecipeWriteDto } from './dto/recipe-write.dto';
 import { RecipeAccessService } from './recipe-access.service';
 import type { RecipeDtoService } from './recipe-dto.service';
 import { RecipesService } from './recipes.service';
@@ -320,6 +326,38 @@ describe('RecipesService', () => {
         RecipeEntity,
         { id: 'generated-1' },
         { currentVersionId: 'generated-2' },
+      );
+    });
+
+    it('§3.1.1 BUG-033 creates a recipe from a body with description: null (through the ValidationPipe) and stores it as null', async () => {
+      const { service, recipes, manager, dataSource } = harness();
+      recipes.findOne.mockResolvedValue(
+        recipeRow({ ownerId: ME, currentVersion: versionRow() }),
+      );
+      const pipe = new ValidationPipe({ whitelist: true, transform: true });
+      const dto = (await pipe.transform(
+        {
+          ...content(),
+          description: null,
+          prepMinutes: null,
+          cookMinutes: null,
+          ingredients: [{ quantity: 4, unit: 'piece', name: 'egg', note: null }],
+          steps: [{ text: 'Crack the eggs into the sauce.', durationMinutes: null }],
+        },
+        { type: 'body', metatype: RecipeWriteDto, data: '' },
+      )) as RecipeWriteDto;
+
+      await expect(service.create(ME, dto)).resolves.toBe(DETAIL);
+
+      expect(dataSource.transaction).toHaveBeenCalled();
+      expect(manager.create).toHaveBeenNthCalledWith(
+        2,
+        RecipeVersionEntity,
+        expect.objectContaining({
+          description: null,
+          prepMinutes: null,
+          cookMinutes: null,
+        }),
       );
     });
 

@@ -366,7 +366,7 @@ export function RecipeDetailScreen({
           shown.description === '' ? null : (
             <p
               dir="auto"
-              className="text-muted text-lead bidi-text"
+              className="text-muted text-lead bidi-text text-pre-line"
               style={{ maxWidth: '520px' }}
             >
               {shown.description}

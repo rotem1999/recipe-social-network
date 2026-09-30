@@ -1,7 +1,7 @@
 // §3.1.1, §11.6: the validated body of `POST /recipes` and `PUT /recipes/:id`.
 // class-validator shapes the request; `validateRecipeContent` (util-domain) is run on
 // top of it in RecipesService so both layers share one set of invariants.
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -43,6 +43,10 @@ import {
 } from '@rsn/shared/util-domain';
 import type { RecipeWriteRequest } from '@rsn/shared/util-contracts';
 
+/** §3.1.1: an optional field sent as null counts as absent, so no null reaches validateRecipeContent. */
+const NullAsAbsent = (): PropertyDecorator =>
+  Transform(({ value }) => (value === null ? undefined : value));
+
 /** §3.1.1 ingredients[]: `quantity` empty (null) means "to taste". */
 export class IngredientDto implements Ingredient {
   // An absent `quantity` stays null, which is the "to taste" case; a present one is
@@ -65,6 +69,7 @@ export class IngredientDto implements Ingredient {
   })
   name!: string;
 
+  @NullAsAbsent()
   @IsOptional()
   @IsString({ message: 'Write the note as text' })
   @MaxLength(INGREDIENT_NOTE_MAX_LENGTH, {
@@ -84,6 +89,7 @@ export class StepDto implements Step {
   text!: string;
 
   // Up to 1440 is accepted; cook mode offers a timer only up to 120 (UI-15).
+  @NullAsAbsent()
   @IsOptional()
   @IsInt({ message: 'Minutes must be a whole number' })
   @Min(MIN_STEP_DURATION_MINUTES, {
@@ -108,6 +114,7 @@ export class RecipeWriteDto implements RecipeWriteRequest {
   })
   title!: string;
 
+  @NullAsAbsent()
   @IsOptional()
   @IsString({ message: 'Write the description as text' })
   @MaxLength(RECIPE_DESCRIPTION_MAX_LENGTH, {
@@ -145,6 +152,7 @@ export class RecipeWriteDto implements RecipeWriteRequest {
   @Type(() => StepDto)
   steps!: StepDto[];
 
+  @NullAsAbsent()
   @IsOptional()
   @IsInt({ message: 'Prep minutes must be a whole number' })
   @Min(MIN_PREP_COOK_MINUTES, { message: "Prep minutes can't be negative" })
@@ -153,6 +161,7 @@ export class RecipeWriteDto implements RecipeWriteRequest {
   })
   prepMinutes?: number;
 
+  @NullAsAbsent()
   @IsOptional()
   @IsInt({ message: 'Cook minutes must be a whole number' })
   @Min(MIN_PREP_COOK_MINUTES, { message: "Cook minutes can't be negative" })

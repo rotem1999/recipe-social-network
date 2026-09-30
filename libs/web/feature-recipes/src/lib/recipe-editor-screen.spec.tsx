@@ -859,6 +859,38 @@ describe('RecipeEditorScreen', () => {
     ]);
   });
 
+  it('§3.1.1 BUG-033 saves a new version of a recipe whose stored ingredient note is null, sending the note as absent', async () => {
+    const onSaved = vi.fn();
+    const saved = { ...EXISTING, versionNumber: 3, versionCount: 3 };
+    mocks.api.updateRecipe.mockResolvedValue(saved);
+    mocks.api.getRecipe.mockResolvedValue({
+      ...EXISTING,
+      ingredients: [
+        // A row stored before the API read null as absent (§3.1.1).
+        { quantity: 3, unit: 'none', name: 'eggs', note: null as unknown as string },
+        { quantity: 200, unit: 'g', name: 'tomatoes', note: 'chopped' },
+      ],
+    });
+    render(
+      <RecipeEditorScreen recipeId="r1" onSaved={onSaved} onCancel={vi.fn()} />,
+    );
+
+    await screen.findByDisplayValue('tomatoes');
+    expect((screen.getByLabelText('Note 1') as HTMLInputElement).value).toBe('');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save version' }));
+
+    await waitFor(() => expect(mocks.api.updateRecipe).toHaveBeenCalledTimes(1));
+    const [id, request] = mocks.api.updateRecipe.mock.calls[0];
+    expect(id).toBe('r1');
+    expect(request.ingredients).toEqual([
+      { quantity: 3, unit: 'none', name: 'eggs', note: undefined },
+      { quantity: 200, unit: 'g', name: 'tomatoes', note: 'chopped' },
+    ]);
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(saved));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('UI-45 gives the ingredient note the placeholder "Note"', () => {
     render(<RecipeEditorScreen onSaved={vi.fn()} onCancel={vi.fn()} />);
 

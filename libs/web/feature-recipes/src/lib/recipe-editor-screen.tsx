@@ -415,10 +415,9 @@ export function RecipeEditorScreen({
       quantity: ingredient.quantity,
       unit: ingredient.unit,
       name: ingredient.name.trim(),
+      // §3.1.1: a note stored as null before the API read null as absent is absent too.
       note:
-        ingredient.note === undefined || ingredient.note.trim() === ''
-          ? undefined
-          : ingredient.note.trim(),
+        (ingredient.note ?? '').trim() === '' ? undefined : (ingredient.note ?? '').trim(),
     })),
     steps: steps.map((step) => ({
       text: step.text.trim(),

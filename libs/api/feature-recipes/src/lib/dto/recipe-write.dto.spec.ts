@@ -261,6 +261,80 @@ describe('RecipeWriteDto', () => {
     });
   });
 
+  describe('§3.1.1 BUG-033 an optional field sent as null counts as absent', () => {
+    it.each([['description'], ['prepMinutes'], ['cookMinutes']])(
+      '§3.1.1 BUG-033 accepts %s: null and reads it as absent',
+      async (field) => {
+        const dto = await validate(body({ [field]: null }));
+
+        expect(dto).toBeInstanceOf(RecipeWriteDto);
+        expect((dto as unknown as Record<string, unknown>)[field]).toBeUndefined();
+      },
+    );
+
+    it('§3.1.1 BUG-033 accepts an ingredient note: null and reads it as absent', async () => {
+      const dto = await validate(
+        body({ ingredients: [{ ...ingredient(), note: null }] }),
+      );
+
+      expect(dto.ingredients[0].note).toBeUndefined();
+    });
+
+    it('§3.1.1 BUG-033 accepts a step durationMinutes: null and reads it as absent', async () => {
+      const dto = await validate(
+        body({ steps: [{ ...step(), durationMinutes: null }] }),
+      );
+
+      expect(dto.steps[0].durationMinutes).toBeUndefined();
+    });
+
+    it('§3.1.1 BUG-033 accepts every optional field as null at once', async () => {
+      const dto = await validate(
+        body({
+          description: null,
+          prepMinutes: null,
+          cookMinutes: null,
+          ingredients: [{ ...ingredient(), note: null }],
+          steps: [{ ...step(), durationMinutes: null }],
+        }),
+      );
+
+      expect(dto.description).toBeUndefined();
+      expect(dto.prepMinutes).toBeUndefined();
+      expect(dto.cookMinutes).toBeUndefined();
+      expect(dto.ingredients[0].note).toBeUndefined();
+      expect(dto.steps[0].durationMinutes).toBeUndefined();
+    });
+
+    it('§3.1.1 BUG-033 keeps a present value untouched', async () => {
+      const dto = await validate(
+        body({
+          description: 'Eggs in sauce',
+          prepMinutes: 10,
+          cookMinutes: 20,
+          ingredients: [ingredient({ note: 'large' })],
+          steps: [step({ durationMinutes: 5 })],
+        }),
+      );
+
+      expect(dto.description).toBe('Eggs in sauce');
+      expect(dto.prepMinutes).toBe(10);
+      expect(dto.cookMinutes).toBe(20);
+      expect(dto.ingredients[0].note).toBe('large');
+      expect(dto.steps[0].durationMinutes).toBe(5);
+    });
+
+    it('§3.1.1 still answers 400 for a required field sent as null (title, servings)', async () => {
+      await expect400(body({ title: null }));
+      await expect400(body({ servings: null }));
+    });
+
+    it('§3.1.1 still answers 400 for an optional field with a wrong type that is not null', async () => {
+      await expect400(body({ description: 5 }));
+      await expect400(body({ prepMinutes: 'ten' }));
+    });
+  });
+
   describe('UI-43 messages written for people', () => {
     /** The 400's message list; this pipe has Nest's default exception factory. */
     async function messagesOf(overrides: Record<string, unknown>): Promise<string[]> {
