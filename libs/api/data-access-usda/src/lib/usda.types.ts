@@ -30,7 +30,7 @@ export interface UsdaFoodPortion {
   gramWeight: number;
   /** `portionDescription`, or else `modifier`, followed by `measureUnit.name` unless it is "undetermined" (NUT-9). */
   description: string;
-  /** How many units `gramWeight` covers ("3 cloves" = 9 g); kept only when `portionDescription` is empty and `modifier` is not (NUT-9, §16 U14), else null. */
+  /** How many units `gramWeight` covers ("3 cloves" = 9 g, "0.2 cup" = 64.6 g); kept only when `portionDescription` is empty (NUT-9, §16 U14, U15), else null. */
   amount: number | null;
   /** USDA's display order; null when absent. */
   sequenceNumber: number | null;

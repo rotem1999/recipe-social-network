@@ -1,4 +1,4 @@
-// SPEC §9 NUT-9 (§16 U11, U14): the weight of one piece of a food, from its
+// SPEC §9 NUT-9 (§16 U11, U14, U15): the weight of one piece of a food, from its
 // USDA portions. Pure function, no I/O; portions use the client's §9 shape.
 import type { UsdaFoodPortion } from '@rsn/api/data-access-usda';
 
@@ -17,7 +17,10 @@ function fndds(
   return { description, gramWeight, amount: null, sequenceNumber };
 }
 
-/** SR Legacy / Foundation: the text is `modifier`, the count is `amount`. */
+/**
+ * SR Legacy / Foundation: no `portionDescription`, so the text is `modifier`
+ * or the Foundation unit alone, and the count is `amount` (NUT-9, §16 U15).
+ */
 function srLegacy(
   description: string,
   amount: number | null,
@@ -167,8 +170,18 @@ describe('pickPieceGrams (NUT-9)', () => {
 
   it('NUT-9 offers no piece for Foundation "Garlic, raw", whose only portion is the 85 g RACC (§16 U11 1104647)', () => {
     expect(
-      pickPieceGrams([srLegacy('RACC', null, 85, 1)], 'Garlic', '4 cloves'),
+      pickPieceGrams([srLegacy('RACC', 1, 85, 1)], 'Garlic', '4 cloves'),
     ).toBe(null);
+  });
+
+  it('NUT-9 divides a Foundation unit-only portion by its amount ("tomatoes", 5, 49.7 g → 9.94 g; §16 U15 321360)', () => {
+    expect(
+      pickPieceGrams(
+        [srLegacy('tomatoes', 5, 49.7, 1)],
+        'Grape tomatoes',
+        undefined,
+      ),
+    ).toBeCloseTo(9.94, 10);
   });
 
   it('NUT-9 takes the Foundation egg portion "whole without shell egg" (50.3 g; §16 U11 748967)', () => {
@@ -295,8 +308,29 @@ describe('pickMeasureGrams (NUT-6)', () => {
   });
 
   it('NUT-6 a modifier text keeps its `amount`, so a number inside the text is not a divisor', () => {
-    // The client keeps `amount` only for modifier text (NUT-9); that text is not a portionDescription.
+    // The client keeps `amount` only when there is no portionDescription (NUT-9, §16 U15); this text is not one.
     expect(pickMeasureGrams([srLegacy('2 cups', 1, 300, 1)], 'cup')).toBe(300);
+  });
+
+  it('NUT-6 divides a Foundation unit-only "cup" portion by its amount (0.2 cup = 64.6 g → 323 g per cup; §16 U15 746766)', () => {
+    expect(
+      pickMeasureGrams([srLegacy('cup', 0.2, 64.6, 1)], 'cup'),
+    ).toBeCloseTo(323, 10);
+  });
+
+  it('NUT-6 takes the first Foundation cup portion in `sequenceNumber` order (0.2 cup before 0.5 cup = 129 g; §16 U15 746766)', () => {
+    const portions = [
+      srLegacy('cup', 0.5, 129, 2),
+      srLegacy('cup', 0.2, 64.6, 1),
+    ];
+    expect(pickMeasureGrams(portions, 'cup')).toBeCloseTo(323, 10);
+    expect(pickMeasureGrams([portions[0]], 'cup')).toBe(258);
+  });
+
+  it('NUT-6 divides a Foundation unit-only "tablespoon" portion by its amount (2 tablespoon = 33.9 g → 16.95 g per tbsp; §16 U15 321358)', () => {
+    expect(
+      pickMeasureGrams([srLegacy('tablespoon', 2, 33.9, 1)], 'tbsp'),
+    ).toBeCloseTo(16.95, 10);
   });
 
   it('NUT-6 matches `tbsp` by "tbsp" or "tablespoon"', () => {

@@ -120,9 +120,8 @@ export function isHouseholdMeasure(unit: Unit): unit is HouseholdMeasure {
  * NUT-6: grams of one measure unit of a portion. A `portionDescription` that
  * starts with a number (CAT-6 forms: "2 tablespoons", "1/2 cup", "1 1/2 cups")
  * divides `gramWeight` by it; otherwise the NUT-9 weight per unit applies.
- * The client keeps `amount` only for `modifier` text (NUT-9), so a null
- * `amount` marks text that is the `portionDescription`, or else a unit name
- * alone, which never starts with a number.
+ * The client keeps `amount` whenever `portionDescription` is empty (NUT-9),
+ * so a null `amount` marks text that is the `portionDescription`.
  */
 function gramsPerMeasure(portion: UsdaFoodPortion): number {
   if (portion.amount === null) {

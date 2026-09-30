@@ -691,6 +691,38 @@ describe('NutritionService.compute piece portions (NUT-9)', () => {
     expect(response.ingredients[0].kcal).toBe(8.9);
   });
 
+  it('NUT-9 divides a Foundation unit-only portion by its amount ("5 tomatoes" = 49.7 g → 9.94 g each; §16 U15 321360)', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 3, unit: 'piece', name: 'Grape tomatoes' }], 1),
+    );
+    searchReturns(harness, {
+      '+grape +tomatoes raw': [
+        hit({
+          fdcId: 321360,
+          description: 'Tomatoes, grape, raw',
+          dataType: 'Foundation',
+          kcalPer100g: 20,
+        }),
+      ],
+    });
+    harness.usda.getFood.mockResolvedValue(
+      detail(321360, 'Tomatoes, grape, raw', [
+        { gramWeight: 49.7, description: 'tomatoes', amount: 5, sequenceNumber: 1 },
+      ]),
+    );
+
+    const response = await harness.service.compute(
+      USER,
+      RECIPE_ID,
+      'ingredients',
+    );
+
+    expect(harness.usda.getFood).toHaveBeenCalledWith(321360);
+    // 3 × (49.7 g ÷ 5) = 29.82 g; 20 × 29.82 / 100 = 5.964 → 6
+    expect(response.ingredients[0].grams).toBe(29.82);
+    expect(response.ingredients[0].kcal).toBe(6);
+  });
+
   it('NUT-5 leaves a `piece` ingredient unavailable when no portion qualifies', async () => {
     const harness = makeHarness(
       version([{ quantity: 2, unit: 'piece', name: 'Carrots' }], 2),
@@ -1324,6 +1356,66 @@ describe('NutritionService.compute household measures (NUT-6)', () => {
     expect(response.ingredients[0].kcal).toBe(32);
   });
 
+  it('NUT-6 weighs 1 cup of ricotta by the Foundation "0.2 cup" = 64.6 g portion (323 g, not 64.6 g; §16 U15 746766)', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 1, unit: 'cup', name: 'Ricotta cheese' }], 1),
+    );
+    searchReturns(harness, {
+      '+ricotta +cheese raw': [
+        hit({
+          fdcId: 746766,
+          description: 'Cheese, ricotta, whole milk',
+          dataType: 'Foundation',
+          kcalPer100g: 150,
+        }),
+      ],
+    });
+    foodsReturn(harness, {
+      746766: detail(746766, 'Cheese, ricotta, whole milk', [
+        { gramWeight: 64.6, description: 'cup', amount: 0.2, sequenceNumber: 1 },
+        { gramWeight: 129, description: 'cup', amount: 0.5, sequenceNumber: 2 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    expect(detailCalls(harness)).toEqual([746766]);
+    // 1 × (64.6 g ÷ 0.2) = 323 g; 150 × 323 / 100 = 484.5
+    expect(response.ingredients[0]).toEqual({
+      name: 'Ricotta cheese',
+      grams: 323,
+      kcal: 484.5,
+      matchedDescription: 'Cheese, ricotta, whole milk',
+    });
+  });
+
+  it('NUT-6 weighs 2 tbsp of hummus by the Foundation "2 tablespoon" = 33.9 g portion (16.95 g per tbsp; §16 U15 321358)', async () => {
+    const harness = makeHarness(
+      version([{ quantity: 2, unit: 'tbsp', name: 'Hummus' }], 1),
+    );
+    searchReturns(harness, {
+      '+hummus raw': [
+        hit({
+          fdcId: 321358,
+          description: 'Hummus, commercial',
+          dataType: 'Foundation',
+          kcalPer100g: 200,
+        }),
+      ],
+    });
+    foodsReturn(harness, {
+      321358: detail(321358, 'Hummus, commercial', [
+        { gramWeight: 33.9, description: 'tablespoon', amount: 2, sequenceNumber: 1 },
+      ]),
+    });
+
+    const response = await harness.service.compute(USER, RECIPE_ID, 'ingredients');
+
+    // 2 × (33.9 g ÷ 2) = 33.9 g; 200 × 33.9 / 100 = 67.8
+    expect(response.ingredients[0].grams).toBe(33.9);
+    expect(response.ingredients[0].kcal).toBe(67.8);
+  });
+
   it('NUT-6 takes the measure from the next hit when the chosen food has none; the kcal stay the chosen food', async () => {
     const harness = makeHarness(
       version([{ quantity: 1, unit: 'cup', name: 'Rice' }], 1),
@@ -1336,7 +1428,7 @@ describe('NutritionService.compute household measures (NUT-6)', () => {
     });
     foodsReturn(harness, {
       201: detail(201, 'Rice, raw', [
-        { gramWeight: 85, description: 'RACC', amount: null, sequenceNumber: 1 },
+        { gramWeight: 85, description: 'RACC', amount: 1, sequenceNumber: 1 },
       ]),
       202: detail(202, 'Rice, cooked', [
         { gramWeight: 160, description: '1 cup', amount: null, sequenceNumber: 1 },
@@ -1553,7 +1645,7 @@ describe('NutritionService.compute piece fallback to the next hits (NUT-9)', () 
     });
     foodsReturn(harness, {
       1001: detail(1001, 'Chicken, breast, boneless, skinless, raw', [
-        { gramWeight: 112, description: 'RACC', amount: null, sequenceNumber: 1 },
+        { gramWeight: 112, description: 'RACC', amount: 1, sequenceNumber: 1 },
       ]),
       1002: detail(1002, 'Chicken, broilers or fryers, breast, meat only, raw', [
         { gramWeight: 140, description: 'cup, chopped or diced', amount: 1, sequenceNumber: 1 },

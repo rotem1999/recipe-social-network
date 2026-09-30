@@ -478,7 +478,7 @@ describe('UsdaService', () => {
       ]);
     });
 
-    it('NUT-9 describes a Foundation portion with no modifier by its unit alone ("RACC"; §16 U11 1104647)', async () => {
+    it('NUT-9 describes a Foundation portion with no modifier by its unit alone and keeps its amount ("RACC", 1; §16 U11 1104647, U15)', async () => {
       fetchMock.mockResolvedValue(
         jsonResponse({
           fdcId: 1104647,
@@ -496,7 +496,109 @@ describe('UsdaService', () => {
 
       const detail = await service().getFood(1104647);
       expect(detail?.portions).toEqual([
-        { gramWeight: 85, description: 'RACC', amount: null, sequenceNumber: 1 },
+        { gramWeight: 85, description: 'RACC', amount: 1, sequenceNumber: 1 },
+      ]);
+    });
+
+    it('NUT-9 keeps `amount` for a Foundation unit-only portion with an empty modifier ("0.2 cup" = 64.6 g, "0.5 cup" = 129 g; §16 U15 746766)', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          fdcId: 746766,
+          description: 'Cheese, ricotta, whole milk',
+          foodPortions: [
+            {
+              portionDescription: '',
+              modifier: '',
+              measureUnit: { name: 'cup' },
+              amount: 0.2,
+              gramWeight: 64.6,
+              sequenceNumber: 1,
+            },
+            {
+              portionDescription: '',
+              modifier: '',
+              measureUnit: { name: 'cup' },
+              amount: 0.5,
+              gramWeight: 129,
+              sequenceNumber: 2,
+            },
+          ],
+        }),
+      );
+
+      const detail = await service().getFood(746766);
+      expect(detail?.portions).toEqual([
+        { gramWeight: 64.6, description: 'cup', amount: 0.2, sequenceNumber: 1 },
+        { gramWeight: 129, description: 'cup', amount: 0.5, sequenceNumber: 2 },
+      ]);
+    });
+
+    it('NUT-9 keeps `amount` for a Foundation unit-only portion with no modifier field ("5 tomatoes" = 49.7 g; §16 U15 321360)', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          fdcId: 321360,
+          description: 'Tomatoes, grape, raw',
+          foodPortions: [
+            {
+              measureUnit: { name: 'tomatoes' },
+              amount: 5,
+              gramWeight: 49.7,
+              sequenceNumber: 1,
+            },
+          ],
+        }),
+      );
+
+      const detail = await service().getFood(321360);
+      expect(detail?.portions).toEqual([
+        { gramWeight: 49.7, description: 'tomatoes', amount: 5, sequenceNumber: 1 },
+      ]);
+    });
+
+    it('NUT-9 keeps `amount` for a Foundation "2 tablespoon" portion (33.9 g; §16 U15 321358)', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          fdcId: 321358,
+          description: 'Hummus, commercial',
+          foodPortions: [
+            {
+              modifier: '',
+              measureUnit: { name: 'tablespoon' },
+              amount: 2,
+              gramWeight: 33.9,
+              sequenceNumber: 1,
+            },
+          ],
+        }),
+      );
+
+      const detail = await service().getFood(321358);
+      expect(detail?.portions).toEqual([
+        { gramWeight: 33.9, description: 'tablespoon', amount: 2, sequenceNumber: 1 },
+      ]);
+    });
+
+    it('NUT-9 still drops `amount` for an FNDDS portion with a `portionDescription`, even with an empty modifier and a unit name (§16 U14, U15)', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          fdcId: 2709786,
+          description: 'Garlic, raw',
+          foodPortions: [
+            {
+              portionDescription: '1 clove',
+              modifier: '',
+              measureUnit: { name: 'undetermined' },
+              amount: 2,
+              gramWeight: 3,
+              sequenceNumber: 1,
+            },
+          ],
+        }),
+      );
+
+      const detail = await service().getFood(2709786);
+      expect(detail?.portions).toEqual([
+        { gramWeight: 3, description: '1 clove', amount: null, sequenceNumber: 1 },
       ]);
     });
 
@@ -524,6 +626,12 @@ describe('UsdaService', () => {
               gramWeight: 5,
               sequenceNumber: 5,
             },
+            {
+              measureUnit: { name: 'undetermined' },
+              amount: 2,
+              gramWeight: 6,
+              sequenceNumber: 6,
+            },
           ],
         }),
       );
@@ -533,6 +641,8 @@ describe('UsdaService', () => {
         { gramWeight: 9, description: 'cloves', amount: 3, sequenceNumber: 3 },
         { gramWeight: 3, description: '1 clove', amount: null, sequenceNumber: 4 },
         { gramWeight: 5, description: '', amount: null, sequenceNumber: 5 },
+        // NUT-9 (§16 U15): no portionDescription, so the record's amount is kept.
+        { gramWeight: 6, description: '', amount: 2, sequenceNumber: 6 },
       ]);
     });
 

@@ -111,8 +111,9 @@ function readPortions(foodPortions: unknown): UsdaFoodPortion[] {
     if (gramWeight === null) {
       continue;
     }
-    // NUT-9 (§16 U14): FNDDS text is in portionDescription and its amount is
-    // undefined; SR Legacy text is in modifier, with the count in amount.
+    // NUT-9 (§16 U14, U15): FNDDS text is in portionDescription and its amount
+    // is undefined; SR Legacy text is in modifier and Foundation text may be
+    // the unit alone ("0.2 cup"), both with the count in amount.
     const portionDescription = asText(record['portionDescription']);
     const modifier = asText(record['modifier']);
     const unitRecord = asRecord(record['measureUnit']);
@@ -127,7 +128,7 @@ function readPortions(foodPortions: unknown): UsdaFoodPortion[] {
       gramWeight,
       description,
       amount:
-        portionDescription === '' && modifier !== ''
+        portionDescription === ''
           ? asFiniteNumber(record['amount'])
           : null,
       sequenceNumber: asFiniteNumber(record['sequenceNumber']),
